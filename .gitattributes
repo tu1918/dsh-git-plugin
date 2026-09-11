@@ -1,0 +1,9 @@
+# This machine has core.autocrlf set globally, which would rewrite every text
+# file it checks out. The plugin is authored with LF and shipped that way, so
+# normalise on commit and check out LF regardless of the local setting.
+* text=auto eol=lf
+
+# Binary assets must never be normalised.
+*.png binary
+*.gif binary
+*.ico binary

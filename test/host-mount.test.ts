@@ -1,0 +1,184 @@
+/**
+ * Host mount test: `apply()` from the plugin entry, all the way to the wire.
+ *
+ * This is the closest thing to a real mount that can run without a DSH process,
+ * and it works because of a property worth stating: `lib/index.js` imports NOTHING
+ * but Node builtins. Every DSH name in the host half is a type, erased at build
+ * time, so the plugin's actual entry point can be called with a stand-in context
+ * and then driven with real HTTP requests against a real repository.
+ *
+ * What it proves: the assembly registers both routes, resolves a session through
+ * the context's session store, serves a real status over the socket, and removes
+ * its routes when the effect is disposed.
+ *
+ * @module dsh-git-panel/test/host-mount
+ */
+
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import type { Context } from '@deepseek-ai/cordis'
+import { after, describe, it } from 'node:test'
+import assert from 'node:assert/strict'
+
+import { apply, inject } from '../src/host/index.ts'
+import { cleanupRepos, commit, makeRepo, stageAll, write } from './helpers/repo.ts'
+
+after(cleanupRepos)
+
+/** One route registration captured from the stand-in context. */
+interface Registration {
+  readonly kind: 'exact' | 'prefix'
+  readonly path: string
+  readonly handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+}
+
+/** A context carrying only the services the host half actually uses. */
+function stubContext(sessions: Record<string, string>) {
+  const registrations: Registration[] = []
+  const lines: string[] = []
+  const disposers: (() => void)[] = []
+
+  const ctx = {
+    logger: () => ({
+      info: (message: string) => lines.push(`info ${message}`),
+      warn: (message: string) => lines.push(`warn ${message}`),
+      error: (message: string) => lines.push(`error ${message}`),
+    }),
+    sessions: {
+      get: (id: string) => {
+        const cwd = sessions[id]
+        return cwd === undefined ? undefined : { header: { cwd } }
+      },
+    },
+    workspaceRegistry: { list: () => [] },
+    get: (name: string) => (name === 'workspaceRegistry' ? { list: () => [] } : undefined),
+    webServer: {
+      register(route: Registration) {
+        registrations.push(route)
+        return () => {
+          const at = registrations.indexOf(route)
+          if (at >= 0) registrations.splice(at, 1)
+        }
+      },
+    },
+    effect(run: () => unknown) {
+      const dispose = run()
+      if (typeof dispose === 'function') disposers.push(dispose as () => void)
+      return () => undefined
+    },
+  }
+
+  return { ctx: ctx as unknown as Context, registrations, lines, disposers }
+}
+
+/** Dispatch the way the host router does: exact first, then longest prefix. */
+function dispatch(
+  registrations: readonly Registration[],
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
+  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+  const exact = registrations.find((route) => route.kind === 'exact' && route.path === pathname)
+  const hit =
+    exact ??
+    registrations
+      .filter(
+        (route) =>
+          route.kind === 'prefix' &&
+          (pathname === route.path || pathname.startsWith(`${route.path}/`)),
+      )
+      .sort((left, right) => right.path.length - left.path.length)[0]
+  if (hit === undefined) {
+    res.writeHead(404)
+    res.end('no route')
+    return
+  }
+  void hit.handler(req, res)
+}
+
+/** Serve the captured registrations over a real socket. */
+async function serve(registrations: readonly Registration[]): Promise<{
+  origin: string
+  close: () => Promise<void>
+}> {
+  const server: Server = createServer((req, res) => dispatch(registrations, req, res))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    close: async () => {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
+
+describe('the host plugin entry', () => {
+  it('declares the services it needs', () => {
+    assert.deepEqual([...inject].sort(), ['sessions', 'webServer'])
+  })
+
+  it('registers the two routes and serves a real status through them', async () => {
+    const repo = makeRepo('mount')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+
+    const { ctx, registrations, lines } = stubContext({ 'session-1': repo })
+    apply(ctx)
+
+    assert.deepEqual(
+      registrations.map((route) => `${route.kind} ${route.path}`).sort(),
+      ['exact /git-panel/events', 'prefix /git-panel'],
+    )
+    assert.ok(
+      lines.some((line) => line.includes('git panel host ready')),
+      `expected a readiness line, got ${JSON.stringify(lines)}`,
+    )
+
+    const harness = await serve(registrations)
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/status?session=session-1`)
+      const body = (await response.json()) as {
+        ok: boolean
+        value: { branch: { name: string }; groups: { unstaged: { path: string }[] } }
+      }
+      assert.equal(body.ok, true)
+      assert.equal(body.value.groups.unstaged[0]?.path, 'a.txt')
+      assert.equal(typeof body.value.branch.name, 'string')
+
+      const log = await fetch(`${harness.origin}/git-panel/log?session=session-1&limit=5`)
+      const logBody = (await log.json()) as { ok: boolean; value: { commits: { subject: string }[] } }
+      assert.deepEqual(logBody.value.commits.map((entry) => entry.subject), ['first'])
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('answers no-session when the context has no such session', async () => {
+    const { ctx, registrations } = stubContext({})
+    apply(ctx)
+    const harness = await serve(registrations)
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/status?session=missing`)
+      const body = (await response.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(body.ok, false)
+      assert.equal(body.error.code, 'no-session')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('unregisters both routes when its effect is disposed', () => {
+    const { ctx, registrations, disposers } = stubContext({})
+    apply(ctx)
+    assert.equal(registrations.length, 2)
+    assert.equal(disposers.length, 1, 'the plugin must own exactly one effect')
+
+    // Disposal is what an unload or a config reload performs; leaving a route
+    // behind would keep serving a service nobody owns.
+    for (const dispose of disposers) dispose()
+    assert.deepEqual(registrations, [])
+  })
+})

@@ -1,0 +1,15 @@
+# dsh-git-panel bundle patch — the plugin's mount declaration.
+#
+# dsh stacks each profile bundle's patch over the layers before it. This file
+# inserts the plugin's single row into the Web profile's config tree; the row is
+# a bare plugin by package name, so the node half (exports ".") runs in the host
+# process and the `dsh.client` declaration in package.json makes the browser half
+# (exports "./client", served at /plugins/<id>/client.js) load in the web GUI.
+#
+# Install (no hand-edited profile patch needed):
+#   dsh plugin --profile web add dsh-git-panel
+# Local development:
+#   dsh plugin --profile web add link:/absolute/path/to/dsh-git-plugin
+- insert:
+    - id: ui-git-panel
+      name: dsh-git-panel
