@@ -27,7 +27,16 @@ import type {
   SessionDirResolver,
   WorkspaceGitService,
 } from '../core/ports.ts'
-import type { BranchRef, FileChange, LogPage, RepoStatus } from '../core/types.ts'
+import type {
+  BranchInfo,
+  BranchRef,
+  CommitInfo,
+  FileChange,
+  LogPage,
+  OperationReport,
+  RepoStatus,
+} from '../core/types.ts'
+import { validateMessage, validatePaths } from '../core/validate.ts'
 
 /** The `for-each-ref` format the branch parser expects; the two must agree. */
 const BRANCH_FORMAT =
@@ -73,6 +82,88 @@ function firstLine(stderr: string): string {
   return 'git failed'
 }
 
+/** A failure the panel recognises, and the code it earns. */
+interface FailurePattern {
+  /** Tested against both streams' text. */
+  readonly pattern: RegExp
+  /** The code the browser receives. */
+  readonly code: GitPanelError['code']
+  /** The fallback sentence, for a caller that does not translate the code. */
+  readonly message: string
+}
+
+/**
+ * The failures the panel names, in the order they are tested.
+ *
+ * Each entry exists because the panel does something different with it: a
+ * non-fast-forward push points the user at "sync" instead of forwarding git's
+ * hint text (FR-5.4), a conflicting pull is the state the merge UI will own
+ * (FR-5.3), and `nothing-to-commit` means the FR-3.4 button disagreed with the
+ * index — worth distinguishing from a generic failure precisely because it
+ * should be unreachable when the button's copy is right.
+ */
+const FAILURE_PATTERNS: readonly FailurePattern[] = [
+  {
+    pattern: /not a git repository/iu,
+    code: 'not-a-repo',
+    message: 'this directory is not inside a git repository',
+  },
+  {
+    pattern: /nothing to commit|no changes added to commit/iu,
+    code: 'nothing-to-commit',
+    message: 'there is nothing staged to commit',
+  },
+  {
+    pattern: /empty commit message/iu,
+    code: 'bad-request',
+    message: 'a commit message may not be empty',
+  },
+  {
+    pattern: /\[rejected\]|non-fast-forward|\(fetch first\)|failed to push some refs/iu,
+    code: 'non-fast-forward',
+    message: 'the remote has commits this branch does not, so the push was refused',
+  },
+  {
+    pattern: /CONFLICT \(|Automatic merge failed|fix conflicts and then commit/iu,
+    code: 'conflict',
+    message: 'the merge left conflicts that must be resolved before committing',
+  },
+]
+
+/**
+ * Every line a failed git call printed, stderr first.
+ *
+ * git splits a failure across the two streams: a rejected push writes its
+ * `! [rejected]` line to stderr, while a conflicting merge writes
+ * `CONFLICT (content): ...` to stdout and its summary to stderr. Keeping both, in
+ * that order, is what FR-4.4's "show git's multi-line output" actually asks for.
+ * @param outcome - The failed run.
+ * @returns Both streams, concatenated.
+ */
+function fullOutput(outcome: GitRunResult): string {
+  return [outcome.stderr, outcome.stdout].filter((part) => part !== '').join('')
+}
+
+/**
+ * Map a failed git process onto a code the panel can act on.
+ * @param outcome - The non-zero run.
+ * @returns The failure to hand the browser, with git's own words as detail.
+ */
+function classifyFailure(outcome: GitRunResult): GitPanelError {
+  const text = `${outcome.stderr}\n${outcome.stdout}`
+  for (const candidate of FAILURE_PATTERNS) {
+    if (candidate.pattern.test(text)) {
+      return { code: candidate.code, message: candidate.message, detail: fullOutput(outcome) }
+    }
+  }
+  // Nothing recognised: git's first line as the summary, everything as detail.
+  return {
+    code: 'git-failed',
+    message: firstLine(outcome.stderr !== '' ? outcome.stderr : outcome.stdout),
+    detail: fullOutput(outcome),
+  }
+}
+
 /**
  * Build the host's git service.
  * @param runner - The process seam.
@@ -90,26 +181,39 @@ export function createGitService(
   const timeoutMs = limits.timeoutMs
   const maxStdoutBytes = limits.maxStdoutBytes
 
-  /** Options for one call, omitting keys the host left at their defaults. */
-  const options = (cwd: string) => ({
+  /**
+   * Options for one call, omitting keys the host left at their defaults.
+   * @param cwd - Directory to run in.
+   * @param optionalLocks - Whether this call may take git's optional locks.
+   */
+  const options = (cwd: string, optionalLocks: boolean) => ({
     cwd,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
+    // See GitRunOptions.optionalLocks: a read must not rewrite the index the
+    // change watcher polls, and a write must be able to take its lock.
+    optionalLocks,
   })
 
   /**
    * Run one git command and classify its outcome.
    *
-   * Every read goes through here, so the "git is missing", "git timed out", and
+   * Every call goes through here, so the "git is missing", "git timed out", and
    * "not a repository" mappings exist once rather than at each call site. Calls
    * that tolerate a non-zero exit (asking for a branch's upstream is the common
    * case) check the result themselves instead of relying on this to throw.
    * @param args - Arguments after `git`.
    * @param cwd - Directory to run in.
+   * @param optionalLocks - Whether this call may take git's optional locks;
+   *   every mutation passes `true`, every read leaves it `false`.
    * @returns The run, or the panel-level failure it mapped to.
    */
-  async function run(args: readonly string[], cwd: string): Promise<Result<GitRunResult>> {
-    const outcome = await runner.run(args, options(cwd))
+  async function run(
+    args: readonly string[],
+    cwd: string,
+    optionalLocks = false,
+  ): Promise<Result<GitRunResult>> {
+    const outcome = await runner.run(args, options(cwd, optionalLocks))
 
     if (outcome.spawnFailed) {
       return fail('git-missing', 'git is not installed, or not on this process’ PATH')
@@ -121,9 +225,7 @@ export function createGitService(
       return fail('timeout', 'git did not finish in time')
     }
     if (outcome.code !== 0) {
-      const error: GitPanelError = /not a git repository/iu.test(outcome.stderr)
-        ? { code: 'not-a-repo', message: 'this directory is not inside a git repository' }
-        : { code: 'git-failed', message: firstLine(outcome.stderr), detail: outcome.stderr }
+      const error = classifyFailure(outcome)
       ports.log('error', `git ${args.join(' ')} failed: ${error.message}`)
       return { ok: false, error }
     }
@@ -170,8 +272,261 @@ export function createGitService(
     }
   }
 
+  /**
+   * Reduce a successful run to the report the UI shows.
+   * @param outcome - The run that succeeded.
+   * @returns git's first non-empty line, and everything it printed.
+   */
+  function reportOf(outcome: GitRunResult): OperationReport {
+    const detail = fullOutput(outcome)
+    const line = [outcome.stdout, outcome.stderr]
+      .flatMap((stream) => stream.split('\n'))
+      .map((entry) => entry.trim())
+      .find((entry) => entry !== '')
+    return { summary: line ?? '', detail }
+  }
+
+  /**
+   * Read the branch state on its own.
+   *
+   * The same command {@link readStatus} runs, parsed for one field: the sync
+   * operations act on the branch the panel is showing, so asking git again is how
+   * they stay in step with it instead of trusting a value from an earlier read.
+   * @param cwd - Repository root.
+   * @returns The branch, or the failure the command hit.
+   */
+  async function currentBranch(cwd: string): Promise<Result<BranchInfo>> {
+    const outcome = await run(['status', '--porcelain=v2', '--branch', '-z'], cwd)
+    if (!outcome.ok) return outcome
+    return { ok: true, value: parseStatusV2(outcome.value.stdout).branch }
+  }
+
+  /**
+   * Whether HEAD resolves to a commit.
+   *
+   * Unstaging is the one operation whose command depends on this: `git restore
+   * --staged` restores FROM HEAD, and an unborn branch has none (probed:
+   * `fatal: could not resolve HEAD`), so there the index entry is removed
+   * instead. The probe runs with a non-zero exit as its "no" answer, which is why
+   * it goes to the runner directly rather than through {@link run}.
+   * @param cwd - Repository root.
+   * @returns Whether a commit exists.
+   */
+  async function hasHead(cwd: string): Promise<boolean> {
+    const outcome = await runner.run(
+      ['rev-parse', '--verify', '--quiet', 'HEAD'],
+      options(cwd, false),
+    )
+    return outcome.code === 0
+  }
+
+  /**
+   * The remote a first push should target.
+   *
+   * `origin` when it exists — FR-5.2 names it — and otherwise the only remote
+   * there is, because a repository cloned from a differently named remote has no
+   * obligation to call it `origin` and refusing would make the button useless
+   * there. Several remotes with no `origin` is genuinely ambiguous, so that case
+   * is refused with a sentence rather than guessed at.
+   * @param cwd - Repository root.
+   * @returns The remote name, or why there is not one to use.
+   */
+  async function defaultRemote(cwd: string): Promise<Result<string>> {
+    const outcome = await run(['remote'], cwd)
+    if (!outcome.ok) return outcome
+    const remotes = outcome.value.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+    if (remotes.includes('origin')) return { ok: true, value: 'origin' }
+    const only = remotes.length === 1 ? remotes[0] : undefined
+    if (only === undefined) {
+      return fail(
+        'bad-request',
+        remotes.length === 0
+          ? 'this repository has no remote to push to'
+          : 'this repository has several remotes and none called origin; set the branch’s upstream first',
+      )
+    }
+    return { ok: true, value: only }
+  }
+
+  /**
+   * Stage paths (FR-3.1, FR-3.2).
+   * @param sessionId - Session whose repository to act on.
+   * @param paths - Repo-relative paths from the browser.
+   * @returns git's report, or the refusal that kept git from running.
+   */
+  async function stage(
+    sessionId: string,
+    paths: readonly string[],
+  ): Promise<Result<OperationReport>> {
+    const accepted = validatePaths(paths)
+    if (!accepted.ok) return accepted
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    // `--` before the paths: a file named `-f` is a path here, never an option.
+    const outcome = await run(['add', '--', ...accepted.value], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: staged ${accepted.value.length} path(s) in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Unstage paths (FR-3.1, FR-3.2).
+   * @param sessionId - Session whose repository to act on.
+   * @param paths - Repo-relative paths from the browser.
+   * @returns git's report, or the refusal that kept git from running.
+   */
+  async function unstage(
+    sessionId: string,
+    paths: readonly string[],
+  ): Promise<Result<OperationReport>> {
+    const accepted = validatePaths(paths)
+    if (!accepted.ok) return accepted
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const args = (await hasHead(root.value))
+      ? ['restore', '--staged', '--', ...accepted.value]
+      : // No HEAD to restore from: dropping the entry is the same operation.
+        ['rm', '--cached', '-r', '--quiet', '--', ...accepted.value]
+    const outcome = await run(args, root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: unstaged ${accepted.value.length} path(s) in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Commit the index, then read back what git created.
+   * @param root - Repository root.
+   * @param message - The already-validated message.
+   * @returns The commit, so the panel can name it instead of just saying "done".
+   */
+  async function commitIndex(root: string, message: string): Promise<Result<CommitInfo>> {
+    const outcome = await run(['commit', '-m', message], root, true)
+    if (!outcome.ok) return outcome
+    const head = await run(['log', '-1', '--date=iso-strict', `--format=${LOG_FORMAT}`], root)
+    if (!head.ok) return head
+    const commit = parseLog(head.value.stdout).commits[0]
+    if (commit === undefined) return fail('internal', 'git committed but reported no commit')
+    // §5.5's audit trail: which commit, where, and what it says.
+    ports.log('info', `git-panel: committed ${commit.shortOid} in ${root}: ${commit.subject}`)
+    return { ok: true, value: commit }
+  }
+
+  /**
+   * Commit what is staged, and only that (FR-3.4's default scope).
+   * @param sessionId - Session whose repository to act on.
+   * @param message - Raw commit message from the browser.
+   */
+  async function commit(sessionId: string, message: string): Promise<Result<CommitInfo>> {
+    const valid = validateMessage(message)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    return commitIndex(root.value, valid.value)
+  }
+
+  /**
+   * Stage every tracked change, then commit (FR-3.4's announced widening).
+   * @param sessionId - Session whose repository to act on.
+   * @param message - Raw commit message from the browser.
+   */
+  async function commitAll(sessionId: string, message: string): Promise<Result<CommitInfo>> {
+    const valid = validateMessage(message)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    // `-u` and not `-A`: the button's copy promises tracked changes only, and
+    // `-A` would sweep in every untracked file the list shows as excluded — the
+    // exact "the list and the commit disagree" failure FR-3.4 exists to prevent.
+    const staged = await run(['add', '-u'], root.value, true)
+    if (!staged.ok) return staged
+    return commitIndex(root.value, valid.value)
+  }
+
+  /**
+   * Push the current branch, setting its upstream when it has none (FR-5.2).
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function pushRepo(sessionId: string): Promise<Result<OperationReport>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const branch = await currentBranch(root.value)
+    if (!branch.ok) return branch
+    const info = branch.value
+    if (info.head === 'unborn') {
+      return fail('bad-request', 'there is nothing to push yet: the branch has no commits')
+    }
+    if (info.name === null) {
+      return fail('bad-request', 'HEAD is detached, so there is no branch to push')
+    }
+    const args = ['push']
+    if (info.upstream === null) {
+      const remote = await defaultRemote(root.value)
+      if (!remote.ok) return remote
+      args.push('--set-upstream', remote.value, info.name)
+    }
+    const outcome = await run(args, root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: pushed ${info.name} in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Pull the current branch from its upstream (FR-5.1).
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function pullRepo(sessionId: string): Promise<Result<OperationReport>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const branch = await currentBranch(root.value)
+    if (!branch.ok) return branch
+    const info = branch.value
+    if (info.name === null) {
+      return fail('bad-request', 'HEAD is detached, so there is no branch to pull into')
+    }
+    if (info.upstream === null) {
+      return fail('bad-request', 'this branch has no upstream to pull from')
+    }
+    // Two flags, both about not waiting for a terminal that is not there:
+    // `--no-rebase` keeps a divergent pull a merge (the doc's own FR-5.1
+    // wording), and `--no-edit` stops that merge from asking an editor for its
+    // message — without it, `git pull` waits for an editor until the deadline
+    // kills it (probed).
+    const outcome = await run(['pull', '--no-rebase', '--no-edit'], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: pulled ${info.name} in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Pull, then push: the doc's `⇅` in one action (FR-5.1).
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function syncRepo(sessionId: string): Promise<Result<OperationReport>> {
+    const pulled = await pullRepo(sessionId)
+    if (!pulled.ok) return pulled
+    const pushed = await pushRepo(sessionId)
+    if (!pushed.ok) return pushed
+    const summary = [pulled.value.summary, pushed.value.summary]
+      .filter((line) => line !== '')
+      .join(' · ')
+    return {
+      ok: true,
+      value: { summary, detail: `${pulled.value.detail}${pushed.value.detail}` },
+    }
+  }
+
   return {
     status: readStatus,
+    stage,
+    unstage,
+    commit,
+    commitAll,
+    push: pushRepo,
+    pull: pullRepo,
+    sync: syncRepo,
 
     async branches(sessionId: string): Promise<Result<readonly BranchRef[]>> {
       const root = await repoRoot(sessionId)
@@ -218,7 +573,10 @@ export function createGitService(
       const page = hasMore ? parsed.commits.slice(0, take) : parsed.commits
 
       // Settle the ○/● marker from the same status read the panel already needs.
-      const statusRun = await runner.run(['status', '--porcelain=v2', '--branch', '-z'], options(root.value))
+      const statusRun = await runner.run(
+        ['status', '--porcelain=v2', '--branch', '-z'],
+        options(root.value, false),
+      )
       let commits = page
       if (statusRun.code === 0) {
         const branch = parseStatusV2(statusRun.stdout).branch
@@ -230,7 +588,7 @@ export function createGitService(
           // Bounded by the ahead count: usually a handful of commits.
           const unpushedRun = await runner.run(
             ['log', `${branch.upstream}..HEAD`, '--format=%H'],
-            options(root.value),
+            options(root.value, false),
           )
           if (unpushedRun.code === 0) {
             const unpushed = new Set(unpushedRun.stdout.split('\n').filter((line) => line !== ''))

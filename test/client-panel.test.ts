@@ -62,7 +62,7 @@ const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
 )
 const { apply } = await import('../src/client/index.tsx')
 
-import type { BranchRef, CommitInfo, RepoStatus } from '../src/core/types.ts'
+import type { BranchRef, CommitInfo, OperationReport, RepoStatus } from '../src/core/types.ts'
 import type { GitRemoteClient, Result } from '../src/core/ports.ts'
 
 /** A translator over the real English dictionary. */
@@ -134,20 +134,95 @@ function commitFixture(): CommitInfo {
   }
 }
 
+/** Every mutating call the panel made, in order, as a readable string. */
+interface ActionLog {
+  readonly entries: string[]
+}
+
 /** A git client whose answers the test chooses. */
 function stubGit(options: {
   status?: Result<RepoStatus>
   branches?: readonly BranchRef[]
   log?: readonly CommitInfo[]
   watch?: (sessionId: string, onChange: () => void) => () => void
+  /** What every report-returning mutation answers; a silent success by default. */
+  report?: Result<OperationReport>
+  /** What every commit answers; a fixed commit by default. */
+  commit?: Result<CommitInfo>
+  /** Where mutating calls are recorded, for the tests that assert on them. */
+  calls?: ActionLog
 }): GitRemoteClient {
+  const report: Result<OperationReport> =
+    options.report ?? { ok: true, value: { summary: '', detail: '' } }
+  const committed: Result<CommitInfo> = options.commit ?? { ok: true, value: commitFixture() }
+  const note = (line: string): void => {
+    options.calls?.entries.push(line)
+  }
+
   return {
     status: () => Promise.resolve(options.status ?? { ok: true, value: statusFixture() }),
     branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
     log: () =>
       Promise.resolve({ ok: true, value: { commits: options.log ?? [], total: null, hasMore: false } }),
+    stage: (_sessionId, paths) => {
+      note(`stage:${paths.join(',')}`)
+      return Promise.resolve(report)
+    },
+    unstage: (_sessionId, paths) => {
+      note(`unstage:${paths.join(',')}`)
+      return Promise.resolve(report)
+    },
+    commit: (_sessionId, message) => {
+      note(`commit:${message}`)
+      return Promise.resolve(committed)
+    },
+    commitAll: (_sessionId, message) => {
+      note(`commitAll:${message}`)
+      return Promise.resolve(committed)
+    },
+    push: () => {
+      note('push')
+      return Promise.resolve(report)
+    },
+    pull: () => {
+      note('pull')
+      return Promise.resolve(report)
+    },
+    sync: () => {
+      note('sync')
+      return Promise.resolve(report)
+    },
     watch: options.watch ?? (() => () => undefined),
   }
+}
+
+/** The fixture status with only the named groups left populated. */
+function statusWith(parts: Partial<RepoStatus['groups']>): RepoStatus {
+  return {
+    ...statusFixture(),
+    groups: { staged: [], unstaged: [], untracked: [], conflicted: [], ...parts },
+    changedCount: 1,
+  }
+}
+
+/** The fixture status with a chosen branch state. */
+function statusOnBranch(branch: Partial<RepoStatus['branch']>): RepoStatus {
+  return { ...statusFixture(), branch: { ...statusFixture().branch, ...branch } }
+}
+
+/**
+ * A status whose only change is a staged file.
+ *
+ * Stated rather than inherited from {@link statusFixture}, which deliberately
+ * carries all four groups: the commit box's behaviour depends on exactly which
+ * groups are populated, so a test about one scope has to say so.
+ */
+function stagedOnlyStatus(): RepoStatus {
+  return statusWith({
+    staged: [
+      { path: 'src/staged.ts', index: 'M', worktree: '.', staged: true, untracked: false, conflicted: false },
+    ],
+  })
 }
 
 /** Render a tree into a detached container and return it. */
@@ -167,6 +242,51 @@ async function settle(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
+}
+
+/**
+ * Let a mutation, its state update, and the re-read it triggers all land.
+ *
+ * One more turn of the event loop than {@link settle}: an action resolves a
+ * promise, then the panel re-reads the repository, which resolves another.
+ */
+async function flush(): Promise<void> {
+  await settle()
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  await settle()
+}
+
+/** Click an element inside `act`, so React flushes the update it causes. */
+async function click(node: Element): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await flush()
+}
+
+/** Set a textarea's value the way React's controlled inputs expect. */
+async function typeInto(node: HTMLTextAreaElement, value: string): Promise<void> {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(node, value)
+    node.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  await settle()
+}
+
+/** Query one element, failing loudly rather than returning `null`. */
+function must<T extends Element>(container: ParentNode, selector: string): T {
+  const found = container.querySelector<T>(selector)
+  if (found === null) throw new Error(`expected ${selector} to exist`)
+  return found
+}
+
+/** The three sync buttons of the state rail, in render order. */
+function syncButtons(container: HTMLElement): HTMLButtonElement[] {
+  const rail = must(container, `.${cls.head}`)
+  return [...rail.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].slice(0, 3)
 }
 
 before(() => {
@@ -370,6 +490,384 @@ describe('StatusPanel rendering', () => {
       await new Promise((resolve) => setTimeout(resolve, 260))
     })
     assert.equal(statusCalls, 2, 'a change notification must trigger exactly one re-read')
+  })
+})
+
+describe('staging from the change list', () => {
+  it('stages a single row through its own + button (FR-3.1)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(container, `[data-group="unstaged"] .${cls.row}`)
+    await click(must(row, `.${cls.rowActions} button`))
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/changed.ts'])
+  })
+
+  it('unstages a staged row through its − button (FR-3.1)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(container, `[data-group="staged"] .${cls.row}`)
+    await click(must(row, `.${cls.rowActions} button`))
+    assert.deepEqual(calls.entries, ['unstage:src/staged.ts'])
+  })
+
+  it('offers + on an untracked row and on a conflicted one', async () => {
+    // A conflict's `+` is the same command git would be given to mark it
+    // resolved; the dedicated conflict UI is FR-9's, in a later milestone.
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    await click(must(must(container, `[data-group="untracked"] .${cls.row}`), `.${cls.rowActions} button`))
+    await click(must(must(container, `[data-group="conflicted"] .${cls.row}`), `.${cls.rowActions} button`))
+    assert.deepEqual(calls.entries, ['stage:notes.md', 'stage:both.txt'])
+  })
+
+  it('stages a whole group from its header (FR-3.2)', async () => {
+    // §1.3's fourth lesson: a first commit of dozens of files must not need one
+    // click each.
+    const calls: ActionLog = { entries: [] }
+    const status = statusWith({
+      untracked: [
+        { path: 'a.md', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+        { path: 'b.md', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const head = must(container, `[data-group="untracked"] .${cls.groupActions}`)
+    const button = must<HTMLButtonElement>(head, 'button')
+    assert.equal(button.textContent, 'Stage all')
+    await click(button)
+    assert.deepEqual(calls.entries, ['stage:a.md,b.md'])
+  })
+
+  it('unstages a whole group from its header (FR-3.2)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const head = must(container, `[data-group="staged"] .${cls.groupActions}`)
+    const button = must<HTMLButtonElement>(head, 'button')
+    assert.equal(button.textContent, 'Unstage all')
+    await click(button)
+    assert.deepEqual(calls.entries, ['unstage:src/staged.ts'])
+  })
+})
+
+describe('the commit box (FR-3.3, FR-3.4)', () => {
+  it('commits the index, and says how many files that is', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: stagedOnlyStatus() } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // One staged file, and nothing else would be included.
+    const scope = must(container, '[data-commit-scope]')
+    assert.equal(scope.getAttribute('data-commit-scope'), 'staged')
+    assert.match(scope.textContent ?? '', /1 staged file/)
+
+    const button = must<HTMLButtonElement>(container, `.${cls.commitButton}`)
+    assert.equal(button.textContent, 'Commit (1)')
+    assert.equal(button.disabled, true, 'an empty message is not a commit')
+
+    const input = must<HTMLTextAreaElement>(container, `.${cls.commitInput}`)
+    await typeInto(input, 'feat: add the thing')
+    assert.equal(button.disabled, false)
+
+    await click(button)
+    assert.deepEqual(calls.entries, ['commit:feat: add the thing'])
+    // The box reports the commit git made, and clears itself for the next one.
+    assert.match(container.textContent ?? '', /Committed bbbbbbb: a commit subject/)
+    assert.equal(input.value, '')
+  })
+
+  it('submits on Ctrl+Enter (FR-3.3)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: stagedOnlyStatus() } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const input = must<HTMLTextAreaElement>(container, `.${cls.commitInput}`)
+    await typeInto(input, 'via keyboard')
+    await act(async () => {
+      input.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }),
+      )
+    })
+    await flush()
+    assert.deepEqual(calls.entries, ['commit:via keyboard'])
+  })
+
+  it('leaves a plain Enter as a newline', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: stagedOnlyStatus() } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const input = must<HTMLTextAreaElement>(container, `.${cls.commitInput}`)
+    await typeInto(input, 'subject')
+    // No preventDefault is asserted here: what matters is that no commit left.
+    input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await flush()
+    assert.deepEqual(calls.entries, [])
+  })
+
+  it('announces the add -u widening when nothing is staged (FR-3.4)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const status = statusWith({
+      unstaged: [
+        { path: 'a.txt', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'b.txt', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+      untracked: [
+        { path: 'new.txt', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // The label names the widening before it happens, and counts only what
+    // `add -u` will actually include — the untracked file is not in the count.
+    const button = must<HTMLButtonElement>(container, `.${cls.commitButton}`)
+    assert.equal(button.textContent, 'Commit all tracked changes (2)')
+    assert.match(container.textContent ?? '', /Runs git add -u first/)
+
+    await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'sweep')
+    await click(button)
+    assert.deepEqual(calls.entries, ['commitAll:sweep'])
+  })
+
+  it('disables the button when only untracked files exist', async () => {
+    const status = statusWith({
+      untracked: [
+        { path: 'new.txt', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ status: { ok: true, value: status } }), t, locale: 'en' }),
+    )
+    await settle()
+    await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'nope')
+
+    assert.equal(must<HTMLButtonElement>(container, `.${cls.commitButton}`).disabled, true)
+    assert.match(container.textContent ?? '', /stage the ones you want to commit first/)
+  })
+
+  it('disables the button while conflicts remain, even with something staged', async () => {
+    // git refuses to commit with an unmerged path, whatever else is staged.
+    const status = statusWith({
+      staged: [
+        { path: 'resolved.txt', index: 'M', worktree: '.', staged: true, untracked: false, conflicted: false },
+      ],
+      conflicted: [
+        { path: 'both.txt', index: 'U', worktree: 'U', staged: true, untracked: false, conflicted: true },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ status: { ok: true, value: status } }), t, locale: 'en' }),
+    )
+    await settle()
+    await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'premature')
+
+    assert.equal(must<HTMLButtonElement>(container, `.${cls.commitButton}`).disabled, true)
+    assert.equal(must(container, '[data-commit-scope]').getAttribute('data-commit-scope'), 'conflicted')
+  })
+
+  it('keeps the message when the commit is refused', async () => {
+    // Losing a written message to a failed commit would be its own bug.
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: stagedOnlyStatus() },
+          commit: { ok: false, error: { code: 'nothing-to-commit', message: 'nothing staged' } },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const input = must<HTMLTextAreaElement>(container, `.${cls.commitInput}`)
+    await typeInto(input, 'my careful message')
+    await click(must<HTMLButtonElement>(container, `.${cls.commitButton}`))
+
+    assert.equal(input.value, 'my careful message')
+    assert.match(must(container, '[data-commit-error]').textContent ?? '', /index is empty/)
+  })
+})
+
+describe('the sync actions (FR-5.1)', () => {
+  it('enables sync, pull, and push when the branch is both ahead and behind', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const buttons = syncButtons(container)
+    assert.equal(buttons.length, 3)
+    assert.equal(buttons.some((button) => button.disabled), false)
+
+    await click(buttons[1] as HTMLButtonElement)
+    assert.deepEqual(calls.entries, ['pull'])
+  })
+
+  it('offers the first push on a branch with no upstream (FR-5.2)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          status: { ok: true, value: statusOnBranch({ upstream: null, ahead: 0, behind: 0 }) },
+          branches: [{ ...branchesFixture()[0]!, upstream: null, upstreamGone: false }],
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const [sync, pull, push] = syncButtons(container)
+    assert.equal(sync?.disabled, true, 'there is nothing to pull from')
+    assert.equal(pull?.disabled, true)
+    assert.equal(push?.disabled, false, 'the first push is the one that sets the upstream')
+
+    await click(push as HTMLButtonElement)
+    assert.deepEqual(calls.entries, ['push'])
+  })
+
+  it('offers only a pull when the branch is level with its upstream', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: statusOnBranch({ ahead: 0, behind: 0 }) },
+          branches: [{ ...branchesFixture()[0]!, ahead: 0, behind: 0 }],
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    const [sync, pull, push] = syncButtons(container)
+    // There is nothing to send and nothing to reconcile — but asking the remote
+    // whether it has moved is always a reasonable thing to do.
+    assert.equal(sync?.disabled, true)
+    assert.equal(push?.disabled, true)
+    assert.equal(pull?.disabled, false)
+  })
+})
+
+describe('operation failures (§4.3)', () => {
+  it('shows a refused push beside the list, keeping git’s output and the list', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          report: {
+            ok: false,
+            error: {
+              code: 'non-fast-forward',
+              message: 'the remote has commits this branch does not',
+              detail: 'error: failed to push some refs\nhint: use git pull\n',
+            },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    await click(syncButtons(container)[1] as HTMLButtonElement)
+
+    const box = must(container, '[data-action-error="pull"]')
+    assert.match(box.textContent ?? '', /remote has commits this branch does not/)
+    const detail = must(box, `.${cls.note}`)
+    // git's own multi-line refusal survives verbatim (§4.3, FR-4.4).
+    assert.equal(detail.getAttribute('data-multiline'), 'true')
+    assert.match(detail.textContent ?? '', /failed to push some refs/)
+
+    // The failure did not replace the panel: every change row is still there.
+    assert.equal(container.querySelectorAll(`.${cls.badge}`).length, 4)
+    assert.equal(must(container, `.${cls.root}`).getAttribute('data-git-panel'), 'ready')
+  })
+
+  it('closes the failure when it is dismissed', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ report: { ok: false, error: { code: 'git-failed', message: 'boom' } } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(syncButtons(container)[0] as HTMLButtonElement)
+    assert.equal(container.querySelector('[data-action-error]') !== null, true)
+
+    const box = must(container, '[data-action-error]')
+    await click(must(box, `.${cls.tool}`))
+    assert.equal(container.querySelector('[data-action-error]'), null)
+  })
+
+  it('reports a successful operation with a name, even when git said nothing', async () => {
+    // `git add` prints nothing, so the confirmation is the operation's own name.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`))
+
+    const notice = must(container, '[data-action-done="unstage"]')
+    assert.equal(notice.textContent, 'Unstage')
   })
 })
 

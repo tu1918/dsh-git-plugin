@@ -1,0 +1,145 @@
+/**
+ * The commit box: where a message is written (FR-3.3) and where the commit's
+ * SCOPE is made visible (FR-3.4).
+ *
+ * It is a controlled component with no state of its own. The message belongs to
+ * the panel because a failed commit must not cost the user the paragraph they
+ * just wrote, and the scope belongs to the panel because it is a reading of git
+ * status, not something a text box can know.
+ *
+ * What is *here* is the copy: which sentence explains the current scope, and
+ * which words the button carries. That is the doc's §1.3 lesson, point 5 — the
+ * comparable plugin's commit button quietly ran `add -u` and the list disagreed
+ * with the commit — so the widening exists as words on screen before it exists as
+ * an argument to git.
+ *
+ * @module dsh-git-panel/client/ui/CommitBox
+ */
+
+import type { ReactNode } from 'react'
+
+import { commitPlanOf } from '../../core/commit-scope.ts'
+import type { CommitScope } from '../../core/commit-scope.ts'
+import { cls } from './styles.ts'
+import type { Translate } from './translate.ts'
+
+/** Everything the box renders from. */
+export interface CommitBoxProps {
+  /** The message so far. */
+  readonly message: string
+  /** Called with the new text on every keystroke. */
+  readonly onMessage: (value: string) => void
+  /** What a commit would record right now. */
+  readonly scope: CommitScope
+  /** True while an operation is in flight, so the box cannot start a second. */
+  readonly busy: boolean
+  /** The last commit failure, already translated; shown under the box. */
+  readonly error?: string
+  /** Commit, with the scope the button is currently describing. */
+  readonly onCommit: () => void
+  /** The panel's translator. */
+  readonly t: Translate
+}
+
+/**
+ * The button's words for a scope.
+ * @param scope - The current scope.
+ * @param t - Translator.
+ * @returns The button label, count included where the count is meaningful.
+ */
+function labelOf(scope: CommitScope, t: Translate): string {
+  switch (scope.kind) {
+    case 'staged':
+      return t('commit.buttonCount', { count: scope.count })
+    case 'all-tracked':
+      return t('commit.allTrackedCount', { count: scope.count })
+    default:
+      // The remaining scopes cannot commit, so the plain word is the right one
+      // to sit greyed out beside the reason.
+      return t('commit.button')
+  }
+}
+
+/**
+ * The sentence that says what the button will do.
+ * @param scope - The current scope.
+ * @param t - Translator.
+ * @returns One line, never empty.
+ */
+function hintOf(scope: CommitScope, t: Translate): string {
+  switch (scope.kind) {
+    case 'staged':
+      return t('commit.hintStaged', { count: scope.count })
+    case 'all-tracked':
+      return t('commit.hintAllTracked')
+    case 'conflicted':
+      return t('commit.hintConflicted', { count: scope.count })
+    case 'untracked-only':
+      return t('commit.hintUntracked')
+    case 'clean':
+      return t('commit.hintClean')
+  }
+}
+
+/**
+ * The panel's commit box.
+ * @param props - Message, scope, and the panel's callbacks.
+ */
+export function CommitBox({
+  message,
+  onMessage,
+  scope,
+  busy,
+  error,
+  onCommit,
+  t,
+}: CommitBoxProps): ReactNode {
+  const plan = commitPlanOf(scope)
+  // An empty message is not a commit the host would accept, so the button says
+  // so by being unavailable — no round trip is spent learning it.
+  const ready = plan.enabled && !busy && message.trim() !== ''
+
+  const submit = (): void => {
+    if (ready) onCommit()
+  }
+
+  return (
+    <div className={cls.commitBox}>
+      <textarea
+        className={cls.commitInput}
+        value={message}
+        rows={2}
+        placeholder={t('commit.placeholder')}
+        aria-label={t('commit.placeholder')}
+        onChange={(event) => onMessage(event.target.value)}
+        onKeyDown={(event) => {
+          // Ctrl+Enter (⌘+Enter on a Mac) is FR-3.3's shortcut. Plain Enter stays
+          // a newline, because a commit message has a body.
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault()
+            submit()
+          }
+        }}
+      />
+      <div className={cls.commitFoot}>
+        <span className={cls.commitScope} data-commit-scope={scope.kind}>
+          {hintOf(scope, t)}
+        </span>
+        <button
+          type="button"
+          className={cls.commitButton}
+          disabled={!ready}
+          title={labelOf(scope, t)}
+          onClick={submit}
+        >
+          {labelOf(scope, t)}
+        </button>
+      </div>
+      {error !== undefined && error !== '' && (
+        <p className={cls.statusHint} data-commit-error="true">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}

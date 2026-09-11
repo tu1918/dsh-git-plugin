@@ -439,6 +439,178 @@ describe('the /git-panel routes over a real socket', () => {
   })
 })
 
+describe('the mutation routes', () => {
+  /** A repository with one commit and one unstaged change to `a.txt`. */
+  function repoWithChange(prefix: string): string {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    return repo
+  }
+
+  /** POST one mutation, with this origin's own headers. */
+  async function post(
+    harness: Harness,
+    path: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    return await fetch(`${harness.origin}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: harness.origin, ...headers },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+  }
+
+  it('stages over POST, and refuses the same operation over GET', async () => {
+    const repo = repoWithChange('routes-stage')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await post(harness, '/git-panel/stage', { session: 's1', paths: ['a.txt'] })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean }
+      assert.equal(body.ok, true)
+      // The real index moved: the route is wired to the service, not to a stub.
+      assert.deepEqual(git(repo, ['diff', '--cached', '--name-only']).trim(), 'a.txt')
+
+      // A mutation reachable by GET would be reachable by an <img> tag.
+      const viaGet = await fetch(`${harness.origin}/git-panel/stage?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('runs the widening commit only when the body asks for it', async () => {
+    const repo = repoWithChange('routes-commit')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const staged = await post(harness, '/git-panel/commit', { session: 's1', message: 'plain' })
+      const stagedBody = (await staged.json()) as { ok: boolean; error?: { code: string } }
+      // Nothing is staged, and `all` was not set: the index really is empty.
+      assert.equal(stagedBody.ok, false)
+      assert.equal(stagedBody.error?.code, 'nothing-to-commit')
+
+      const widened = await post(harness, '/git-panel/commit', {
+        session: 's1',
+        message: 'with add -u',
+        all: true,
+      })
+      const widenedBody = (await widened.json()) as { ok: boolean; value?: { subject: string } }
+      assert.equal(widenedBody.ok, true)
+      assert.equal(widenedBody.value?.subject, 'with add -u')
+      assert.equal(git(repo, ['show', 'HEAD:a.txt']), 'two\n')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('carries a validation failure as data, not as an HTTP error', async () => {
+    const repo = repoWithChange('routes-validate')
+    const harness = await startHarness({ s1: repo })
+    try {
+      // The body is well-formed JSON with an array of strings, so the route
+      // accepts it; the path itself is what the pure validator refuses.
+      const response = await post(harness, '/git-panel/stage', {
+        session: 's1',
+        paths: ['../escape.txt'],
+      })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(body.ok, false)
+      assert.equal(body.error.code, 'bad-request')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('refuses a mutation that claims another origin', async () => {
+    const repo = repoWithChange('routes-csrf')
+    const harness = await startHarness({ s1: repo })
+    try {
+      // A page on another site can make the browser send this request, but it
+      // cannot make it claim this origin.
+      const response = await post(
+        harness,
+        '/git-panel/stage',
+        { session: 's1', paths: ['a.txt'] },
+        { origin: 'http://evil.example' },
+      )
+      assert.equal(response.status, 403)
+      // Nothing happened to the repository.
+      assert.equal(git(repo, ['diff', '--cached', '--name-only']).trim(), '')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('refuses a malformed body, and a body with no session', async () => {
+    const repo = repoWithChange('routes-body')
+    const harness = await startHarness({ s1: repo })
+    try {
+      // Transport-level problems get an HTTP status: the body is not JSON at all,
+      // or it is an array rather than an object, or there is nothing to act on.
+      const notJson = await post(harness, '/git-panel/stage', '{oops')
+      assert.equal(notJson.status, 400)
+      assert.equal(((await notJson.json()) as { error: { code: string } }).error.code, 'bad-request')
+
+      const arrayBody = await post(harness, '/git-panel/stage', '["a.txt"]')
+      assert.equal(arrayBody.status, 400)
+
+      const noSession = await post(harness, '/git-panel/stage', { paths: ['a.txt'] })
+      assert.equal(noSession.status, 400)
+
+      // A body that parses but names the wrong shapes is an operation failure,
+      // and travels the way every other operation failure does — in the envelope,
+      // under a 200 — so the panel has one code path for all of them.
+      for (const body of [
+        { session: 's1', paths: 'a.txt' },
+        { session: 's1', paths: [7] },
+        { session: 's1', message: 7 },
+      ]) {
+        const response = await post(harness, body.paths === undefined ? '/git-panel/commit' : '/git-panel/stage', body)
+        assert.equal(response.status, 200, `expected an envelope for ${JSON.stringify(body)}`)
+        assert.equal(((await response.json()) as { ok: boolean }).ok, false)
+      }
+
+      // Nothing was staged by any of the attempts.
+      assert.equal(git(repo, ['diff', '--cached', '--name-only']).trim(), '')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('refuses a body past the size cap', async () => {
+    const repo = repoWithChange('routes-toolarge')
+    const harness = await startHarness({ s1: repo })
+    try {
+      // More than the 1 MiB cap, so the handler stops reading rather than
+      // buffering whatever it is handed.
+      const response = await post(harness, '/git-panel/stage', {
+        session: 's1',
+        paths: ['a.txt'],
+        padding: 'x'.repeat(2 * 1024 * 1024),
+      })
+      assert.equal(response.status, 413)
+      assert.equal(((await response.json()) as { error: { code: string } }).error.code, 'too-large')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('answers an unknown mutation with 404', async () => {
+    const harness = await startHarness({})
+    try {
+      const response = await post(harness, '/git-panel/nope', { session: 's1' })
+      assert.equal(response.status, 404)
+    } finally {
+      await harness.close()
+    }
+  })
+})
+
 describe('the loopback fence', () => {
   // The DSH frontend's authentication does not cover third-party webServer
   // routes, so the plugin refuses anything that did not arrive over loopback.

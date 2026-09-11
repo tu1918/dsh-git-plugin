@@ -15,6 +15,7 @@ import type {
   FileChange,
   LogLevel,
   LogPage,
+  OperationReport,
   RepoStatus,
 } from './types.ts'
 
@@ -48,6 +49,12 @@ export type GitErrorCode =
   | 'too-large'
   /** git exited non-zero for a reason with no more specific code. */
   | 'git-failed'
+  /** `git commit` found nothing staged: the FR-3.4 button was right to warn. */
+  | 'nothing-to-commit'
+  /** The remote has commits this branch does not, so the push was refused (FR-5.4). */
+  | 'non-fast-forward'
+  /** The operation left the repository mid-merge with unmerged paths (FR-5.3). */
+  | 'conflict'
   /** The request itself was malformed. */
   | 'bad-request'
   /** The host-side handler threw. */
@@ -171,6 +178,64 @@ export interface WorkspaceGitService {
    * @param sessionId - Opaque session identity from the browser.
    */
   stagedPaths(sessionId: string, signal?: AbortSignal): Promise<Result<readonly FileChange[]>>
+
+  /**
+   * Stage paths: what the `+` on a change row does (FR-3.1, FR-3.2).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param paths - Repo-relative paths, validated before any git call (§5.5).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stage(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Unstage paths: what the `−` on a staged row does (FR-3.1, FR-3.2).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param paths - Repo-relative paths, validated before any git call (§5.5).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  unstage(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Commit the index, and only the index (FR-3.4's default scope).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param message - Commit message; validated for emptiness before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   * @returns The commit git created, so the panel can name it.
+   */
+  commit(sessionId: string, message: string, signal?: AbortSignal): Promise<Result<CommitInfo>>
+  /**
+   * Stage every tracked change, then commit — the explicitly announced widening
+   * FR-3.4 requires rather than a quiet `add -u` behind a commit button.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param message - Commit message; validated for emptiness before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   * @returns The commit git created.
+   */
+  commitAll(sessionId: string, message: string, signal?: AbortSignal): Promise<Result<CommitInfo>>
+  /**
+   * Push the current branch, setting its upstream on the first push (FR-5.2).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  push(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Pull the current branch from its upstream (FR-5.1).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  pull(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Pull, then push: the doc's `⇅` in one action (FR-5.1).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
 }
 
 /**
@@ -206,6 +271,64 @@ export interface GitRemoteClient {
     limit: number,
     signal?: AbortSignal,
   ): Promise<Result<LogPage>>
+  /**
+   * Stage paths (FR-3.1, FR-3.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param paths - Repo-relative paths.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stage(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Unstage paths (FR-3.1, FR-3.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param paths - Repo-relative paths.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  unstage(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Commit the index, and only the index (FR-3.4).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param message - Commit message.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  commit(sessionId: string, message: string, signal?: AbortSignal): Promise<Result<CommitInfo>>
+  /**
+   * Stage every tracked change, then commit (FR-3.4's announced widening).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param message - Commit message.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  commitAll(
+    sessionId: string,
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<Result<CommitInfo>>
+  /**
+   * Push the current branch, setting its upstream on the first push (FR-5.1, FR-5.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  push(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Pull the current branch from its upstream (FR-5.1).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  pull(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Pull, then push (FR-5.1).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
   /**
    * Subscribe to "the repository changed" notifications.
    *

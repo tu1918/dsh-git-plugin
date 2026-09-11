@@ -32,6 +32,12 @@
  * `{ ok: false, error }`. A failure is data, not an HTTP status, so the UI has
  * one code path and git's own multi-line output survives as `error.detail`.
  *
+ * Reads answer `GET`, with the session in the query; mutations require `POST`,
+ * with the session and their arguments in a JSON body. Two gates precede any git
+ * work: the loopback fence below, and — for mutations only — a same-origin check,
+ * because a state-changing route that any page on this machine can `POST` to is a
+ * hole the loopback fence does not close by itself.
+ *
  * @module dsh-git-panel/host/adapter/routes
  */
 
@@ -43,6 +49,34 @@ import type { RepoWatcher } from '../watcher.ts'
 
 /** The path prefix this plugin owns; distinct from git-graph's `/git`. */
 const ROUTE_PREFIX = '/git-panel'
+
+/**
+ * Operations that only read, and therefore answer `GET`.
+ *
+ * The two sets are what keeps the transport honest: a read can never be a
+ * mutation, and a mutation can never arrive as a `GET` that a cross-site
+ * `<img>` tag could trigger.
+ */
+const READ_OPERATIONS: ReadonlySet<string> = new Set(['status', 'branches', 'log'])
+
+/** Operations that mutate the repository, and therefore require `POST`. */
+const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
+  'stage',
+  'unstage',
+  'commit',
+  'push',
+  'pull',
+  'sync',
+])
+
+/**
+ * Largest request body accepted, in bytes.
+ *
+ * §5.5 caps what the host SENDS; the same reasoning applies to what it reads. A
+ * mutation body is a session id, a short message, and a list of paths, so a
+ * megabyte is already far past anything legitimate.
+ */
+const MAX_BODY_BYTES = 1024 * 1024
 
 /**
  * Whether a request arrived over the loopback interface.
@@ -114,6 +148,102 @@ function sessionOf(url: URL): string | null {
 }
 
 /**
+ * Where the session id came from, body first.
+ *
+ * Reads carry it in the query because they have no body; mutations carry it in
+ * the body, which is where the rest of their arguments are. Accepting both keeps
+ * one rule — "the session is required" — rather than one per method.
+ * @param url - The request URL.
+ * @param body - The parsed body, `{}` for a read.
+ * @returns The session id, or `null` when neither place supplied one.
+ */
+function sessionFrom(url: URL, body: Record<string, unknown>): string | null {
+  const fromBody = body['session']
+  if (typeof fromBody === 'string' && fromBody !== '') return fromBody
+  return sessionOf(url)
+}
+
+/**
+ * Whether a mutating request came from this very origin.
+ *
+ * The loopback fence stops other machines; this stops other *pages*. A browser
+ * attaches `Origin` to a `POST` it makes, and a cross-site page cannot forge it,
+ * so a mismatch is a request the user did not make from this panel. A request
+ * with no `Origin` at all is not a browser cross-site request — a test, a script,
+ * the plugin's own tooling — and loopback is what guards those.
+ * @param req - The incoming request.
+ * @returns Whether the request may proceed.
+ */
+function isSameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin
+  if (origin === undefined || origin === '') return true
+  const host = req.headers.host
+  if (host === undefined) return false
+  try {
+    return new URL(origin).host === host
+  } catch {
+    // An `Origin` that is not a URL cannot be this origin.
+    return false
+  }
+}
+
+/**
+ * Read a bounded JSON request body.
+ *
+ * Bounded in bytes rather than trusted to `content-length`, because the header
+ * is the client's claim and the stream is the fact.
+ * @param req - The incoming request.
+ * @returns The parsed object, or the failure to answer with.
+ */
+async function readJsonBody(req: IncomingMessage): Promise<Envelope<Record<string, unknown>>> {
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      const buffer = chunk as Buffer
+      size += buffer.length
+      if (size > MAX_BODY_BYTES) {
+        return fail('too-large', 'the request body is too large')
+      }
+      chunks.push(buffer)
+    }
+  } catch {
+    return fail('bad-request', 'the request body could not be read')
+  }
+
+  const text = Buffer.concat(chunks).toString('utf8')
+  if (text.trim() === '') return { ok: true, value: {} }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return fail('bad-request', 'the request body must be a JSON object')
+    }
+    return { ok: true, value: parsed as Record<string, unknown> }
+  } catch {
+    return fail('bad-request', 'the request body is not valid JSON')
+  }
+}
+
+/**
+ * Read one field that must be an array of strings.
+ *
+ * The wire shape is checked here and the git shape in `core/validate.ts`: this
+ * layer answers "is it an array of strings", the service answers "is it a path
+ * this plugin may hand to git". That split keeps the pure rules in the pure
+ * layer and this file's job to the transport.
+ * @param body - The parsed body.
+ * @param name - Field name.
+ * @returns The array, or the envelope to answer with.
+ */
+function stringArrayOf(body: Record<string, unknown>, name: string): Envelope<readonly string[]> {
+  const value = body[name]
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    return fail('bad-request', `${name} must be an array of strings`)
+  }
+  return { ok: true, value: value as readonly string[] }
+}
+
+/**
  * Read a non-negative integer query parameter.
  * @param url - The request URL.
  * @param name - Parameter name.
@@ -149,7 +279,52 @@ export function registerGitPanelRoutes(
   /** Live SSE responses, so disposal can end them rather than leak sockets. */
   const streams = new Set<ServerResponse>()
 
-  /** Handle one JSON operation. */
+  /** Run one operation against the service. */
+  async function dispatchOperation(
+    operation: string,
+    sessionId: string,
+    url: URL,
+    body: Record<string, unknown>,
+  ): Promise<Envelope<unknown>> {
+    switch (operation) {
+      case 'status':
+        return await service.status(sessionId)
+      case 'branches':
+        return await service.branches(sessionId)
+      case 'log':
+        return await service.log(sessionId, intOf(url, 'offset', 0), intOf(url, 'limit', 30))
+      case 'stage':
+      case 'unstage': {
+        const paths = stringArrayOf(body, 'paths')
+        if (!paths.ok) return paths
+        return operation === 'stage'
+          ? await service.stage(sessionId, paths.value)
+          : await service.unstage(sessionId, paths.value)
+      }
+      case 'commit': {
+        const message = body['message']
+        if (typeof message !== 'string') {
+          return fail('bad-request', 'message must be a string')
+        }
+        // FR-3.4's two commits differ only in this flag: the panel sets it when
+        // its button reads "commit all tracked changes", and the service then
+        // does the `add -u` the label promised.
+        return body['all'] === true
+          ? await service.commitAll(sessionId, message)
+          : await service.commit(sessionId, message)
+      }
+      case 'push':
+        return await service.push(sessionId)
+      case 'pull':
+        return await service.pull(sessionId)
+      case 'sync':
+        return await service.sync(sessionId)
+      default:
+        return fail('bad-request', `unknown operation: ${operation}`)
+    }
+  }
+
+  /** Handle one JSON operation: reads answer GET, mutations require POST. */
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!isLoopback(req)) {
       ports.log('warn', `refused ${ROUTE_PREFIX} request from ${req.socket.remoteAddress ?? 'unknown'}`)
@@ -159,43 +334,48 @@ export function registerGitPanelRoutes(
 
     const url = new URL(req.url ?? '/', 'http://localhost')
     const operation = url.pathname.slice(ROUTE_PREFIX.length).replace(/^\/+/, '')
-
-    if (req.method !== 'GET') {
-      writeJson(res, 405, fail('bad-request', `${req.method ?? 'that'} is not supported`))
+    const isWrite = WRITE_OPERATIONS.has(operation)
+    if (!isWrite && !READ_OPERATIONS.has(operation)) {
+      writeJson(res, 404, fail('bad-request', `unknown operation: ${operation}`))
       return
     }
 
-    const sessionId = sessionOf(url)
+    const method = req.method ?? ''
+    if (isWrite ? method !== 'POST' : method !== 'GET') {
+      writeJson(res, 405, fail('bad-request', `${method === '' ? 'that' : method} is not supported here`))
+      return
+    }
+
+    // A mutation gets the check a read never needed: a cross-site page can make
+    // the browser send a request, but it cannot make it claim this origin.
+    if (isWrite && !isSameOrigin(req)) {
+      ports.log(
+        'warn',
+        `refused a cross-origin ${operation} from ${req.headers.origin ?? 'an unknown origin'}`,
+      )
+      writeJson(res, 403, fail('bad-request', 'a mutation must come from this origin'))
+      return
+    }
+
+    let body: Record<string, unknown> = {}
+    if (isWrite) {
+      const parsed = await readJsonBody(req)
+      if (!parsed.ok) {
+        writeJson(res, parsed.error.code === 'too-large' ? 413 : 400, parsed)
+        return
+      }
+      body = parsed.value
+    }
+
+    const sessionId = sessionFrom(url, body)
     if (sessionId === null) {
-      writeJson(res, 400, fail('bad-request', 'the session query parameter is required'))
+      writeJson(res, 400, fail('bad-request', 'the session is required'))
       return
     }
 
     try {
-      switch (operation) {
-        case 'status': {
-          const result = await service.status(sessionId)
-          writeJson(res, 200, result.ok ? { ok: true, value: result.value } : result)
-          return
-        }
-        case 'branches': {
-          const result = await service.branches(sessionId)
-          writeJson(res, 200, result.ok ? { ok: true, value: result.value } : result)
-          return
-        }
-        case 'log': {
-          const result = await service.log(
-            sessionId,
-            intOf(url, 'offset', 0),
-            intOf(url, 'limit', 30),
-          )
-          writeJson(res, 200, result.ok ? { ok: true, value: result.value } : result)
-          return
-        }
-        default:
-          writeJson(res, 404, fail('bad-request', `unknown operation: ${operation}`))
-          return
-      }
+      const result = await dispatchOperation(operation, sessionId, url, body)
+      writeJson(res, 200, result.ok ? { ok: true, value: result.value } : result)
     } catch (error) {
       // A thrown handler must still answer, or the browser waits for a response
       // that will never come.

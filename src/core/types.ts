@@ -169,5 +169,22 @@ export interface LogPage {
   readonly hasMore: boolean
 }
 
+/**
+ * What one mutating operation did, in the panel's vocabulary.
+ *
+ * `summary` is git's own first useful line when git printed one — a push's
+ * `master -> master`, a pull's `Already up to date.` — and `''` when the command
+ * is silent, which is the ordinary case for `add`. The panel shows it as a
+ * transient result line, never as the operation's only evidence: a successful
+ * mutation always re-reads the status, so the change list remains the truth and
+ * this is only the sentence beside it.
+ */
+export interface OperationReport {
+  /** git's own one-line result, or `''` when the command printed nothing. */
+  readonly summary: string
+  /** Every line git printed, verbatim and multi-line (§4.3). */
+  readonly detail: string
+}
+
 /** Log levels the panel reports through the host port. */
 export type LogLevel = 'info' | 'warn' | 'error'

@@ -49,6 +49,15 @@ export const cls = {
   pathDir: `${P}-path-dir`,
   pathName: `${P}-path-name`,
   rowActions: `${P}-row-actions`,
+  commitBox: `${P}-commit-box`,
+  commitInput: `${P}-commit-input`,
+  commitFoot: `${P}-commit-foot`,
+  commitScope: `${P}-commit-scope`,
+  commitButton: `${P}-commit-button`,
+  actionBox: `${P}-action-box`,
+  actionHead: `${P}-action-head`,
+  actionLabel: `${P}-action-label`,
+  actionNotice: `${P}-action-notice`,
   status: `${P}-status`,
   statusTitle: `${P}-status-title`,
   statusHint: `${P}-status-hint`,
@@ -323,6 +332,114 @@ export const css = `
 .${cls.row}:hover .${cls.rowActions},
 .${cls.row}:focus-within .${cls.rowActions} {
   opacity: 1;
+}
+
+/* ── commit box ─────────────────────────────────────────────────────────── */
+
+.${cls.commitBox} {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.${cls.commitInput} {
+  width: 100%;
+  min-height: 48px;
+  max-height: 160px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.${cls.commitInput}::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.${cls.commitInput}:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.commitFoot} {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The scope sentence is the doc's §1.3 lesson made visible, so it takes the
+   width it needs and the button keeps its own. */
+.${cls.commitScope} {
+  min-width: 0;
+  flex: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.${cls.commitButton} {
+  flex: none;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.${cls.commitButton}:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.${cls.commitButton}:disabled {
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+/* ── operation feedback ─────────────────────────────────────────────────── */
+
+/* Errors land beside the list rather than replacing it: §4.3 asks for the
+   failure where the operation was, and the change list is still the user's. */
+.${cls.actionBox} {
+  flex: none;
+  padding: 7px 12px 8px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.${cls.actionHead} {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.${cls.actionLabel} {
+  min-width: 0;
+  flex: auto;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.${cls.actionNotice} {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  word-break: break-word;
 }
 
 /* ── states ─────────────────────────────────────────────────────────────── */

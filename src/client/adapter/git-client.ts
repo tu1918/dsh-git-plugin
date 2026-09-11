@@ -20,7 +20,7 @@
  */
 
 import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
-import type { BranchRef, LogPage, RepoStatus } from '../../core/types.ts'
+import type { BranchRef, CommitInfo, LogPage, OperationReport, RepoStatus } from '../../core/types.ts'
 
 /** The host route prefix; must match `host/routes.ts`. */
 const ROUTE_PREFIX = '/git-panel'
@@ -47,6 +47,22 @@ function transportFailure(error: unknown, aborted: boolean): Result<never> {
 }
 
 /**
+ * Read the host's envelope out of a decoded response body.
+ *
+ * Both verbs answer in the same shape, so both funnel through here: the UI has
+ * exactly one way to learn that something failed, whichever method it called.
+ * @param body - The decoded JSON.
+ * @returns The envelope as a {@link Result}.
+ */
+function envelopeOf<T>(body: unknown): Result<T> {
+  if (typeof body !== 'object' || body === null || !('ok' in body)) {
+    return { ok: false, error: { code: 'internal', message: 'the host sent a malformed reply' } }
+  }
+  const envelope = body as Envelope<T>
+  return envelope.ok ? { ok: true, value: envelope.value } : { ok: false, error: envelope.error }
+}
+
+/**
  * Issue one JSON operation.
  * @param path - Route path under the prefix.
  * @param params - Query parameters.
@@ -70,12 +86,38 @@ async function request<T>(
       headers: { accept: 'application/json' },
       ...(signal === undefined ? {} : { signal }),
     })
-    const body: unknown = await response.json()
-    if (typeof body !== 'object' || body === null || !('ok' in body)) {
-      return { ok: false, error: { code: 'internal', message: 'the host sent a malformed reply' } }
-    }
-    const envelope = body as Envelope<T>
-    return envelope.ok ? { ok: true, value: envelope.value } : { ok: false, error: envelope.error }
+    return envelopeOf<T>(await response.json())
+  } catch (error) {
+    return transportFailure(error, signal?.aborted === true)
+  }
+}
+
+/**
+ * Issue one mutating operation.
+ *
+ * A mutation is a `POST` with a JSON body, which is what lets the host require
+ * both of those things and refuse the rest: a state change is never reachable by
+ * a link, an image tag, or a form submission from another page.
+ * @param path - Route path under the prefix.
+ * @param body - The request body, session included.
+ * @param signal - Caller cancellation.
+ * @returns The envelope the host sent, or a transport failure.
+ */
+async function mutate<T>(
+  path: string,
+  body: Readonly<Record<string, unknown>>,
+  signal?: AbortSignal,
+): Promise<Result<T>> {
+  const url = new URL(`${ROUTE_PREFIX}${path}`, window.location.origin)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
+    })
+    return envelopeOf<T>(await response.json())
   } catch (error) {
     return transportFailure(error, signal?.aborted === true)
   }
@@ -92,6 +134,20 @@ export function createGitRemoteClient(): GitRemoteClient {
       request<readonly BranchRef[]>('/branches', { session: sessionId }, signal),
     log: (sessionId, offset, limit, signal) =>
       request<LogPage>('/log', { session: sessionId, offset, limit }, signal),
+
+    stage: (sessionId, paths, signal) =>
+      mutate<OperationReport>('/stage', { session: sessionId, paths }, signal),
+    unstage: (sessionId, paths, signal) =>
+      mutate<OperationReport>('/unstage', { session: sessionId, paths }, signal),
+    commit: (sessionId, message, signal) =>
+      mutate<CommitInfo>('/commit', { session: sessionId, message }, signal),
+    // The one argument that separates FR-3.4's two commits, named as the flag the
+    // button's copy promises: `add -u` first, then commit.
+    commitAll: (sessionId, message, signal) =>
+      mutate<CommitInfo>('/commit', { session: sessionId, message, all: true }, signal),
+    push: (sessionId, signal) => mutate<OperationReport>('/push', { session: sessionId }, signal),
+    pull: (sessionId, signal) => mutate<OperationReport>('/pull', { session: sessionId }, signal),
+    sync: (sessionId, signal) => mutate<OperationReport>('/sync', { session: sessionId }, signal),
 
     watch(sessionId, onChange) {
       // Polling only: no stream available in this browser.

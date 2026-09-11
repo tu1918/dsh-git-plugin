@@ -32,6 +32,28 @@ export const zh = {
   loading: '正在读取…',
   'action.refresh': '重新读取',
   'action.retry': '重试',
+  'action.stage': '暂存',
+  'action.unstage': '取消暂存',
+  'action.stageAll': '全部暂存',
+  'action.unstageAll': '全部取消暂存',
+  'action.pull': '拉取',
+  'action.push': '推送',
+  'action.pushAhead': '推送 {count} 个提交',
+  'action.sync': '同步（先拉取再推送）',
+  'action.failed': '操作失败',
+  'action.dismiss': '关闭提示',
+
+  'commit.placeholder': '提交信息…',
+  'commit.button': '提交',
+  'commit.buttonCount': '提交（{count}）',
+  'commit.allTracked': '提交全部已跟踪更改',
+  'commit.allTrackedCount': '提交全部已跟踪更改（{count}）',
+  'commit.hintStaged': '只提交已暂存的 {count} 个文件。',
+  'commit.hintAllTracked': '将执行 git add -u：只包含已跟踪文件，未跟踪文件不会被提交。',
+  'commit.hintUntracked': '当前只有未跟踪的文件：先暂存要提交的文件。',
+  'commit.hintConflicted': '还有 {count} 个冲突文件，解决后再提交。',
+  'commit.hintClean': '没有可提交的更改。',
+  'commit.done': '已提交 {hash}：{subject}',
 
   'branch.detached': '游离 HEAD',
   'branch.unborn': '尚无提交',
@@ -69,6 +91,10 @@ export const zh = {
   'error.tooLarge': '输出太大，这次读取已中止。',
   'error.badRequest': '请求不完整，请重新打开这个面板。',
   'error.generic': '读取失败：{message}',
+  'error.actionFailed': '操作失败：{message}',
+  'error.nothingToCommit': '暂存区是空的，没有可提交的内容。',
+  'error.nonFastForward': '远端有本地没有的提交，推送被拒绝。请改用「同步」：先拉取再推送。',
+  'error.conflict': '这次合并产生了冲突，先解决冲突再提交。',
 } as const
 
 /** English dictionary, checked against the Chinese key set. */
@@ -80,6 +106,29 @@ export const en: Record<GitPanelKey, string> = {
   loading: 'Reading…',
   'action.refresh': 'Reload',
   'action.retry': 'Try again',
+  'action.stage': 'Stage',
+  'action.unstage': 'Unstage',
+  'action.stageAll': 'Stage all',
+  'action.unstageAll': 'Unstage all',
+  'action.pull': 'Pull',
+  'action.push': 'Push',
+  'action.pushAhead': 'Push {count} commits',
+  'action.sync': 'Sync (pull, then push)',
+  'action.failed': 'failed',
+  'action.dismiss': 'Dismiss',
+
+  'commit.placeholder': 'Commit message…',
+  'commit.button': 'Commit',
+  'commit.buttonCount': 'Commit ({count})',
+  'commit.allTracked': 'Commit all tracked changes',
+  'commit.allTrackedCount': 'Commit all tracked changes ({count})',
+  'commit.hintStaged': 'Commits the {count} staged file(s), and nothing else.',
+  'commit.hintAllTracked':
+    'Runs git add -u first: tracked files only, so untracked files stay out of the commit.',
+  'commit.hintUntracked': 'Only untracked files here: stage the ones you want to commit first.',
+  'commit.hintConflicted': '{count} file(s) still in conflict: resolve them before committing.',
+  'commit.hintClean': 'There is nothing to commit.',
+  'commit.done': 'Committed {hash}: {subject}',
 
   'branch.detached': 'Detached HEAD',
   'branch.unborn': 'No commits yet',
@@ -117,6 +166,11 @@ export const en: Record<GitPanelKey, string> = {
   'error.tooLarge': 'The output was too large, so this read was stopped.',
   'error.badRequest': 'The request was incomplete. Reopen this panel.',
   'error.generic': 'Could not read: {message}',
+  'error.actionFailed': 'The operation failed: {message}',
+  'error.nothingToCommit': 'The index is empty, so there is nothing to commit.',
+  'error.nonFastForward':
+    'The remote has commits this branch does not, so the push was refused. Use Sync: pull, then push.',
+  'error.conflict': 'That merge left conflicts. Resolve them, then commit.',
 }
 
 /** Every key the panel can translate. */

@@ -175,3 +175,11 @@ export function SyncGlyph({ size = 13, className }: GlyphProps): ReactNode {
     </>,
   )
 }
+
+/**
+ * A cross: dismiss.
+ * @param props - Size and class.
+ */
+export function CloseGlyph({ size = 12, className }: GlyphProps): ReactNode {
+  return stroke(size, className, <path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6" />)
+}
