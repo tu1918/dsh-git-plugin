@@ -24,6 +24,14 @@ Browser→host paths are never accepted: the client sends an opaque session id a
 the host resolves the directory from its own session store (see
 `src/host/adapter/workspace.ts`).
 
+`/git-panel/*` accepts **loopback clients only**. DSH's own frontend
+authentication does not cover routes a third-party plugin registers on
+`ctx.webServer` — verified against a running server, where `/` answers 401 while a
+plugin route answers normally — so the plugin carries its own gate. A deployment
+that binds wider than loopback is refused rather than silently exposing every
+session's repository state; a trusted-authority or paired-device escape hatch
+belongs with the mutations in a later milestone.
+
 ## Layout
 
 ```

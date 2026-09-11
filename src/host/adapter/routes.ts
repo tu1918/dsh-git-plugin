@@ -44,6 +44,33 @@ import type { RepoWatcher } from '../watcher.ts'
 /** The path prefix this plugin owns; distinct from git-graph's `/git`. */
 const ROUTE_PREFIX = '/git-panel'
 
+/**
+ * Whether a request arrived over the loopback interface.
+ *
+ * This fence exists because the DSH frontend's own authentication does NOT cover
+ * routes a third-party plugin registers on `ctx.webServer`: `/` answers 401
+ * without a session, while a plugin route answers normally. Verified against the
+ * running server, and the reason the comparable external git plugin in this
+ * profile carries its own loopback + paired-device gate.
+ *
+ * Loopback-only is the strictest useful default: a `dsh web` bound to
+ * `127.0.0.1` (the default) is reachable by nothing else anyway, so this only
+ * changes behaviour for a deployment that deliberately binds wider — and for
+ * that deployment, refusing is better than silently exposing every session's
+ * repository state to the network. A trusted-authority or paired-device escape
+ * hatch belongs with the mutations in a later milestone, not before them.
+ * @param req - The incoming request.
+ * @returns Whether the peer is this machine.
+ */
+function isLoopback(req: IncomingMessage): boolean {
+  const address = req.socket.remoteAddress
+  if (address === undefined) return false
+  if (address === '::1') return true
+  // An IPv4 peer seen through an IPv6 socket arrives mapped.
+  const ipv4 = address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address
+  return /^127\./.test(ipv4)
+}
+
 /** How long an idle SSE connection is kept warm. */
 const HEARTBEAT_MS = 15_000
 
@@ -124,6 +151,12 @@ export function registerGitPanelRoutes(
 
   /** Handle one JSON operation. */
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (!isLoopback(req)) {
+      ports.log('warn', `refused ${ROUTE_PREFIX} request from ${req.socket.remoteAddress ?? 'unknown'}`)
+      writeJson(res, 403, fail('bad-request', 'this endpoint accepts loopback clients only'))
+      return
+    }
+
     const url = new URL(req.url ?? '/', 'http://localhost')
     const operation = url.pathname.slice(ROUTE_PREFIX.length).replace(/^\/+/, '')
 
@@ -173,6 +206,12 @@ export function registerGitPanelRoutes(
 
   /** Handle one SSE subscription. */
   const stream = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (!isLoopback(req)) {
+      ports.log('warn', `refused ${ROUTE_PREFIX}/events from ${req.socket.remoteAddress ?? 'unknown'}`)
+      writeJson(res, 403, fail('bad-request', 'this endpoint accepts loopback clients only'))
+      return
+    }
+
     const url = new URL(req.url ?? '/', 'http://localhost')
     const sessionId = sessionOf(url)
     if (sessionId === null) {

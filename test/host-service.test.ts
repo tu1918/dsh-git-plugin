@@ -439,6 +439,72 @@ describe('the /git-panel routes over a real socket', () => {
   })
 })
 
+describe('the loopback fence', () => {
+  // The DSH frontend's authentication does not cover third-party webServer
+  // routes, so the plugin refuses anything that did not arrive over loopback.
+  it('refuses a request whose peer is not this machine', async () => {
+    const repo = makeRepo('fence')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const registrations: Registration[] = []
+    const service = serviceFor({ s1: repo })
+    const watcher = createRepoWatcher(SILENT)
+    registerGitPanelRoutes(stubContext(registrations), service, watcher, SILENT)
+    const routes = registrations as Registration[]
+    const post = routes.find((route) => route.kind === 'prefix')
+    assert.ok(post)
+
+    /** Drive one handler with a chosen peer address. */
+    const call = async (remoteAddress: string): Promise<{ status: number; body: string }> => {
+      let status = 0
+      let body = ''
+      const res = {
+        writeHead(code: number) {
+          status = code
+          return res
+        },
+        end(chunk?: string) {
+          body = chunk ?? ''
+          return res
+        },
+        on() {
+          return res
+        },
+        writableEnded: false,
+        destroyed: false,
+        write() {
+          return true
+        },
+      }
+      const req = {
+        method: 'GET',
+        url: '/git-panel/status?session=s1',
+        socket: { remoteAddress },
+      }
+      await post.handler(req as never, res as never)
+      return { status, body }
+    }
+
+    // Every loopback spelling is accepted, including IPv4-mapped IPv6.
+    for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '127.0.0.9']) {
+      const answer = await call(address)
+      assert.equal(answer.status, 200, `expected ${address} to be allowed`)
+      assert.match(answer.body, /"ok":true/)
+    }
+
+    // A real network peer is refused before any git work happens.
+    for (const address of ['10.0.0.5', '192.168.1.20', '::ffff:10.0.0.5', '2001:db8::1']) {
+      const answer = await call(address)
+      assert.equal(answer.status, 403, `expected ${address} to be refused`)
+      assert.match(answer.body, /loopback/)
+    }
+
+    watcher.dispose()
+  })
+})
+
 describe('the change stream', () => {
   it('sends ready, then changed when the index moves', async () => {
     const repo = makeRepo('sse-changed')
