@@ -49,6 +49,9 @@ npm run check      # tsc --noEmit && node --test && build
 
 ## Install
 
+Requires DSH >= 0.1.5-rc.1 (the right-sidebar tab-type registry this builds on)
+and git >= 2.20.
+
 ```sh
 dsh plugin --profile web add link:/absolute/path/to/dsh-git-plugin
 # then restart `dsh web` — a NEW bundle is composed at startup
