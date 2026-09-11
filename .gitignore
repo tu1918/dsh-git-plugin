@@ -32,3 +32,10 @@ lib/
 # without disturbing a running one. It accumulates credentials, session logs, and
 # plugin state, so it must never be committed.
 .verify/
+
+# ── Cross-project scratch ────────────────────────────────────────────────────
+# Notes written while working on someone else's repository: issue drafts, an
+# implementation checklist, a community-channel crib sheet. They belong to a
+# different project, so they are not this repository's history — they stay on
+# disk and out of the tree.
+contrib/
