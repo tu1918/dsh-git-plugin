@@ -5,8 +5,15 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document (`dsh-git-plugin-需求文档.md`, v0.2), and
-currently at **M0 + M1**: the foundation and a read-only panel.
+Built to the requirements document, and currently at **M0 + M1**: the foundation
+and a read-only panel.
+
+## Docs
+
+| File | What it is |
+|---|---|
+| `docs/requirements.md` | The requirements document, v0.2. A **byte-exact copy** (20 778 bytes, sha256 `f42d4277…`) kept as the single source of truth — read-only; a change means a new version replacing it wholesale. |
+| `docs/plan.md` | The execution plan: milestone status against the doc's own acceptance criteria, what each completed milestone delivered and where, every deliberate deviation from the doc with its reason, and the M2 task list. |
 
 ## What works today
 
