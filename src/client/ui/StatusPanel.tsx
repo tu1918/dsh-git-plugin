@@ -30,12 +30,16 @@ import type {
   BranchRef,
   ChangeArea,
   CommitInfo,
+  DiffArea,
   FileChange,
   OperationReport,
   RepoStatus,
 } from '../../core/types.ts'
 import { badgeFor } from '../../core/git-parse.ts'
 import { CommitBox } from './CommitBox.tsx'
+import { DiffDock } from './DiffView.tsx'
+import { errorCopy } from './error-copy.ts'
+import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
 import {
@@ -102,48 +106,18 @@ function reportOf(result: Result<OperationReport>): Result<string> {
 }
 
 /**
- * Render one git failure in the panel's voice.
- * @param t - Translator.
- * @param error - The failure to explain.
- * @param mode - Whether a read or an operation failed, which changes the generic
- *   wording: "could not read" is wrong for a push that was refused.
+ * Which comparison a change-list row's diff should make (FR-2.2).
+ *
+ * The list's four groups collapse onto git's two comparable states: a staged row
+ * diffs the index against HEAD, and everything else — unstaged, untracked, and a
+ * conflicted path — diffs the working tree. That is the point of the mapping
+ * rather than a rename: a file with both a staged and an unstaged change appears
+ * in two groups, and clicking either row must open the side that row stands for.
+ * @param area - The group the clicked row belongs to.
+ * @returns The comparison to ask the host for.
  */
-function errorCopy(
-  t: Translate,
-  error: GitPanelError,
-  mode: 'read' | 'action',
-): { title: string; detail: string | undefined } {
-  switch (error.code) {
-    case 'not-a-repo':
-      return { title: t('noRepo.title'), detail: t('noRepo.hint') }
-    case 'no-session':
-      return { title: t('error.noSession'), detail: undefined }
-    case 'git-missing':
-      return { title: t('error.gitMissing'), detail: undefined }
-    case 'timeout':
-      return { title: t('error.timeout'), detail: undefined }
-    case 'too-large':
-      return { title: t('error.tooLarge'), detail: undefined }
-    case 'bad-request':
-      return { title: t('error.badRequest'), detail: undefined }
-    case 'nothing-to-commit':
-      return { title: t('error.nothingToCommit'), detail: undefined }
-    case 'non-fast-forward':
-      // FR-5.4's whole point: name the state and the way out, rather than
-      // forwarding git's hint text and leaving the user to translate it.
-      return { title: t('error.nonFastForward'), detail: error.detail }
-    case 'conflict':
-      return { title: t('error.conflict'), detail: error.detail }
-    default:
-      // git's own words, verbatim and with their newlines: FR-4.4.
-      return {
-        title:
-          mode === 'action'
-            ? t('error.actionFailed', { message: error.message })
-            : t('error.generic', { message: error.message }),
-        detail: error.detail,
-      }
-  }
+export function diffAreaOf(area: ChangeArea): DiffArea {
+  return area === 'staged' ? 'index' : 'worktree'
 }
 
 /**
@@ -152,14 +126,19 @@ function errorCopy(
  * One read happens per session and per explicit refresh; change notifications
  * only schedule another read, coalesced, so a burst of git commands from an
  * agent produces one refresh rather than one per file (§4.4, FR-1.4).
- * @param props - The panel's props.
- * @returns The latest snapshot for this session, or `null` while the first read is in flight.
+ * @param sessionId - The session whose repository is read.
+ * @param git - The host-facing git client.
+ * @param tabSignal - Aborted when the tab closes.
+ * @returns The latest snapshot for this session, or `null` while the first read
+ *   is in flight, plus the reload trigger and the generation counter. The
+ *   generation is returned rather than kept private because an open diff has to
+ *   re-read on the same signal (FR-2's pane refreshes with the list).
  */
 function useRepoSnapshot(
   sessionId: string,
   git: GitRemoteClient,
   tabSignal: AbortSignal | undefined,
-): { snapshot: Snapshot | null; reload: () => void; busy: boolean } {
+): { snapshot: Snapshot | null; reload: () => void; busy: boolean; generation: number } {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [generation, setGeneration] = useState(0)
   const [busy, setBusy] = useState(true)
@@ -219,7 +198,12 @@ function useRepoSnapshot(
   }, [sessionId, git])
 
   const reload = useCallback(() => setGeneration((value) => value + 1), [])
-  return { snapshot: snapshot?.sessionId === sessionId ? snapshot : null, reload, busy }
+  return {
+    snapshot: snapshot?.sessionId === sessionId ? snapshot : null,
+    reload,
+    busy,
+    generation,
+  }
 }
 
 /** One glyph button with a tooltip and an accessible name. */
@@ -356,7 +340,17 @@ function BranchRail({
   )
 }
 
-/** One changed file, with the badge its group gives it and its staging action. */
+/**
+ * One changed file, with the badge its group gives it and its staging action.
+ *
+ * The whole row opens the diff (FR-2.1) rather than only its path: a row is the
+ * unit the list is made of, and the row is what the pointer is on. That makes the
+ * `+`/`−` buttons inside it a conflict of intent — pressing one must stage, and
+ * must NOT also open a diff — so the action strip stops the click from reaching
+ * the row. The strip is a plain `div` for exactly that: `ToolButton` keeps its
+ * one-argument `onClick` signature, and the containment lives where the layout
+ * says it does.
+ */
 function ChangeRow({
   entry,
   area,
@@ -364,6 +358,7 @@ function ChangeRow({
   busy,
   onStage,
   onUnstage,
+  onOpen,
 }: {
   readonly entry: FileChange
   readonly area: ChangeArea
@@ -371,6 +366,7 @@ function ChangeRow({
   readonly busy: boolean
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
+  readonly onOpen: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
@@ -383,7 +379,26 @@ function ChangeRow({
   const canUnstage = area === 'staged'
 
   return (
-    <div className={cls.row} title={tooltip}>
+    <div
+      className={cls.row}
+      title={tooltip}
+      role="button"
+      tabIndex={0}
+      aria-label={t('diff.open', { path: entry.path })}
+      onClick={() => onOpen(entry, area)}
+      onKeyDown={(event) => {
+        // Only the row's own key press counts. A key press on the `+`/`−` inside
+        // it bubbles here, and Space activates a button — so without this guard,
+        // staging by keyboard would also open a diff, the same bug the click
+        // handler's `stopPropagation` prevents for the mouse.
+        if (event.target !== event.currentTarget) return
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        // Space would otherwise scroll the panel, which is not what pressing a
+        // row means.
+        event.preventDefault()
+        onOpen(entry, area)
+      }}
+    >
       <span className={cls.badge} data-status={badge}>
         {badge}
       </span>
@@ -391,14 +406,16 @@ function ChangeRow({
         {directory !== '' && <span className={cls.pathDir}>{directory}</span>}
         <span className={cls.pathName}>{name}</span>
       </span>
-      <span className={cls.rowActions}>
+      <span className={cls.rowActions} onClick={(event) => event.stopPropagation()}>
         {!canUnstage && (
           <ToolButton
             label={t('action.stage')}
             disabled={busy}
             onClick={() => onStage([entry.path])}
           >
-            <PlusGlyph />
+            {/* Bigger than the rail's tool glyphs: this is the row's main click,
+                and the row is where the panel is used most. */}
+            <PlusGlyph size={16} />
           </ToolButton>
         )}
         {canUnstage && (
@@ -407,7 +424,7 @@ function ChangeRow({
             disabled={busy}
             onClick={() => onUnstage([entry.path])}
           >
-            <MinusGlyph />
+            <MinusGlyph size={16} />
           </ToolButton>
         )}
       </span>
@@ -424,11 +441,19 @@ interface GroupBatch {
 }
 
 /**
- * One group of changes, with its count and — on hover — its bulk action.
+ * One group of changes: a disclosure header, its count, its bulk action, and its
+ * rows.
  *
  * The bulk action is FR-3.2 and it is not a convenience: §1.3's fourth lesson is
  * that a first commit of a few dozen untracked files is a disaster when each one
  * needs its own `+`.
+ *
+ * The header folds the group (§4.2 draws exactly that caret). The count stays on
+ * screen while folded, because "there are 37 untracked files" is the reason to
+ * open it and hiding the number as well would make folding the same as losing
+ * them. The caret, the name and the count are one button and the bulk action is
+ * its SIBLING — a button inside a button is invalid, and the inner one would not
+ * be clickable in every browser.
  */
 function Group({
   label,
@@ -437,8 +462,11 @@ function Group({
   t,
   busy,
   batch,
+  collapsed,
+  onToggle,
   onStage,
   onUnstage,
+  onOpen,
 }: {
   readonly label: string
   readonly area: ChangeArea
@@ -446,15 +474,29 @@ function Group({
   readonly t: Translate
   readonly busy: boolean
   readonly batch?: GroupBatch
+  /** Whether the group's rows are folded away. */
+  readonly collapsed: boolean
+  /** Fold or unfold this group. */
+  readonly onToggle: () => void
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
+  readonly onOpen: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   if (entries.length === 0) return null
   return (
-    <section className={cls.group} data-group={area}>
+    <section className={cls.group} data-group={area} data-collapsed={String(collapsed)}>
       <div className={cls.groupHead}>
-        <span className={cls.groupLabel}>{label}</span>
-        <span className={cls.count}>{entries.length}</span>
+        <button
+          type="button"
+          className={cls.groupToggle}
+          aria-expanded={!collapsed}
+          title={collapsed ? t('group.expand') : t('group.collapse')}
+          onClick={onToggle}
+        >
+          <CaretGlyph className={cls.groupCaret} />
+          <span className={cls.groupLabel}>{label}</span>
+          <span className={cls.count}>{entries.length}</span>
+        </button>
         {batch !== undefined && (
           <span className={cls.groupActions}>
             <button
@@ -468,17 +510,19 @@ function Group({
           </span>
         )}
       </div>
-      {entries.map((entry) => (
-        <ChangeRow
-          key={`${area}:${entry.path}`}
-          entry={entry}
-          area={area}
-          t={t}
-          busy={busy}
-          onStage={onStage}
-          onUnstage={onUnstage}
-        />
-      ))}
+      {!collapsed &&
+        entries.map((entry) => (
+          <ChangeRow
+            key={`${area}:${entry.path}`}
+            entry={entry}
+            area={area}
+            t={t}
+            busy={busy}
+            onStage={onStage}
+            onUnstage={onUnstage}
+            onOpen={onOpen}
+          />
+        ))}
     </section>
   )
 }
@@ -577,7 +621,7 @@ function History({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <CaretGlyph className={cls.historyCaret} data-open={String(open)} />
+        <CaretGlyph className={cls.historyCaret} />
         {t('history.title')}
       </button>
       {open && (
@@ -609,18 +653,59 @@ function History({
  * @param props - Session, git client, copy, and the tab's abort signal.
  */
 export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelProps): ReactNode {
-  const { snapshot, reload, busy } = useRepoSnapshot(sessionId, git, signal)
+  const { snapshot, reload, busy, generation } = useRepoSnapshot(sessionId, git, signal)
   // The draft lives up here, not inside the box: a commit that fails must not
   // cost the user the message they just wrote.
   const [message, setMessage] = useState('')
   const [action, setAction] = useState<ActionState>({ kind: 'idle' })
+  /**
+   * The file whose diff is open, or `null` while the change list is showing.
+   *
+   * The row's own group is kept rather than the derived {@link DiffArea}, so the
+   * "is this file still changed?" check below can look in the group the user
+   * actually clicked — which is the only group that can say whether the row they
+   * opened still exists.
+   */
+  const [openFile, setOpenFile] = useState<{ path: string; area: ChangeArea } | null>(null)
+  // Folded groups are a preference, not a render detail: someone who folds
+  // "untracked" away does not want it back on the next visit (§4.2 draws the
+  // caret). Initialised from storage, written back whenever it changes.
+  const [collapsedGroups, setCollapsedGroups] =
+    useState<ReadonlySet<ChangeArea>>(readCollapsedGroups)
+
+  useEffect(() => {
+    writeCollapsedGroups(collapsedGroups)
+  }, [collapsedGroups])
+
+  const toggleGroup = useCallback((area: ChangeArea): void => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current)
+      if (next.has(area)) next.delete(area)
+      else next.add(area)
+      return next
+    })
+  }, [])
 
   // A different session is a different repository, so neither the draft nor the
-  // last operation's result belongs to it.
+  // last operation's result belongs to it — and neither does an open diff, which
+  // describes a file in the old repository.
   useEffect(() => {
     setMessage('')
     setAction({ kind: 'idle' })
+    setOpenFile(null)
   }, [sessionId])
+
+  // A file committed or discarded while its diff is open no longer has a row to
+  // return to, so the view is dropped rather than left showing a diff of
+  // something the change list no longer lists. The check waits for a settled
+  // read: during a refresh the group is briefly the old one, and clearing then
+  // would close the pane on every keystroke of a `git add`.
+  useEffect(() => {
+    if (openFile === null || busy || snapshot === null || snapshot.kind !== 'ready') return
+    const { groups } = snapshot.status
+    const stillListed = groups[openFile.area].some((entry) => entry.path === openFile.path)
+    if (!stillListed) setOpenFile(null)
+  }, [openFile, snapshot, busy])
 
   /**
    * Run one mutation, then report it or re-read the repository.
@@ -732,6 +817,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const sync = (): void => {
     void perform('sync', t('action.sync'), async () => reportOf(await git.sync(sessionId, signal)))
   }
+  /**
+   * Open one row's diff (FR-2.1).
+   * @param entry - The row that was activated.
+   * @param area - The group it was activated in, which picks the comparison.
+   */
+  const openDiff = (entry: FileChange, area: ChangeArea): void => {
+    setOpenFile({ path: entry.path, area })
+  }
 
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
 
@@ -773,6 +866,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           {action.summary === '' ? action.label : action.summary}
         </p>
       )}
+      {/* The column, top to bottom, follows VS Code's Source Control view: the
+          message box first, then the change list, then the history. The diff is
+          the one thing that cannot follow it — VS Code opens a diff in the
+          editor area, and this plugin registers only a right-sidebar tab — so it
+          docks at the bottom instead (`DiffDock`). FR-2.1 still holds: embedded,
+          never a modal, with the rail and the box in place. */}
       <CommitBox
         message={message}
         onMessage={setMessage}
@@ -795,7 +894,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             {/* Conflicts get a group and a `+` per row, but no bulk action: the
                 conflict UI proper (FR-9) is a later milestone, and "stage all"
                 over a half-resolved merge is not a shortcut worth offering. */}
-            <Group label={t('group.conflicted')} area="conflicted" entries={conflicted} t={t} busy={busy || pending} onStage={stage} onUnstage={unstage} />
+            <Group label={t('group.conflicted')} area="conflicted" entries={conflicted} t={t} busy={busy || pending} collapsed={collapsedGroups.has('conflicted')} onToggle={() => toggleGroup('conflicted')} onStage={stage} onUnstage={unstage} onOpen={openDiff} />
             <Group
               label={t('group.staged')}
               area="staged"
@@ -803,8 +902,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+              collapsed={collapsedGroups.has('staged')}
+              onToggle={() => toggleGroup('staged')}
               onStage={stage}
               onUnstage={unstage}
+              onOpen={openDiff}
             />
             <Group
               label={t('group.unstaged')}
@@ -813,8 +915,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
+              collapsed={collapsedGroups.has('unstaged')}
+              onToggle={() => toggleGroup('unstaged')}
               onStage={stage}
               onUnstage={unstage}
+              onOpen={openDiff}
             />
             <Group
               label={t('group.untracked')}
@@ -823,14 +928,30 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
+              collapsed={collapsedGroups.has('untracked')}
+              onToggle={() => toggleGroup('untracked')}
               onStage={stage}
               onUnstage={unstage}
+              onOpen={openDiff}
             />
             {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
           </>
         )}
-        <History sessionId={sessionId} git={git} t={t} locale={locale} signal={signal} />
       </div>
+      {/* Below the list, as VS Code puts the SCM graph section. */}
+      <History sessionId={sessionId} git={git} t={t} locale={locale} signal={signal} />
+      {openFile !== null && (
+        <DiffDock
+          sessionId={sessionId}
+          path={openFile.path}
+          area={diffAreaOf(openFile.area)}
+          git={git}
+          t={t}
+          signal={signal}
+          generation={generation}
+          onClose={() => setOpenFile(null)}
+        />
+      )}
     </div>
   )
 }

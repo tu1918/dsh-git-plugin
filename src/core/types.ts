@@ -188,3 +188,101 @@ export interface OperationReport {
 
 /** Log levels the panel reports through the host port. */
 export type LogLevel = 'info' | 'warn' | 'error'
+
+/* ── diff viewing (FR-2) ─────────────────────────────────────────────────── */
+
+/**
+ * Which two things a diff compares (FR-2.2).
+ *
+ * The two values are the two states git can diff against without a second
+ * revision: the index (staged) and the working tree. An untracked path is a
+ * worktree diff of "nothing" against the file, which the host renders as an
+ * all-added diff rather than a third area — the panel's own group already says
+ * the file is untracked, so the wire has no third case to carry.
+ */
+export type DiffArea = 'worktree' | 'index'
+
+/** A half-open `[start, end)` range of characters inside one line's text. */
+export interface DiffSpan {
+  /** First highlighted character (UTF-16 code unit offset into the line). */
+  readonly start: number
+  /** One past the last highlighted character. */
+  readonly end: number
+}
+
+/** One rendered line of a diff. */
+export interface DiffLine {
+  /** Whether the line is context, an insertion, or a deletion. */
+  readonly kind: 'context' | 'added' | 'removed'
+  /** The line's text, without its terminator. */
+  readonly text: string
+  /** 1-based line number in the old file, or `null` for an added line. */
+  readonly oldLine: number | null
+  /** 1-based line number in the new file, or `null` for a removed line. */
+  readonly newLine: number | null
+  /**
+   * Word-level ranges worth highlighting (§FR-2.3).
+   *
+   * Empty on context lines and on a line whose whole body changed — highlighting
+   * an entire line adds nothing over the row's own add/remove treatment. Offsets
+   * address {@link text}, so a renderer slices the string directly.
+   */
+  readonly marks: readonly DiffSpan[]
+}
+
+/** One `@@ … @@` block. */
+export interface DiffHunk {
+  /** First old-file line the hunk covers. */
+  readonly oldStart: number
+  /** Number of old-file lines the hunk covers. */
+  readonly oldCount: number
+  /** First new-file line the hunk covers. */
+  readonly newStart: number
+  /** Number of new-file lines the hunk covers. */
+  readonly newCount: number
+  /**
+   * git's trailing `@@` context — the enclosing function or section header.
+   * `''` when git printed none.
+   */
+  readonly heading: string
+  /** The hunk's lines, in file order, context included. */
+  readonly lines: readonly DiffLine[]
+}
+
+/**
+ * One file's diff, as the renderer needs it.
+ *
+ * `large` and `truncated` are different facts and both are stated rather than
+ * derived, because the panel's next action differs: a `large` diff is complete
+ * and can simply be expanded (FR-2.6's "default folded, click to load"), while a
+ * `truncated` one is missing its tail and can only be reported.
+ */
+export interface FileDiff {
+  /** Repo-relative path, `/`-separated. */
+  readonly path: string
+  /** Which comparison produced this. */
+  readonly area: DiffArea
+  /** The hunks, in file order; empty for a binary or combined diff. */
+  readonly hunks: readonly DiffHunk[]
+  /** Lines added across every hunk. */
+  readonly additions: number
+  /** Lines removed across every hunk. */
+  readonly deletions: number
+  /** Body lines across every hunk (context included), for the FR-2.6 gate. */
+  readonly lines: number
+  /** True when git reported the file as binary: FR-2.5 shows a notice instead. */
+  readonly binary: boolean
+  /**
+   * True when git answered with a combined (`diff --cc`) diff, which this
+   * renderer does not read — the conflict view proper is FR-9. Stated so the
+   * panel can say "not this renderer" instead of "no differences".
+   */
+  readonly combined: boolean
+  /**
+   * True when `lines` exceeds the panel's one-shot render budget, so the panel
+   * opens folded (FR-2.6). The host never folds: it counts and says so.
+   */
+  readonly large: boolean
+  /** True when git's output hit the host's byte cap and the tail is missing. */
+  readonly truncated: boolean
+}

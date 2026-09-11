@@ -11,8 +11,8 @@
 下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
 「与需求文档的偏差」。
 
-- 代码：`src/`（24 个源文件）、`test/`（10 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 153 项测试 + 两个打包产物
+- 代码：`src/`（28 个源文件）、`test/`（11 个测试文件）
+- 校验：`npm run check` → `tsc --noEmit` + 190 项测试 + 两个打包产物
 
 ---
 
@@ -22,9 +22,9 @@
 |---|---|---|---|
 | **M0** | core 骨架（types/ports/git-parse）+ host/client adapter + 依赖方向规则 | 解析器测试全绿；adapter 目录是唯一碰 DSH API 的地方 | ✅ 完成 |
 | **M1** | host service + status/log/branches 只读 + sidebar tab 渲染变更列表 | 面板能看到当前仓库变更分组与分支 | ✅ 完成并在 GUI 中确认 |
-| **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话浏览器 provider 不可用，见 §11） |
-| **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ⏳ 下一步 |
-| **M4** | 新建/删除分支、sync、冲突标记、AI 提交信息 | 分支管理与同步全在面板内闭环 | ⬜ 未开始 |
+| **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
+| **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：190 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、13 项 DiffView/DiffDock/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
+| **M4** | 新建/删除分支、sync、冲突标记、AI 提交信息 | 分支管理与同步全在面板内闭环 | ⏳ 下一步 |
 | **M5** | discard、stash、提交图、撤销、多仓库 | 发布 v1.0 | ⬜ 未开始 |
 
 ---
@@ -107,6 +107,14 @@ discard/deleteBranch 一起写。
 | **D9** | §5.5 假定路由在 DSH 鉴权之后 | **写入路由额外**加同源（`Origin` ↔ `Host`）校验 | loopback 只挡别的机器，不挡别的页面：本机任何网页都能向 `POST /git-panel/*` 发请求。写在 200/400 之前，跨源一律 403。无 `Origin` 的请求（curl、测试、自带工具）放行，由 loopback 兜底 |
 | **D10** | §5.4 服务契约未规定传输细节 | 读用 `GET`（session 在 query），写用 `POST`（session + 参数在 JSON body）；**body 形状错也算操作失败**，与业务失败一样走 200 + 信封 | 前端只有一条错误路径（信封），这是本文件一以贯之的选择（见 `routes.ts` 头注释）。只有「body 根本不是 JSON」「没有 session」「方法不对」「跨源」才用非 200 |
 | **D11** | §5.5 要求「所有 git 参数校验形状」 | M2 只实现**真的有调用方**的两个校验：路径、提交信息；hash/分支名校验留到 M4/M5 使用它们的操作一起写 | 遵循 D7 的同一条理由（不留无人调用的代码）。`.git` 路径是**额外**加的：`git status` 永远不报告它，所以只可能是手写请求——正是要挡的那种 |
+| **D12** | §5.3「移植 VS Code `DefaultLinesDiffComputer` 入 core」 | 改为**依赖** `vscode-diff@^3.0.1`（MIT、零运行时依赖，就是那个引擎的抽取版），并给 `core` 的「零外部 import」守卫开一个**具名白名单**（`test/dependency-direction.test.ts` 的 `CORE_ALLOWED_PACKAGES`） | 手写同构算法只能复刻 Myers 搜索，复刻不了它上面那层启发式（丢短匹配、extend-to-word、把变更块细化到字符区间），而那层才是「VS Code 级」的实际含义。该包零依赖、纯 TS，`node --test` 仍能直接跑 core，所以守卫要保护的性质没变。**代价**：插件首次有运行时依赖（host bundle 仍 `packages: 'external'`，由 profile 的 node_modules 解析；client bundle 不引用引擎，浏览器打包规则不变） |
+| **D13** | §8「`core/diff-engine/`：输入两段文本，输出行级 hunks + 逐词区间」 | 行级 hunks 由 **git** 产出、`core/diff-parse.ts` 解析；引擎只负责**一个变更块内部**的逐词区间与行对齐（`diff-engine/marks.ts`） | git 的行级 diff 尊重 `.gitattributes` 过滤器、rename 检测、二进制嗅探，且不需要把整文件读进内存；引擎做 git 不报告的那部分。VS Code 自己也是「diff computer / renderer」这样分工 |
+| **D14** | FR-2.6「单文件 diff 超过 5000 行时默认折叠，点击加载」 | 响应里是两个**不同**的字段：`large`（行数 > `MAX_DIFF_LINES = 5000`，内容完整，客户端默认折叠、点「加载」展开）与 `truncated`（撞 host 字节上限，尾部确实没读到，只能提示） | 把两者合成一个布尔，会让「加载」按钮承诺一段根本没读到的内容。文档说的「在响应里标记而不是在 host 里折叠」照做：host 只计数，折叠是渲染决定 |
+| **D15** | FR-2.2「未跟踪文件按全新增渲染」 | worktree 侧 `git diff` 空输出时，先探 `git ls-files --error-unmatch -- <path>`：tracked 才算「无改动」；否则用 `git diff --no-index -- /dev/null <path>` 重取一次，得到全新增的 diff（它退出 1 是「有差异」的正常答案） | `git diff` 不区分「未跟踪」与「无改动」，只有前者该渲染成全新增。**代价**：未跟踪文件走 `--no-index`，不经过 `.gitattributes` 过滤器（未跟踪文件本来也没有索引态可归一） |
+| **D16** | FR-2.2 未区分冲突文件的 diff | `diff --cc`（`@@@` 两列前缀）被识别为 `combined` 并整段跳过，客户端显示「合并差异暂不支持」 | 那是另一套语法，按 unified diff 硬读会凭空造行。冲突渲染本身是 FR-9，排在 M4 |
+| **D17** | §5.4 未规定 `diff` 的命令形状 | 固定 `--no-color --no-ext-diff --no-textconv --unified=N`，context 夹在 0–50 | 用户自己的 diff 配置会毁掉解析：外部 driver 输出解析器读不懂的语法，textconv 会把二进制文件转成文本——正好违反 FR-2.5 |
+| **D18** | §4.2 布局：分支行 → 提交框 → 变更分组 → 历史 | 最终**照 VS Code 源代码管理视图排**：分支行 → **提交框** → **变更列表**（冲突/已暂存/更改/未跟踪）→ **最近提交** → **停靠在最下方的 diff**（默认 `50vh`，拖动可改）。中间经历过两版被推翻的顺序（列表上移/提交框居中），以本行为准 | 产品方在 M3 验收后逐条调布局，最后定调「参考 VS Code」——那里没有需要发明的顺序：源代码管理视图就是 输入框 → 变更分组 → 图/历史。**唯一跟不了的一处**：VS Code 把 diff 开在编辑器区，而本插件只注册了右侧栏 tab（`sidebarRightTabs`，本 profile 的客户端包里没有主区 tab 的注册缝），所以 diff 停靠在最下、默认半屏——这也符合「点文件在提交框下方看 diff」的要求。**代价**：diff 是固定占位而不是占满 body，列表可用高度变小（`body` 留 56px 下限、dock 拖动上限留 200px 给上面） |
+| **D19** | FR-3.2 只说「分组标题行提供组级批量操作」，没规定显隐 | M2 做成了 hover 才显形（`opacity: 0` → 1）；M3 验收后改为**常显**，并把分组名改成可省略号收缩、标题行 `min-width: 0` | 产品方在界面上**找不到**「全部暂存」——hover-only 的控件在窄侧栏里等于不存在，而同一份文档的 §4.2 示意图本来就把这两个操作画成可见控件。行内 `+`/`−` 保持 hover 显形不动：FR-3.1 明文要求「hover 显现」，那是需求本身的决定 |
 
 ---
 
@@ -133,6 +141,14 @@ discard/deleteBranch 一起写。
 4. **`optionalLocks` 的默认值写在 `run` 的形参上，不写在 `options` 里。**
    调用点必须**显式**说「我要写」，读代码的人才能一眼看出哪些调用会动 index。
 
+5. **`execFile` 的退出码在 `error.code`，不在 `error.status`。**
+   实测（Node 24）：`git diff --no-index` 退出 1 时 `error.code === 1`、`error.status
+   === undefined`。旧映射只读 `status`，于是**所有非零退出码都变成 `code: null`**——
+   而 `null` 同时是「被信号杀掉」的意思，调用方再也分不清 git 的正常回答与崩溃。
+   M3 的未跟踪文件渲染正好要靠「退出 1 = 有差异」与真失败区分（D15），于是在
+   `git-exec.ts` 里两个字段都读（`code` 为字符串的两种情况——ENOENT、缓冲溢出——
+   都在上面处理掉了）。凡是要靠退出码区分失败种类的调用，先确认这个映射还在。
+
 ---
 
 ## 7. 安全现状
@@ -156,45 +172,99 @@ discard/deleteBranch 一起写。
 
 ---
 
-## 8. M3 任务清单
+## 8. M3 交付
 
-文档 §7 对 M3 的验收是「点文件可见 VS Code 级 diff」。M2 留下的两个钩子已经就位：
+文档 §7 对 M3 的验收是「点文件可见 VS Code 级 diff」。M2 留下的两个钩子果然够用：
 变更行是 `div`（不是按钮），`ChangeRow` 已按分组拿到 `area`，所以点一行即可决定
-「HEAD↔工作区」还是「HEAD↔索引」（FR-2.2）；未跟踪文件按全新增渲染。
+「HEAD↔工作区」还是「HEAD↔索引」（FR-2.2）。三块交付，每一块都有测试守着。
 
-**core（纯函数，M3 的主体）**
-- [ ] `core/diff-engine/`：移植 VS Code `DefaultLinesDiffComputer`，输入两段文本、
-      输出行级 hunks + 逐词（word-level）区间（FR-2.3）。纯函数，测试直接喂字符串
-- [ ] unified diff 的**解析**（`git diff` 输出 → hunks）也要在 core，别放进 host：
-      它是字节解析，与 `git-parse.ts` 同类
+**core**
+- `core/diff-engine/marks.ts` — 逐词标记：`wordMarks()` 给两段文本，`markHunk()` 给一个 hunk。
+  引擎来源见 D12；这一层做三件引擎不管的事：把 1-based 的「行,列」区间翻成 0-based 的
+  `DiffSpan` 偏移、合并相邻/重叠区间、丢掉「整行都变了」的区间（整行变色由行的样式承担，
+  再叠一层高亮只会让高亮的颜色失去信息量）。
+- `core/diff-parse.ts` — `git diff` 统一格式 → `DiffHunk[]`（见 D13）。容忍二进制、
+  `diff --cc`（D16）、rename/mode 段落、`\ No newline at end of file`、以及被字节上限
+  截断的半截 hunk。`MAX_DIFF_LINES = 5000` 在这里，`large` 由它算（D14）。
+- 测试 `test/diff-parse.test.ts`（15 项）：两个 hunk 的行号与 counts、逐词区间（断言的是
+  **被标记的文本**而不是偏移）、整行替换无标记、新文件全新增、二进制、combined、
+  截断透传、5001 行的折叠门。
 
 **host**
-- [ ] `diff(sessionId, path, area, contextLines)`：`worktree` 用 `git diff --no-color`
-      （可选 `--` path），`index` 用 `git diff --cached`；`optionalLocks` 保持 `false`
-- [ ] 新建文件：`git diff --no-index /dev/null <path>` 或读文件后按全新增渲染
-- [ ] 二进制探测（FR-2.5）：`--numstat` 的 `-\t-` 即二进制；**不要**把二进制内容
-      读进内存
-- [ ] 大文件保护（FR-2.6）：沿用 `maxStdoutBytes` 的 `truncated` 语义，>5000 行
-      在响应里标记而**不是**在 host 里折叠
-- [ ] 路由：`GET /git-panel/diff`（读操作，沿用现有信封）
+- `git-service.ts` → `diff(sessionId, path, area, contextLines)`：`index` 用 `git diff --cached`，
+  `worktree` 用 `git diff`，未跟踪用 `--no-index /dev/null`（D15），命令形状固定（D17）。
+- `routes.ts` → `GET /git-panel/diff?session&path&area&context`（读操作集合；缺 `path`
+  或 `area` 不在 {`worktree`,`index`} 走 400 信封）。
+- 测试 `test/host-service.test.ts`（+9 项）：真实仓库跑 worktree / index / 未跟踪 / unborn /
+  二进制 / 无改动 / 非法路径与 area 拒绝 / context 夹取，外加路由的 200 信封、两个 400 信封与 405。
 
 **client**
-- [ ] `DiffView.tsx`：inline / side-by-side 切换，选择记在 `localStorage`（FR-2.4）
-- [ ] 变更行点击 → 侧栏内嵌 diff（FR-2.1，**不弹模态**）。注意：行内 `+`/`−` 按钮
-      必须 `stopPropagation`，否则点暂存会同时打开 diff
-- [ ] `>5000` 行默认折叠 + 「加载」按钮；二进制显示占位文案
-- [ ] 逐词高亮只上色一次、不做 O(n²) 比较（§6 性能）
+- `ui/DiffView.tsx` — `DiffView`（纯渲染：inline 与 side-by-side、逐词高亮、二进制/合并/空态、
+  `large` 折叠 +「加载」、`truncated` 提示）、`DiffPane`（取数、布局记忆、按仓库变化重取、Esc 关闭）
+  与 `DiffDock`（把 pane 停靠在提交框下方，默认 `50vh`，顶部一条 `role="separator"` 的拖动条可改高度）。
+  默认高度刻意留在 CSS 里而不是挂载时量一次像素：窗口一变，「半屏」还是半屏。一次渲染、一次切片，
+  没有 O(n²) 比较（§6）。
+- `ui/StatusPanel.tsx` — 布局按 D18（照 VS Code）：提交框在上、变更列表居中、最近提交在下、diff dock 在最下；
+  打开 diff 不再顶掉列表。变更行可点（`role="button"` + Enter/Space），行内 `+`/`−` 那一层
+  `stopPropagation`（键盘侧另有 `target === currentTarget` 守卫，否则 Space 会既暂存又开 diff）；
+  `staged`→`index`、其余→`worktree`（FR-2.2）。刷新后文件已不在任何分组里就把 dock 收回。
+- `ui/error-copy.ts` — 把 `errorCopy` 从 `StatusPanel` 抽出，避免 DiffView ↔ StatusPanel 互相 import。
+- `ui/StatusPanel.tsx` 的分组批量按钮改为**常显**（见 D19），分组名在窄侧栏里先省略号收缩，
+  保证按钮永远不被挤出可视区。
+- 文案 zh/en 各 +16 键；样式新增 32 个类名，颜色全走 token（加法/删除底色用 `color-mix`）。
+- 测试 `test/client-panel.test.ts`（+12 项）：点行开 diff、点 `+` 只暂存不误开、折叠与展开、
+  二进制占位、布局写进 localStorage 并在重新挂载后生效、**提交框/列表/最近提交/dock 的 DOM 顺序**、
+  dock 默认无内联高度（即走 CSS 的 `50vh`）与拖动后的夹取、**分组批量按钮静止时可见**
+  （读安装好的样式表算出的 `opacity`，退回到 hover 显形就会失败）、**分组折叠与记忆**
+  （折叠后行消失但计数保留，重新挂载仍折叠，localStorage 里写的是组名）。
 
-**测试**：diff 引擎的逐词标记用固定输入；hunks 解析用真实 `git diff` 输出；
-`DiffView` 在 jsdom 里的布局切换与折叠；路由的 `truncated`/`binary` 两个标记。
+**M3 之后的界面调整（产品方在 M3 验收后逐条提出）**
+
+| 调整 | 落点 |
+|---|---|
+| 变更列表移到提交框**上方**，diff 停靠在提交框**下方**、默认半屏、可拖动 | D18 + `DiffDock` |
+| 顺序改为**照 VS Code 的源代码管理视图**：提交框在最上 → 变更分组 → 最近提交在下 → diff dock（VS Code 把 diff 开在编辑器里，本插件只有右侧栏 tab 注册能力，故改为停靠底部）；最近提交展开时自身滚动（`max-height: 40%`），不再把列表和提交框顶走 | `.dgp-history` + `StatusPanel` 渲染顺序 |
+| 说明：中途按「列表在提交框上方」「提交框居中」各改过一版，最终都被这一条取代——**布局以 VS Code 为准**，不自创顺序 | D18 |
+| 分组批量按钮**常显**，分组名先省略号收缩，按钮不再被挤出可视区 | D19 |
+| 行内 `+`/`−` 加大：30×30 的按钮 + 16px 图标（原来是 26×26 / 13px，在密集列表里像个点） | `.dgp-row-actions .dgp-tool` |
+| **每个分组可折叠**并记住折叠状态（`dsh-git-panel/collapsed-groups`）：折叠后行消失、计数保留；折叠是偏好，故写进 localStorage | `Group` 的 `aria-expanded` 开关 + `ui/group-collapse.ts` |
+| 顺手修：历史区的展开箭头**从来没转过**——`data-open` 传给了图标组件，而图标只转发 `size`/`className`，属性丢在半路。现在两个箭头都按父按钮的 `aria-expanded` 旋转 | `styles.ts` 的 `historyCaret` / `groupCaret` |
+| 滚动条不再压住行内 `+`/`−` 与分组批量按钮：面板内的滚动容器改成**占据列宽**的滚动条（Chromium 走 `::-webkit-scrollbar`，Firefox 走 `scrollbar-width: thin`），列表容器再留 10px 右内边距兜底 overlay 引擎——overlay 滚动条正好在滚动容器右缘浮起，而那里原本就是按钮的位置（滚动条出现 = 列表变长 = 按钮被盖住），这条是运行中实测后报来的 | `.dgp-body` 的 `padding-right` + `styles.ts` 的 scrollbar 区块 |
+
+---
+
+**重启后的运行实例核对（2026-09-12，已做）**
+
+重启后 host 路由立刻换成新构建（`GET /git-panel/diff` 由 404 变 400「the session is
+required」）。用一个**真的在跑**的 session（`cwd` = 本仓库）打四条路径：
+
+| 请求 | 结果 |
+|---|---|
+| `path=README.md&area=worktree&context=2` | 8 hunks、`+31 −9`；改行带逐词区间（` + M3`、`, and the`、`diff view`），行号两侧成对 |
+| `path=src/core/diff-engine/marks.ts&area=worktree`（未跟踪） | 1 hunk、`+236 −0`，全新增（D15 的 `--no-index` 路径） |
+| 临时文件 `git add` 后 `area=index` / 同一文件 `area=worktree` | 前者 `+3 −0`（HEAD↔索引），后者 0 hunk——FR-2.2 的两侧确实是两个对比 |
+| 二进制临时文件 `area=worktree` | `binary: true`、0 hunk（FR-2.5） |
+
+临时文件用完即删，索引恢复原状。**没验的是浏览器里的观感**（内嵌 diff 的排版、
+左右对照的对齐、拖动条的手感）——本会话的 `browser_*` 工具一律返回 “no usable
+browser provider is registered”，所以这部分只有 jsdom 的行为测试，没有目视。
+
+**人工看一眼的清单（客户端改动只需刷新页面，不必重启 host）**
+1. 点一个未暂存文件 → 变更列表**仍在**，diff 出现在**提交框下方**，约半屏高，头部有 `+n −m`；
+2. 拖 diff 顶部那条窄边 → 高度跟着走，松手后停住；拖到顶也压不掉上面的列表与提交框；
+3. 同一文件同时有暂存与未暂存改动时，点两行看到各自的对比（FR-2.2）；
+4. 点未跟踪文件 → 全新增；
+5. 切「左右对照」→ 关闭再点开仍是左右对照（FR-2.4）；
+6. 让 agent 改一下当前打开的文件 → diff 自己刷新（§4.4）；
+7. 二进制文件 → 「二进制文件不显示差异」（FR-2.5）。
 
 ---
 
 ## 9. M4–M5 概要
 
-- **M3（diff）**：移植 VS Code `DefaultLinesDiffComputer` 的逐词标记入 `core/diff-engine/`
-  （纯函数，天然属于 core）；`DiffView.tsx` 支持 inline / side-by-side 并记住选择；
-  二进制提示（FR-2.5）；>5000 行默认折叠（FR-2.6）。渲染建议走虚拟滚动（§6 性能）。
+- **M3（diff）已完成**，见 §8。留给后面的两件：diff 的**虚拟滚动**（§6 性能 P1 未做，
+  现在靠 FR-2.6 的折叠门兜底）；FR-7.2「提交详情里下钻看某文件 diff」现在可以直接复用
+  `DiffView` + `git show <hash> -- <path>`（尚未接）。
 - **M4**：分支新建/删除/切换（FR-4.1–4.4，含切换失败时展示 git 多行输出 + 「贮藏后切换」）、
   sync、冲突态 UI（FR-9）、AI 提交信息（`HostPorts.generateText` ← `ctx.llm` adapter，§8.3 token 成本）。
 - **M5**：discard（二次确认「不可恢复」）、stash、提交图 SVG 泳道、撤销最近提交
@@ -215,6 +285,8 @@ discard/deleteBranch 一起写。
 | 新增 | **`commit.gpgsign=true` 的仓库里，面板提交可能卡在 gpg 密码提示上**，直到 15s deadline。`GIT_TERMINAL_PROMPT=0` 管不到 gpg。M2 不传 `--no-gpg-sign`（那会静默产生未签名提交，比超时更糟）；待办是识别这个失败并给出「请检查签名配置」的具体文案 |
 | 新增 | **凭据缺失的 push/pull 只报 git 原文**（`could not read Username … terminal prompts disabled`）。够用，但没有专门文案；等 M4 做远程同步完善时再分类 |
 | 新增 | **`push`/`pull` 会走真实网络**，测试里只覆盖了 file transport 与裸仓库；https/ssh 未实机验证 |
+| 新增 | **插件首次有运行时依赖**（`vscode-diff`，MIT、零依赖，见 D12）。host bundle 仍 `packages: 'external'`，运行时由 profile 的 node_modules 解析；client bundle 不引用它（构建的产物纯度检查会挡住意外引入）。换实现或升级只影响 `core/diff-engine/marks.ts` |
+| 新增 | **diff 没有虚拟滚动**（§6 性能 P1）：>5000 行默认折叠（FR-2.6），展开后整块渲染。千行量级在 jsdom 与手工构造的输入上没发现问题，**未在真实大文件上压过** |
 
 ---
 
@@ -234,7 +306,7 @@ discard/deleteBranch 一起写。
 | 切换 / 新建分支 | ⬜ M4（FR-4） | ✅ `/git/switch`、`/git/create-branch` |
 | 工作树隔离、设置卡 | ⬜ 非目标 | ✅ `/git/worktree-*` |
 | 输入框分支胶囊（空白会话） | ⬜ 非目标 | ✅ |
-| diff 视图 | ⬜ M3（FR-2） | ❌（其 README 未声明） |
+| diff 视图 | ✅ M3（FR-2，inline/左右 + 逐词高亮） | ❌（其 README 未声明） |
 | 遥测 | **无**（不外发任何数据） | 每 UTC 日一次匿名安装心跳（其 README 声明） |
 
 结论：不是「谁是谁的子集」，而是**文档 §1.2 指出的那个缺口仍然成立**——它给了

@@ -183,3 +183,40 @@ export function SyncGlyph({ size = 13, className }: GlyphProps): ReactNode {
 export function CloseGlyph({ size = 12, className }: GlyphProps): ReactNode {
   return stroke(size, className, <path d="M4.4 4.4 11.6 11.6M11.6 4.4 4.4 11.6" />)
 }
+
+/**
+ * Two columns: the side-by-side diff layout (FR-2.4).
+ *
+ * Deliberately a picture of the layout it selects rather than a generic "view
+ * options" icon: the two layout buttons are the only way to tell the modes
+ * apart, and a glyph that draws the result is readable without a tooltip.
+ * @param props - Size and class.
+ */
+export function SplitGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1.4" />
+      <path d="M8 3.4v9.2" />
+    </>,
+  )
+}
+
+/**
+ * The panel's spinner, as an inline SVG.
+ *
+ * The CSS spinner is a styled `span`; this one exists for places that need the
+ * glyph inside a flex row whose children are all boxes (the diff header's tool
+ * buttons, which are `<button>` elements and cannot nest a rotating pseudo
+ * element). Both spin with the same keyframes, so a reload looks the same
+ * wherever it is started.
+ * @param props - Size and class.
+ */
+export function SpinnerGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <path d="M13 8a5 5 0 1 1-1.6-3.7" strokeLinecap="round" />,
+  )
+}

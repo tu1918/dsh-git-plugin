@@ -42,6 +42,8 @@ export const cls = {
   groupLabel: `${P}-group-label`,
   count: `${P}-count`,
   groupActions: `${P}-group-actions`,
+  groupToggle: `${P}-group-toggle`,
+  groupCaret: `${P}-group-caret`,
   ghost: `${P}-ghost`,
   row: `${P}-row`,
   badge: `${P}-badge`,
@@ -73,6 +75,34 @@ export const cls = {
   commitMeta: `${P}-commit-meta`,
   marker: `${P}-marker`,
   spinner: `${P}-spinner`,
+  spinnerGlyph: `${P}-spinner-glyph`,
+  diffView: `${P}-diff-view`,
+  diffDock: `${P}-diff-dock`,
+  diffGrip: `${P}-diff-grip`,
+  diffHead: `${P}-diff-head`,
+  diffPath: `${P}-diff-path`,
+  diffPathDir: `${P}-diff-path-dir`,
+  diffPathName: `${P}-diff-path-name`,
+  diffStats: `${P}-diff-stats`,
+  diffAdded: `${P}-diff-added`,
+  diffRemoved: `${P}-diff-removed`,
+  diffSeg: `${P}-diff-seg`,
+  diffSegButton: `${P}-diff-seg-button`,
+  diffState: `${P}-diff-state`,
+  diffHunks: `${P}-diff-hunks`,
+  diffHunk: `${P}-diff-hunk`,
+  diffHunkHead: `${P}-diff-hunk-head`,
+  diffHunkRange: `${P}-diff-hunk-range`,
+  diffHunkHeading: `${P}-diff-hunk-heading`,
+  diffRow: `${P}-diff-row`,
+  diffLine: `${P}-diff-line`,
+  diffCell: `${P}-diff-cell`,
+  diffGutter: `${P}-diff-gutter`,
+  diffSign: `${P}-diff-sign`,
+  diffText: `${P}-diff-text`,
+  diffMark: `${P}-diff-mark`,
+  diffFoldHint: `${P}-diff-fold-hint`,
+  diffNote: `${P}-diff-note`,
 } as const
 
 /**
@@ -209,9 +239,17 @@ export const css = `
 /* ── change list ────────────────────────────────────────────────────────── */
 
 .${cls.body} {
+  /* 'flex: auto' with a floor: the body yields space to a dragged diff dock,
+     but never so much that the change list it holds stops being usable. */
   flex: auto;
-  min-height: 0;
+  min-height: 56px;
   margin-right: 2px;
+  /* The rows put their '+'/'−' (and each group header its bulk action) against
+     this scroller's right edge. See the scrollbar block below for why that costs
+     a gutter: an overlay scrollbar floats on top of whatever is under it, and
+     what is under it here is the buttons. 10px is the widest an overlay scrollbar
+     gets in the engines this runs in, so the clearance matches it. */
+  padding-right: 10px;
   padding-bottom: 8px;
   overflow: auto;
   scrollbar-gutter: stable;
@@ -223,18 +261,61 @@ export const css = `
   top: 0;
   z-index: 1;
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   padding: 5px 8px 4px 12px;
   background: var(--dsw-alias-bg-layer-1);
 }
 
+/* The label yields before the actions do: a group's bulk action must stay on
+   screen in a narrow sidebar, and a shortened group name is still readable while
+   a button that scrolled out of view is not there at all. */
 .${cls.groupLabel} {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-secondary);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The disclosure: caret, name and count are one control, and the bulk action
+   beside it is a sibling rather than a child — a button inside a button is
+   invalid markup, and the inner one is not reliably clickable. */
+.${cls.groupToggle} {
+  display: flex;
+  flex: auto;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.${cls.groupToggle}:hover .${cls.groupLabel} {
+  color: var(--dsw-alias-label-primary);
+}
+
+.${cls.groupCaret} {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+
+/* Keyed off the button's own 'aria-expanded' rather than a data attribute on the
+   svg: the glyph components forward only size and className, so an attribute put
+   on them goes nowhere (which is why the history caret never turned). */
+.${cls.groupToggle}[aria-expanded='true'] .${cls.groupCaret} {
+  transform: rotate(90deg);
 }
 
 .${cls.count} {
@@ -253,14 +334,24 @@ export const css = `
   align-items: center;
   gap: 2px;
   margin-left: auto;
-  /* Actions stay hidden until the header is hovered or focused within, so the
-     list reads as a list and the controls appear where the pointer already is. */
-  opacity: 0;
+  /* Always visible, and only *emphasised* on hover. The first version revealed
+     it on hover alone (opacity 0 → 1) to keep the list quiet, and the group
+     action then could not be found at all — the wireframe in the requirements
+     doc (§4.2) draws these as visible controls, which is what this is. */
+  opacity: 0.9;
+  transition: opacity 120ms ease-out;
 }
 
 .${cls.groupHead}:hover .${cls.groupActions},
 .${cls.groupHead}:focus-within .${cls.groupActions} {
   opacity: 1;
+}
+
+/* One step up from the generic ghost button: on a header it is a real control,
+   not a footnote, and 'label-tertiary' was too close to the background to read
+   as one. */
+.${cls.groupActions} .${cls.ghost} {
+  color: var(--dsw-alias-label-secondary);
 }
 
 .${cls.row} {
@@ -319,6 +410,15 @@ export const css = `
 .${cls.pathName} {
   flex: none;
   color: var(--dsw-alias-label-primary);
+}
+
+/* The row's own '+/−' is the panel's most repeated click, so it gets more room
+   than the tool buttons in the rail and the diff header: a 13px glyph in a 26px
+   box reads as a dot in a dense list. */
+.${cls.rowActions} .${cls.tool} {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
 }
 
 .${cls.rowActions} {
@@ -497,19 +597,33 @@ export const css = `
 
 /* ── history ────────────────────────────────────────────────────────────── */
 
+/* The history sits below the commit box, so the box lands between the change
+   list it commits and the commits it produced. 'flex: 0 1 auto' with a cap:
+   opened, it scrolls inside itself instead of growing until the list and the box
+   are pushed off the panel, and folded (its default) it is one row. */
 .${cls.history} {
-  margin-top: 4px;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 40%;
+  overflow: auto;
   border-top: 0.5px solid var(--dsw-alias-border-l3);
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
 .${cls.historyHead} {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   width: 100%;
+  flex: none;
   align-items: center;
   gap: 6px;
   padding: 7px 8px 7px 12px;
   border: 0;
-  background: transparent;
+  background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-secondary);
   font: inherit;
   font-size: 11px;
@@ -529,7 +643,7 @@ export const css = `
   transition: transform 120ms ease;
 }
 
-.${cls.historyCaret}[data-open='true'] {
+.${cls.historyHead}[aria-expanded='true'] .${cls.historyCaret} {
   transform: rotate(90deg);
 }
 
@@ -579,6 +693,260 @@ export const css = `
 .${cls.marker}[data-pushed='false'] { color: var(--dsw-alias-state-business-primary); }
 .${cls.marker}[data-pushed='true'] { color: var(--dsw-alias-label-dimmed); }
 
+/* ── diff (FR-2) ────────────────────────────────────────────────────────── */
+
+/* The dock is the diff's frame, below the commit box: half the screen high by
+   default ('50vh', replaced by a pixel height once the grip is dragged), and
+   never a modal over the list — FR-2.1. The height is a viewport unit rather
+   than a percentage on purpose: 'vh' is always definite, so the pane inside is
+   bounded and its hunks can scroll, whatever the panel's own container turns out
+   to be. 'flex: 0 1 auto' lets the browser take that height back if the panel is
+   too short for the rail, the list and the commit box as well, and
+   'overflow: hidden' keeps the dock inside its own box either way. */
+.${cls.diffDock} {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: 50vh;
+  overflow: hidden;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+/* The drag handle: a wide, invisible strip rather than a drawn rule, because it
+   has to be grabbable without adding another line to an already dense panel. The
+   hover tint is what tells the pointer it is on something. */
+.${cls.diffGrip} {
+  flex: none;
+  height: 7px;
+  cursor: row-resize;
+  /* The drag is this strip's whole job, so the browser must not claim the
+     gesture for scrolling on a touch screen. */
+  touch-action: none;
+}
+
+.${cls.diffGrip}:hover,
+.${cls.diffGrip}[data-dragging='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The pane fills the dock, and the hunks inside it do the scrolling, so the path
+   header and the layout buttons stay put while a long diff moves under them. */
+.${cls.diffView} {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: auto;
+}
+
+.${cls.diffHead} {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.${cls.diffPath} {
+  display: flex;
+  min-width: 0;
+  flex: auto;
+  overflow: hidden;
+  font-family: var(--dsh-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Same rule as the change list (FR-1.2): the directory clips, the file name
+   never does — it is the part a reader is looking for. */
+.${cls.diffPathDir} {
+  flex: none;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+}
+
+.${cls.diffPathName} {
+  flex: none;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The counts take git's own colours; the diff view is exactly where the
+   theme's success/error pair means "added"/"removed". */
+.${cls.diffStats} {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
+}
+
+.${cls.diffAdded} { color: var(--dsw-alias-state-success-primary); }
+.${cls.diffRemoved} { color: var(--dsw-alias-state-error-primary); }
+
+.${cls.diffSeg} {
+  display: inline-flex;
+  flex: none;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 7px;
+  background: var(--dsw-alias-fill-l2);
+}
+
+.${cls.diffSegButton} {
+  display: inline-flex;
+  width: 22px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.${cls.diffSegButton}:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The pressed state is a token fill rather than a colour on the glyph: it has
+   to read in every skin, and a glyph tint could not. */
+.${cls.diffSegButton}[aria-pressed='true'] {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+
+.${cls.diffState} {
+  display: flex;
+  flex: auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.${cls.diffFoldHint} { margin: 0; }
+
+.${cls.diffNote} {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.diffHunks} {
+  min-height: 0;
+  flex: auto;
+  overflow: auto;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+.${cls.diffHunk} {
+  margin: 4px 0 6px;
+}
+
+.${cls.diffHunkHead} {
+  display: flex;
+  min-width: min-content;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px 2px 6px;
+  background: var(--dsw-alias-fill-l2);
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.${cls.diffHunkRange} { flex: none; }
+.${cls.diffHunkHeading} { flex: none; color: var(--dsw-alias-label-secondary); }
+
+/* 'min-width: min-content' on the rows (and the wrappers above) is what keeps
+   a long line intact while the pane scrolls horizontally: without it the text
+   would wrap at the pane's width and the two sides would stop lining up. */
+.${cls.diffRow} {
+  display: grid;
+  width: 100%;
+  min-width: min-content;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 7px;
+}
+
+.${cls.diffLine},
+.${cls.diffCell} {
+  display: flex;
+  min-width: min-content;
+  align-items: flex-start;
+  border-radius: 3px;
+}
+
+.${cls.diffCell} { flex: 1 1 0; }
+
+.${cls.diffGutter} {
+  width: 38px;
+  flex: none;
+  padding-right: 6px;
+  color: var(--dsw-alias-label-dimmed);
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: right;
+  user-select: none;
+}
+
+.${cls.diffSign} {
+  width: 12px;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--dsh-font-mono);
+  line-height: 1.5;
+  user-select: none;
+}
+
+.${cls.diffText} {
+  min-width: 0;
+  flex: auto;
+  font-family: var(--dsh-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* An inline diff is the one layout where a row's tint is the only thing
+   separating an addition from a removal, so the two kinds take the theme's
+   own success/error colours as a wash. */
+.${cls.diffLine}[data-kind='added'],
+.${cls.diffCell}[data-line='added'] {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+}
+
+.${cls.diffLine}[data-kind='removed'],
+.${cls.diffCell}[data-line='removed'] {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+}
+
+.${cls.diffLine}[data-kind='added'] .${cls.diffSign} { color: var(--dsw-alias-state-success-primary); }
+.${cls.diffLine}[data-kind='removed'] .${cls.diffSign} { color: var(--dsw-alias-state-error-primary); }
+
+/* The word-level mark (FR-2.3). Painted once, over the row tint: 'color-mix'
+   keeps it a shade of the same token, so a theme swap moves both together. */
+.${cls.diffMark} {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);
+}
+
 /* ── loading ────────────────────────────────────────────────────────────── */
 
 .${cls.spinner} {
@@ -591,8 +959,58 @@ export const css = `
   animation: ${P}-spin 700ms linear infinite;
 }
 
+.${cls.spinnerGlyph} {
+  animation: ${P}-spin 700ms linear infinite;
+}
+
 @keyframes ${P}-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ── scrollbars ─────────────────────────────────────────────────────────── */
+
+/* A scrollbar that keeps its hands off the content.
+ *
+ * The change rows put their '+'/'−', and each group header its bulk action,
+ * against the right edge of the list's scroller. An *overlay* scrollbar — the
+ * kind that draws on top of whatever is under it and takes no layout space —
+ * therefore lands exactly on those buttons, and it appears at the worst moment:
+ * a list long enough to scroll is a list whose buttons get covered. (Reported
+ * from the running panel.)
+ *
+ * Styling the WebKit scrollbar pseudo-elements is what switches Chromium from an
+ * overlay scrollbar to a classic one that occupies its own column, so the content
+ * box ends before it. Firefox ignores those pseudo-elements, but
+ * 'scrollbar-width: thin' (plus the palette below) makes it use its own
+ * space-taking scrollbar instead of GTK's overlay one. Between them, the two
+ * engines the GUI runs in stop overlaying; the scroller's own right padding is
+ * the insurance for anything that still does.
+ */
+.${cls.body},
+.${cls.diffHunks},
+.${cls.history} {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+.${cls.body}::-webkit-scrollbar,
+.${cls.diffHunks}::-webkit-scrollbar,
+.${cls.history}::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.${cls.body}::-webkit-scrollbar-thumb,
+.${cls.diffHunks}::-webkit-scrollbar-thumb,
+.${cls.history}::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: var(--dsw-alias-scrollbar-bg-l1);
+}
+
+.${cls.body}::-webkit-scrollbar-track,
+.${cls.diffHunks}::-webkit-scrollbar-track,
+.${cls.history}::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* ── quality floor ──────────────────────────────────────────────────────── */
@@ -604,7 +1022,9 @@ export const css = `
 
 @media (prefers-reduced-motion: reduce) {
   .${cls.spinner} { animation-duration: 2400ms; }
-  .${cls.historyCaret} { transition: none; }
+  .${cls.spinnerGlyph} { animation-duration: 2400ms; }
+  .${cls.historyCaret},
+  .${cls.groupCaret} { transition: none; }
 }
 `
 

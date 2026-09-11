@@ -5,15 +5,16 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document, and currently at **M0 + M1 + M2**: the
-foundation, a read-only panel, and the commit loop (stage → commit → push).
+Built to the requirements document, and currently at **M0 + M1 + M2 + M3**: the
+foundation, a read-only panel, the commit loop (stage → commit → push), and the
+diff view.
 
 ## Docs
 
 | File | What it is |
 |---|---|
 | `docs/requirements.md` | The requirements document, v0.2. A **byte-exact copy** (20 778 bytes, sha256 `f42d4277…`) kept as the single source of truth — read-only; a change means a new version replacing it wholesale. |
-| `docs/plan.md` | The execution plan: milestone status against the doc's own acceptance criteria, what each completed milestone delivered and where, every deliberate deviation from the doc with its reason, and the M2 task list. |
+| `docs/plan.md` | The execution plan: milestone status against the doc's own acceptance criteria, what each completed milestone delivered and where, every deliberate deviation from the doc with its reason, and the next milestone's task list. |
 
 ## What works today
 
@@ -29,7 +30,12 @@ foundation, a read-only panel, and the commit loop (stage → commit → push).
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
 | UI in zh + en | ✅ |
-| Diff view, branching, discard/stash, AI commit message, undo | ⏳ M3–M5 |
+| Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
+| Diff view: click a change row → a diff docked below the commit box (never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
+| Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
+| Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
+| Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
+| Branching, discard/stash, AI commit message, undo | ⏳ M4–M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -52,7 +58,8 @@ them.
 
 ```
 src/core/      pure TypeScript: types, ports, git parsers, argument validation,
-               the commit-scope decision. Zero imports.
+               the commit-scope decision, the unified-diff parser
+  diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, change watcher
   adapter/     the only place the host names DSH (webServer, sessions, logger)
 src/client/    browser half
@@ -63,13 +70,15 @@ test/          node --test; real git repositories, real sockets, real jsdom
 
 The dependency direction is not a convention here — `test/dependency-direction.test.ts`
 fails the suite if `src/core` gains an import, or if a DSH package is imported
-outside an `adapter/` directory.
+outside an `adapter/` directory. One bare specifier is allowlisted in `src/core`:
+`vscode-diff`, VS Code's diff engine extracted into a zero-dependency MIT package,
+which is what FR-2.3 asks for by name (see `docs/plan.md` D12).
 
 ## Check
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 153 tests && build
+npm run check      # tsc --noEmit && 190 tests && build
 ```
 
 ## Install
@@ -101,17 +110,32 @@ npm test
   the unborn unstage, committing, `commitAll`'s tracked-only promise, first push
   setting the upstream, a refused push, a conflicting pull, sync, and the full
   改→暂存→提交→推送 flow verified against a bare remote's refs
+- `test/diff-parse.test.ts` — the diff model from real `git diff` output: hunks and
+  line numbers, word-level marks asserted by the text they cover, a whole-line
+  replacement earning none, binary and combined (`diff --cc`) output, truncation,
+  and the 5000-line fold gate
 - `test/host-service.test.ts` — the git service and the `/git-panel` routes over a
-  real socket: envelopes, 400/404/405/413, the same-origin refusal, and the SSE
+  real socket: envelopes, 400/404/405/413, the same-origin refusal, the diff read
+  (worktree vs index, untracked, unborn, binary, clean), and the SSE
   `ready` / `changed` / `unavailable` frames
 - `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire
 - `test/client-panel.test.ts` — the panel rendered in jsdom: groups, badges, path
   splitting, clean and failure states, lazy history, the commit box's four scopes
   and its `Ctrl+Enter`, per-row and per-group staging, the sync buttons' enabled
-  states, in-place operation errors, and the two-stage registration
+  states, in-place operation errors, the diff pane (opening, folding, layout
+  memory, binary placeholder, the list→box→diff DOM order, and the dock's height
+  default and drag clamp), and the two-stage registration
 
 ## Notes for the next milestone
 
+- Word-level marks come from `vscode-diff` — VS Code's own diff engine, extracted
+  into a zero-dependency MIT package — behind `core/diff-engine/marks.ts`. The
+  line-level hunks do **not**: git produces those and `core/diff-parse.ts` reads
+  them, so the engine never sees a whole file (see `docs/plan.md` D13).
+- `execFile` reports a non-zero exit on `error.code`, **not** `error.status`.
+  Reading only `status` turned every non-zero exit into `code: null`, which is
+  also what "killed by a signal" looks like; `git diff --no-index`'s ordinary
+  exit 1 — how an untracked file is rendered as all-new — is what surfaced it.
 - `GitRunner.run` takes `optionalLocks` as a third argument, defaulting to
   **false**, which stops `git status` from rewriting `.git/index`. That is
   load-bearing: the change watcher polls that file, so a read that wrote it would

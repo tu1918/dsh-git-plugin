@@ -10,8 +10,12 @@
  *
  * The three rules, exactly as the doc states them:
  *
- * 1. `src/core/` imports nothing at all. It is the pure layer: no DSH, no
- *    cordis, no React, no Node. That is what lets `node --test` run it directly.
+ * 1. `src/core/` imports nothing but itself — with one named, argued exception,
+ *    `vscode-diff`. FR-2.3 asks for VS Code's word-level marking, and that
+ *    package IS VS Code's diff engine extracted: MIT, zero dependencies, pure
+ *    TypeScript. It adds nothing the pure layer was protecting against — no DSH,
+ *    no cordis, no React, no Node — so `node --test` still runs `src/core`
+ *    directly. Otherwise: no foreign imports at all.
  * 2. `src/*​/adapter/` is the ONLY place a DSH package may be imported. Each DSH
  *    capability gets a small adapter that translates it into a core port.
  * 3. Business and UI code (`src/host/*`, `src/client/ui/*`) imports neither DSH
@@ -43,6 +47,16 @@ const DSH_PACKAGE = /^@deepseek-ai\//
 
 /** Bare specifiers the pure layer must not touch either. */
 const FOREIGN_IN_CORE = /^(?:react|react-dom|node:|@deepseek-ai\/)/
+
+/**
+ * The bare specifiers the pure layer is allowed to name.
+ *
+ * Exactly one, and deliberately so: `vscode-diff` (see the module doc above and
+ * `src/core/diff-engine/marks.ts`). A second entry here should have to be argued
+ * for in the same terms — that it is dependency-free, MIT-or-compatible, pure
+ * TypeScript, and something the doc's own requirements name.
+ */
+const CORE_ALLOWED_PACKAGES: ReadonlySet<string> = new Set(['vscode-diff'])
 
 /**
  * Bare specifiers the host's business layer must not touch.
@@ -170,13 +184,16 @@ function isEntry(path: string): boolean {
 }
 
 describe('dependency direction (§5.2)', () => {
-  it('keeps src/core free of every import', () => {
+  it('keeps src/core free of every import but the diff engine', () => {
     const offenders: string[] = []
     for (const path of sourceFiles('src/core')) {
       for (const specifier of importsOf(join(root, path))) {
-        // Relative imports inside core are its own business; anything else —
-        // DSH, React, a Node builtin — breaks the pure layer's testability.
-        if (!specifier.startsWith('.')) offenders.push(`${path} → ${specifier}`)
+        // Relative imports inside core are its own business; the one allowlisted
+        // package is argued for above; anything else — DSH, React, a Node
+        // builtin — breaks the pure layer's testability.
+        if (specifier.startsWith('.')) continue
+        if (CORE_ALLOWED_PACKAGES.has(specifier)) continue
+        offenders.push(`${path} → ${specifier}`)
       }
     }
     assert.deepEqual(

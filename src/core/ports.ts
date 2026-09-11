@@ -12,7 +12,9 @@
 import type {
   BranchRef,
   CommitInfo,
+  DiffArea,
   FileChange,
+  FileDiff,
   LogLevel,
   LogPage,
   OperationReport,
@@ -178,6 +180,27 @@ export interface WorkspaceGitService {
    * @param sessionId - Opaque session identity from the browser.
    */
   stagedPaths(sessionId: string, signal?: AbortSignal): Promise<Result<readonly FileChange[]>>
+  /**
+   * Read one file's diff (FR-2).
+   *
+   * The host decides which comparison a path needs: `index` diffs the index
+   * against HEAD, `worktree` diffs the working tree against the index, and a
+   * path git does not track yet comes back as an all-added diff rather than as
+   * "no changes" (FR-2.2). The returned hunks carry their word-level marks, so
+   * the browser does no diffing of its own.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param path - Repo-relative path, validated before any git call (§5.5).
+   * @param area - Which comparison to make.
+   * @param contextLines - Lines of context per hunk; the host clamps it.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  diff(
+    sessionId: string,
+    path: string,
+    area: DiffArea,
+    contextLines: number,
+    signal?: AbortSignal,
+  ): Promise<Result<FileDiff>>
 
   /**
    * Stage paths: what the `+` on a change row does (FR-3.1, FR-3.2).
@@ -271,6 +294,21 @@ export interface GitRemoteClient {
     limit: number,
     signal?: AbortSignal,
   ): Promise<Result<LogPage>>
+  /**
+   * Read one file's diff (FR-2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param path - Repo-relative path.
+   * @param area - Which comparison to make: index, or working tree.
+   * @param contextLines - Lines of context per hunk.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  diff(
+    sessionId: string,
+    path: string,
+    area: DiffArea,
+    contextLines: number,
+    signal?: AbortSignal,
+  ): Promise<Result<FileDiff>>
   /**
    * Stage paths (FR-3.1, FR-3.2).
    * @param sessionId - Opaque session identity, supplied by the slot.

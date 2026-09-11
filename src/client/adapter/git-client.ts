@@ -20,7 +20,14 @@
  */
 
 import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
-import type { BranchRef, CommitInfo, LogPage, OperationReport, RepoStatus } from '../../core/types.ts'
+import type {
+  BranchRef,
+  CommitInfo,
+  LogPage,
+  OperationReport,
+  RepoStatus,
+  FileDiff,
+} from '../../core/types.ts'
 
 /** The host route prefix; must match `host/routes.ts`. */
 const ROUTE_PREFIX = '/git-panel'
@@ -134,6 +141,11 @@ export function createGitRemoteClient(): GitRemoteClient {
       request<readonly BranchRef[]>('/branches', { session: sessionId }, signal),
     log: (sessionId, offset, limit, signal) =>
       request<LogPage>('/log', { session: sessionId, offset, limit }, signal),
+    // The host's own parameter names, not the panel's: `path`/`area`/`context`
+    // are what `host/routes.ts` reads, and the `area` value is the core's
+    // `DiffArea` verbatim so no translation table can drift between the halves.
+    diff: (sessionId, path, area, contextLines, signal) =>
+      request<FileDiff>('/diff', { session: sessionId, path, area, context: contextLines }, signal),
 
     stage: (sessionId, paths, signal) =>
       mutate<OperationReport>('/stage', { session: sessionId, paths }, signal),

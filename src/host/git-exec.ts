@@ -156,6 +156,8 @@ export function createGitRunner(): GitRunner {
                 killed?: boolean
                 signal?: NodeJS.Signals | null
                 status?: number | null
+                /** The numeric exit code, which is where `execFile` puts it. */
+                code?: string | number
               }
               if (isMissingBinary(nodeError)) {
                 resolve({
@@ -177,7 +179,19 @@ export function createGitRunner(): GitRunner {
               const truncated = isOutputOverflow(nodeError)
               const killed = nodeError.killed === true || nodeError.signal != null
               resolve({
-                code: typeof nodeError.status === 'number' ? nodeError.status : null,
+                // `execFile` reports a non-zero exit on `error.code`, not on
+                // `error.status` — probed, and the reason this reads both. Taking
+                // `status` alone turned every non-zero exit into `null`, which is
+                // also "killed by a signal": a caller could no longer tell git's
+                // ordinary "the files differ" (exit 1 from `diff --no-index`)
+                // from a crash. `code` is a string only for spawn and buffer
+                // failures, and both are handled above.
+                code:
+                  typeof nodeError.status === 'number'
+                    ? nodeError.status
+                    : typeof nodeError.code === 'number'
+                      ? nodeError.code
+                      : null,
                 stdout: out,
                 stderr: err,
                 timedOut: killed && !truncated,

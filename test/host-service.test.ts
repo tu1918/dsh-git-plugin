@@ -211,6 +211,149 @@ describe('git service staged paths', () => {
   })
 })
 
+describe('git service diff (FR-2)', () => {
+  it('diffs the working tree against the index', async () => {
+    const repo = makeRepo('diff-worktree')
+    write(repo, 'a.txt', 'one\ntwo\nthree\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    // A word appended rather than a line rewritten: a wholly replaced line has
+    // no inner marks to find, which the parser tests cover separately.
+    write(repo, 'a.txt', 'one\ntwo-x\nthree\n')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'worktree', 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.area, 'worktree')
+    assert.equal(result.value.binary, false)
+    assert.equal(result.value.additions, 1)
+    assert.equal(result.value.deletions, 1)
+
+    const lines = result.value.hunks.flatMap((hunk) => hunk.lines)
+    assert.deepEqual(
+      lines.filter((line) => line.kind !== 'context').map((line) => line.text),
+      ['two', 'two-x'],
+    )
+    // The markers come from VS Code's engine, and they are what FR-2.3 asks for.
+    const added = lines.find((line) => line.kind === 'added')
+    assert.deepEqual(added?.marks.map((mark) => added.text.slice(mark.start, mark.end)), ['-x'])
+  })
+
+  it('diffs the index against HEAD for a staged change', async () => {
+    const repo = makeRepo('diff-index')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    git(repo, ['add', 'a.txt'])
+
+    const service = serviceFor({ s1: repo })
+    const staged = await service.diff('s1', 'a.txt', 'index', 3)
+    assert.ok(staged.ok)
+    assert.equal(staged.value.area, 'index')
+    assert.deepEqual(
+      staged.value.hunks[0]?.lines.filter((line) => line.kind !== 'context').map((line) => line.text),
+      ['one', 'two'],
+    )
+
+    // The same path read as a worktree diff is empty: the change is in the index,
+    // which is exactly the distinction FR-2.2 makes visible on the two rows.
+    const worktree = await service.diff('s1', 'a.txt', 'worktree', 3)
+    assert.ok(worktree.ok)
+    assert.deepEqual(worktree.value.hunks, [])
+  })
+
+  it('renders an untracked file as one whole addition', async () => {
+    const repo = makeRepo('diff-untracked')
+    write(repo, 'tracked.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'fresh.txt', 'hello\nworld\n')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'fresh.txt', 'worktree', 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.additions, 2)
+    assert.equal(result.value.deletions, 0)
+    assert.deepEqual(
+      result.value.hunks[0]?.lines.map((line) => line.text),
+      ['hello', 'world'],
+    )
+  })
+
+  it('renders a staged file in an unborn repository', async () => {
+    // `--cached` without a HEAD is the empty tree, not an error — probed.
+    const repo = makeRepo('diff-unborn')
+    write(repo, 'a.txt', 'first line\n')
+    stageAll(repo)
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'index', 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.additions, 1)
+  })
+
+  it('reports a binary file rather than its bytes', async () => {
+    const repo = makeRepo('diff-binary')
+    write(repo, 'img.bin', 'binary\0content\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'img.bin', 'binary\0changed\n')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'img.bin', 'worktree', 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.binary, true)
+    assert.deepEqual(result.value.hunks, [])
+    assert.equal(result.value.lines, 0)
+  })
+
+  it('answers an empty diff for a path with no changes', async () => {
+    const repo = makeRepo('diff-clean')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'worktree', 3)
+    assert.ok(result.ok)
+    assert.deepEqual(result.value.hunks, [])
+    assert.equal(result.value.additions, 0)
+  })
+
+  it('refuses a path or an area the panel would never send', async () => {
+    const repo = makeRepo('diff-refuse')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const service = serviceFor({ s1: repo })
+
+    // §5.5: the browser never names an absolute path, so one is a refusal rather
+    // than something to resolve.
+    const absolute = await service.diff('s1', '/etc/passwd', 'worktree', 3)
+    assert.equal(absolute.ok, false)
+    assert.equal(absolute.ok ? '' : absolute.error.code, 'bad-request')
+
+    const escaped = await service.diff('s1', '../outside.txt', 'worktree', 3)
+    assert.equal(escaped.ok, false)
+    assert.equal(escaped.ok ? '' : escaped.error.code, 'bad-request')
+
+    const unknownArea = await service.diff('s1', 'a.txt', 'sideways' as 'worktree', 3)
+    assert.equal(unknownArea.ok, false)
+    assert.equal(unknownArea.ok ? '' : unknownArea.error.code, 'bad-request')
+  })
+
+  it('clamps the context it is asked for', async () => {
+    const repo = makeRepo('diff-context')
+    write(repo, 'a.txt', Array.from({ length: 40 }, (_, index) => `line ${index}`).join('\n') + '\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', Array.from({ length: 40 }, (_, index) => (index === 20 ? 'CHANGED' : `line ${index}`)).join('\n') + '\n')
+
+    const service = serviceFor({ s1: repo })
+    const tight = await service.diff('s1', 'a.txt', 'worktree', 0)
+    const wide = await service.diff('s1', 'a.txt', 'worktree', 10)
+    assert.ok(tight.ok && wide.ok)
+    assert.equal(tight.value.lines, 2)
+    assert.equal(wide.value.lines, 22)
+  })
+})
+
 /** One route registration captured from the stub context. */
 interface Registration {
   readonly kind: 'exact' | 'prefix'
@@ -386,6 +529,51 @@ describe('the /git-panel routes over a real socket', () => {
       const logBody = (await log.json()) as { ok: boolean; value: { commits: { subject: string }[] } }
       assert.equal(logBody.ok, true)
       assert.deepEqual(logBody.value.commits.map((c) => c.subject), ['first'])
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('serves a file diff, and refuses the shapes it cannot serve', async () => {
+    const repo = makeRepo('routes-diff')
+    write(repo, 'a.txt', 'one\ntwo\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'one\ntwo-x\n')
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const ok = await fetch(`${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=worktree`)
+      assert.equal(ok.status, 200)
+      const body = (await ok.json()) as {
+        ok: boolean
+        value: { path: string; area: string; additions: number; hunks: { lines: unknown[] }[] }
+      }
+      assert.equal(body.ok, true)
+      assert.equal(body.value.path, 'a.txt')
+      assert.equal(body.value.area, 'worktree')
+      assert.equal(body.value.additions, 1)
+      assert.equal(body.value.hunks.length, 1)
+
+      // The three refusals: no path and an area outside the union are failures
+      // the panel renders, so — like every other operation's — they travel as a
+      // 200 envelope. Asking for a read as a mutation is a transport rule, and
+      // that one is an HTTP status.
+      const noPath = await fetch(`${harness.origin}/git-panel/diff?session=s1&area=worktree`)
+      assert.equal(noPath.status, 200)
+      const noPathBody = (await noPath.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(noPathBody.ok, false)
+      assert.equal(noPathBody.error.code, 'bad-request')
+
+      const noArea = await fetch(`${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=sideways`)
+      const noAreaBody = (await noArea.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(noAreaBody.ok, false)
+      assert.equal(noAreaBody.error.code, 'bad-request')
+
+      const asPost = await fetch(`${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=worktree`, {
+        method: 'POST',
+      })
+      assert.equal(asPost.status, 405)
     } finally {
       await harness.close()
     }

@@ -57,7 +57,7 @@ const ROUTE_PREFIX = '/git-panel'
  * mutation, and a mutation can never arrive as a `GET` that a cross-site
  * `<img>` tag could trigger.
  */
-const READ_OPERATIONS: ReadonlySet<string> = new Set(['status', 'branches', 'log'])
+const READ_OPERATIONS: ReadonlySet<string> = new Set(['status', 'branches', 'log', 'diff'])
 
 /** Operations that mutate the repository, and therefore require `POST`. */
 const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
@@ -293,6 +293,20 @@ export function registerGitPanelRoutes(
         return await service.branches(sessionId)
       case 'log':
         return await service.log(sessionId, intOf(url, 'offset', 0), intOf(url, 'limit', 30))
+      case 'diff': {
+        const path = url.searchParams.get('path')
+        if (path === null || path === '') {
+          return fail('bad-request', 'the path query parameter is required')
+        }
+        const area = url.searchParams.get('area')
+        // Checked here rather than passed through: the service's `DiffArea` is a
+        // two-value union, and a third value arriving from the wire should be a
+        // refusal the caller can read, not a type error nobody sees.
+        if (area !== 'worktree' && area !== 'index') {
+          return fail('bad-request', 'the area query parameter must be worktree or index')
+        }
+        return await service.diff(sessionId, path, area, intOf(url, 'context', 3))
+      }
       case 'stage':
       case 'unstage': {
         const paths = stringArrayOf(body, 'paths')

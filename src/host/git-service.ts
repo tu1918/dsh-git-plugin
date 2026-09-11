@@ -9,6 +9,7 @@
  * @module dsh-git-panel/host/git-service
  */
 
+import { parseUnifiedDiff } from '../core/diff-parse.ts'
 import {
   changedPathCount,
   groupsOf,
@@ -31,7 +32,9 @@ import type {
   BranchInfo,
   BranchRef,
   CommitInfo,
+  DiffArea,
   FileChange,
+  FileDiff,
   LogPage,
   OperationReport,
   RepoStatus,
@@ -50,6 +53,19 @@ const DEFAULT_LOG_LIMIT = 30
 
 /** The hard ceiling on one history page (FR-3.7). */
 const MAX_LOG_LIMIT = 500
+
+/** Context lines a diff hunk carries when the caller does not say (FR-2.2). */
+const DEFAULT_CONTEXT_LINES = 3
+
+/**
+ * Ceiling on the context lines one diff may ask for.
+ *
+ * Context is not a knob the panel exposes — the renderer asks for the ordinary
+ * three — so this bound exists to keep a hand-written request from turning one
+ * hunk into a whole-file read. Fifty is already past the point where the changed
+ * lines stop being the subject of the view.
+ */
+const MAX_CONTEXT_LINES = 50
 
 /** Caps and deadlines one host may tune. */
 export interface GitServiceLimits {
@@ -518,8 +534,97 @@ export function createGitService(
     }
   }
 
+  /**
+   * Read one file's diff (FR-2).
+   *
+   * Which comparison to make is the caller's decision but the *shape* of the
+   * answer is not: `index` diffs the index against HEAD (`--cached`), `worktree`
+   * diffs the working tree against the index, and a path git does not track at
+   * all is asked for a second time as a diff against nothing, because FR-2.2
+   * wants a new file shown as one whole addition rather than as "no changes".
+   *
+   * The command is pinned to a format the parser can read: git's user-level diff
+   * configuration is deliberately excluded (`--no-ext-diff`, `--no-textconv`),
+   * since an external driver prints a grammar `core/diff-parse.ts` does not know
+   * and a textconv would hand the panel the text of a binary file it is supposed
+   * to be refusing to render (FR-2.5).
+   * @param sessionId - Session whose repository to read from.
+   * @param path - Repo-relative path from the browser.
+   * @param area - Which comparison to make.
+   * @param contextLines - Context per hunk; clamped, never rejected.
+   * @returns The diff, or the failure that kept git from producing one.
+   */
+  async function diffPath(
+    sessionId: string,
+    path: string,
+    area: DiffArea,
+    contextLines: number,
+  ): Promise<Result<FileDiff>> {
+    const accepted = validatePaths([path])
+    if (!accepted.ok) return accepted
+    const target = accepted.value[0]
+    if (target === undefined) return fail('bad-request', 'a path is required')
+    if (area !== 'worktree' && area !== 'index') {
+      return fail('bad-request', `unknown diff area: ${String(area)}`)
+    }
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    const context =
+      Number.isSafeInteger(contextLines) && contextLines >= 0
+        ? Math.min(contextLines, MAX_CONTEXT_LINES)
+        : DEFAULT_CONTEXT_LINES
+    const format = ['--no-color', '--no-ext-diff', '--no-textconv', `--unified=${context}`, '--']
+    const parsed = (text: string, truncated: boolean): Result<FileDiff> => ({
+      ok: true,
+      value: parseUnifiedDiff(text, { path: target, area, truncated }),
+    })
+
+    if (area === 'index') {
+      const staged = await run(['diff', '--cached', ...format, target], root.value)
+      if (!staged.ok) return staged
+      return parsed(staged.value.stdout, staged.value.truncated)
+    }
+
+    const worktree = await run(['diff', ...format, target], root.value)
+    if (!worktree.ok) return worktree
+    if (worktree.value.stdout !== '') {
+      return parsed(worktree.value.stdout, worktree.value.truncated)
+    }
+
+    // Empty output means one of two things `git diff` does not distinguish: the
+    // path is unchanged in the working tree, or git does not track it. The index
+    // answers that question directly, and costs a call only in the empty case.
+    const tracked = await runner.run(
+      ['ls-files', '--error-unmatch', '--', target],
+      options(root.value, false),
+    )
+    if (tracked.code === 0) return parsed('', false)
+
+    const fresh = await runner.run(
+      ['diff', '--no-index', ...format, '/dev/null', target],
+      options(root.value, false),
+    )
+    if (fresh.spawnFailed) {
+      return fail('git-missing', 'git is not installed, or not on this process’ PATH')
+    }
+    if (fresh.timedOut) {
+      ports.log('warn', `git-panel: diff --no-index exceeded its deadline in ${root.value}`)
+      return fail('timeout', 'git did not finish in time')
+    }
+    // `--no-index` exits 1 when the two sides differ, which is the ordinary
+    // answer for `/dev/null` against a file with content — not a failure.
+    if (fresh.code !== 0 && fresh.code !== 1) {
+      const error = classifyFailure(fresh)
+      ports.log('error', `git-panel: diff --no-index failed: ${error.message}`)
+      return { ok: false, error }
+    }
+    return parsed(fresh.stdout, fresh.truncated)
+  }
+
   return {
     status: readStatus,
+    diff: diffPath,
     stage,
     unstage,
     commit,

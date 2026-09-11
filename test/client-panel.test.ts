@@ -15,7 +15,7 @@
  */
 
 import { JSDOM } from 'jsdom'
-import { after, before, describe, it } from 'node:test'
+import { after, before, beforeEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 // A document must exist before any component is rendered. jsdom is installed on
@@ -62,7 +62,7 @@ const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
 )
 const { apply } = await import('../src/client/index.tsx')
 
-import type { BranchRef, CommitInfo, OperationReport, RepoStatus } from '../src/core/types.ts'
+import type { BranchRef, CommitInfo, FileDiff, OperationReport, RepoStatus } from '../src/core/types.ts'
 import type { GitRemoteClient, Result } from '../src/core/ports.ts'
 
 /** A translator over the real English dictionary. */
@@ -139,7 +139,61 @@ interface ActionLog {
   readonly entries: string[]
 }
 
-/** A git client whose answers the test chooses. */
+/**
+ * A diff with one edit and two changed words, and the offsets FR-2.3 needs.
+ *
+ * The marks address `text` directly, which is the whole point of the contract:
+ * the renderer slices a string rather than comparing two of them, so this
+ * fixture can assert on the exact characters that end up highlighted.
+ */
+function diffFixture(overrides: Partial<FileDiff> = {}): FileDiff {
+  return {
+    path: 'src/changed.ts',
+    area: 'worktree',
+    hunks: [
+      {
+        oldStart: 1,
+        oldCount: 3,
+        newStart: 1,
+        newCount: 3,
+        heading: 'function fixture()',
+        lines: [
+          { kind: 'context', text: 'export function fixture(): number {', oldLine: 1, newLine: 1, marks: [] },
+          { kind: 'removed', text: '  return thirty + two', oldLine: 2, newLine: null, marks: [{ start: 9, end: 15 }, { start: 18, end: 21 }] },
+          { kind: 'added', text: '  return sixty + four', oldLine: null, newLine: 2, marks: [{ start: 9, end: 14 }, { start: 17, end: 21 }] },
+          { kind: 'context', text: '}', oldLine: 3, newLine: 3, marks: [] },
+        ],
+      },
+      {
+        oldStart: 10,
+        oldCount: 1,
+        newStart: 10,
+        newCount: 1,
+        heading: '',
+        lines: [
+          { kind: 'removed', text: 'let oldOnly = 1', oldLine: 10, newLine: null, marks: [] },
+          { kind: 'added', text: 'let newOnly = 1', oldLine: null, newLine: 10, marks: [] },
+        ],
+      },
+    ],
+    additions: 2,
+    deletions: 2,
+    lines: 6,
+    binary: false,
+    combined: false,
+    large: false,
+    truncated: false,
+    ...overrides,
+  }
+}
+
+/**
+ * A git client whose answers the test chooses.
+ *
+ * `diff` answers the same way for every request unless the caller overrides it;
+ * when it does, not supplying a way to record the calls is the caller's business
+ * and the recording is simply skipped.
+ */
 function stubGit(options: {
   status?: Result<RepoStatus>
   branches?: readonly BranchRef[]
@@ -151,6 +205,10 @@ function stubGit(options: {
   commit?: Result<CommitInfo>
   /** Where mutating calls are recorded, for the tests that assert on them. */
   calls?: ActionLog
+  /** What every `diff` answers; {@link diffFixture} by default. */
+  diff?: (path: string, area: string) => Result<FileDiff>
+  /** Where diff requests are recorded, as `area:path@context`. */
+  diffCalls?: string[]
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -164,6 +222,11 @@ function stubGit(options: {
     branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
     log: () =>
       Promise.resolve({ ok: true, value: { commits: options.log ?? [], total: null, hasMore: false } }),
+    diff: (_sessionId, path, area, contextLines) => {
+      options.diffCalls?.push(`${area}:${path}@${contextLines}`)
+      const answer = options.diff?.(path, area) ?? { ok: true as const, value: diffFixture({ path, area }) }
+      return Promise.resolve(answer)
+    },
     stage: (_sessionId, paths) => {
       note(`stage:${paths.join(',')}`)
       return Promise.resolve(report)
@@ -289,8 +352,17 @@ function syncButtons(container: HTMLElement): HTMLButtonElement[] {
   return [...rail.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].slice(0, 3)
 }
 
+/** The layout key the pane persists under; read here so the tests name it once. */
+const DIFF_LAYOUT_KEY = 'dsh-git-panel/diff-layout'
+
 before(() => {
   installStyles(document)
+})
+
+// The layout choice is persisted (FR-2.4), so one test's choice would otherwise
+// decide how the next one renders.
+beforeEach(() => {
+  dom.window.localStorage.clear()
 })
 
 after(() => {
@@ -532,6 +604,48 @@ describe('staging from the change list', () => {
     assert.deepEqual(calls.entries, ['stage:notes.md', 'stage:both.txt'])
   })
 
+  it('folds a group away, remembers the fold, and unfolds it again', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const toggle = must(container, `[data-group="untracked"] .${cls.groupToggle}`)
+    const rows = container.querySelectorAll(`[data-group="untracked"] .${cls.row}`).length
+    const count = must(container, `[data-group="untracked"] .${cls.count}`).textContent
+    assert.ok(rows > 0)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+
+    await click(toggle)
+    // The header stays and keeps the count: "there are N untracked files" is the
+    // reason to unfold it again, so folding must not hide the number too.
+    assert.equal(container.querySelectorAll(`[data-group="untracked"] .${cls.row}`).length, 0)
+    assert.equal(must(container, `[data-group="untracked"] .${cls.count}`).textContent, count)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+
+    // A fold is a preference, not a render detail: it is written down.
+    assert.deepEqual(
+      JSON.parse(window.localStorage.getItem('dsh-git-panel/collapsed-groups') ?? '[]'),
+      ['untracked'],
+    )
+
+    // A fresh panel starts folded, which is the half of the feature a same-mount
+    // assertion cannot see.
+    const second = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    assert.equal(second.querySelectorAll(`[data-group="untracked"] .${cls.row}`).length, 0)
+    assert.equal(second.querySelector(`[data-group="untracked"]`) !== null, true)
+
+    await click(toggle)
+    assert.ok(container.querySelectorAll(`[data-group="untracked"] .${cls.row}`).length > 0)
+    assert.deepEqual(
+      JSON.parse(window.localStorage.getItem('dsh-git-panel/collapsed-groups') ?? '[]'),
+      [],
+    )
+  })
+
   it('stages a whole group from its header (FR-3.2)', async () => {
     // §1.3's fourth lesson: a first commit of dozens of files must not need one
     // click each.
@@ -571,6 +685,24 @@ describe('staging from the change list', () => {
     assert.equal(button.textContent, 'Unstage all')
     await click(button)
     assert.deepEqual(calls.entries, ['unstage:src/staged.ts'])
+  })
+
+  it('shows a group action without waiting for a hover', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The first version revealed the bulk action on hover alone ('opacity: 0'),
+    // and the button could not be found at all. The stylesheet is installed in
+    // this document, so this reads the real cascade result rather than a class
+    // name — and a rule that went back to hidden would fail it.
+    const opacity = Number(
+      window.getComputedStyle(
+        must(container, `[data-group="unstaged"] .${cls.groupActions}`),
+      ).opacity,
+    )
+    assert.ok(opacity > 0.5, `a group action must be visible at rest, got opacity ${opacity}`)
   })
 })
 
@@ -868,6 +1000,375 @@ describe('operation failures (§4.3)', () => {
 
     const notice = must(container, '[data-action-done="unstage"]')
     assert.equal(notice.textContent, 'Unstage')
+  })
+})
+
+describe('the diff view (FR-2)', () => {
+  it('opens on a change row, draws the hunks and the word marks, and closes again', async () => {
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          // The pane asks for the file the row stands for, and for three lines
+          // of context.
+          diff: (path, area) => ({ ok: true, value: diffFixture({ path, area: area as FileDiff['area'] }) }),
+          diffCalls,
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // A tracked row that is not staged reads the working tree (FR-2.2).
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.deepEqual(diffCalls, ['worktree:deep/nested/dir/changed.ts@3'])
+
+    // The list stays, and the column follows VS Code's Source Control view: the
+    // message box, then the change list, then the history — with the diff docked
+    // at the bottom, since the plugin has no editor area to open it in. FR-2.1 is
+    // still an embedded pane: the rail and the box never move.
+    assert.equal(container.querySelector(`.${cls.diffView}`) !== null, true)
+    assert.equal(container.querySelector(`[data-group="unstaged"]`) !== null, true)
+    assert.equal(container.querySelector(`.${cls.head}`) !== null, true)
+    assert.equal(container.querySelector(`.${cls.commitBox}`) !== null, true)
+    assert.deepEqual(
+      [
+        ...container.querySelectorAll(
+          `.${cls.commitBox}, [data-group="unstaged"], .${cls.history}, .${cls.diffDock}`,
+        ),
+      ].map((node) =>
+        node.getAttribute('data-group') !== null
+          ? 'list'
+          : node.classList.contains(cls.commitBox)
+            ? 'box'
+            : node.classList.contains(cls.history)
+              ? 'history'
+              : 'diff',
+      ),
+      ['box', 'list', 'history', 'diff'],
+    )
+    // The default height is the dock's own style (`50vh`), so a window resize
+    // keeps it meaning "half the screen"; only a drag replaces it with pixels.
+    assert.equal((container.querySelector(`.${cls.diffDock}`) as HTMLElement).style.height, '')
+    assert.equal(container.querySelector(`.${cls.diffGrip}`)?.getAttribute('role'), 'separator')
+
+    // Every hunk says where it is, heading included.
+    const heads = [...container.querySelectorAll(`.${cls.diffHunkRange}`)].map((n) => n.textContent)
+    assert.deepEqual(heads, ['@@ -1,3 +1,3 @@', '@@ -10,1 +10,1 @@'])
+    assert.match(container.textContent ?? '', /function fixture\(\)/)
+
+    // Inline: one row per line, an old line number for a removal, a new one for
+    // an addition.
+    const rows = [...container.querySelectorAll(`.${cls.diffLine}`)]
+    assert.equal(rows.length, 6)
+    assert.equal(rows[1]?.getAttribute('data-kind'), 'removed')
+    assert.equal(must<HTMLElement>(rows[1] as Element, `.${cls.diffGutter}`).textContent, '2')
+    assert.equal(rows[1]?.querySelector(`.${cls.diffSign}`)?.textContent, '-')
+    assert.match(rows[1]?.textContent ?? '', /return thirty \+ two/)
+    assert.equal(rows[2]?.getAttribute('data-kind'), 'added')
+    assert.equal(must<HTMLElement>(rows[2] as Element, `.${cls.diffGutter}`).textContent, '2')
+    assert.equal(rows[2]?.querySelector(`.${cls.diffSign}`)?.textContent, '+')
+
+    // The counts are the diff's own, from the header.
+    assert.match(container.textContent ?? '', /\+2/)
+    assert.match(container.textContent ?? '', /−2/)
+
+    // FR-2.3: the marked runs are their own elements, sliced at the offsets the
+    // core reported — two per changed line, and none on a context line.
+    const marks = [...container.querySelectorAll(`.${cls.diffMark}`)].map((n) => n.textContent)
+    assert.deepEqual(marks, ['thirty', 'two', 'sixty', 'four'])
+
+    // Escape is the way back, and the change list is exactly as it was.
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+    assert.equal(container.querySelector(`[data-group="unstaged"] .${cls.row}`) !== null, true)
+  })
+
+  it('docks the diff at half the screen, and lets the grip override that', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+
+    const dock = must(container, `.${cls.diffDock}`) as HTMLElement
+    // The default height is the stylesheet's (`50vh`), deliberately: an inline
+    // pixel value measured at mount would stop meaning "half the screen" the
+    // moment the window is resized.
+    assert.equal(dock.style.height, '')
+    assert.equal(
+      must(container, `.${cls.diffGrip}`).getAttribute('aria-label'),
+      'Drag to resize the diff',
+    )
+
+    await act(async () => {
+      must(container, `.${cls.diffGrip}`).dispatchEvent(
+        new window.MouseEvent('pointerdown', { clientY: 400, bubbles: true }),
+      )
+      // jsdom reports a zero-height box, so the arithmetic here reads as "the
+      // pointer rose 400px", which is under the ceiling.
+      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 0, bubbles: true }))
+    })
+    await flush()
+    // A drag replaces the CSS default with pixels — that is what this pins. The
+    // exact delta is not meaningful in jsdom; the clamp below is.
+    assert.equal(dock.style.height, '400px')
+
+    await act(async () => {
+      // Far past the top of the panel: the dock must clamp rather than grow over
+      // the list and the commit box.
+      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: -1000, bubbles: true }))
+    })
+    await flush()
+    const ceiling = Math.max(140, window.innerHeight - 200)
+    assert.equal(dock.style.height, `${ceiling}px`)
+
+    await act(async () => {
+      window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }))
+    })
+    await flush()
+    assert.equal(dock.style.height, `${ceiling}px`)
+
+    // Closing the diff takes the dock with it, and the change list is untouched.
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+    assert.equal(container.querySelector(`.${cls.diffDock}`), null)
+    assert.equal(container.querySelector(`[data-group="unstaged"] .${cls.row}`) !== null, true)
+  })
+
+  it('opens a row by keyboard, but not when the key press is on its action button', async () => {
+    const calls: ActionLog = { entries: [] }
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, diffCalls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(container, `[data-group="unstaged"] .${cls.row}`)
+    // A role="button" row is activatable by Enter and Space alike.
+    await act(async () => {
+      row.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await flush()
+    assert.deepEqual(diffCalls, ['worktree:deep/nested/dir/changed.ts@3'])
+    assert.match(row.getAttribute('aria-label') ?? '', /deep\/nested\/dir\/changed\.ts/)
+
+    // Space on the row's own `+` activates the button; it must not also bubble
+    // into the row and open the file.
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+    diffCalls.length = 0
+    const plus = must(must(container, `[data-group="unstaged"] .${cls.row}`), `.${cls.rowActions} button`)
+    await act(async () => {
+      plus.dispatchEvent(new window.KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    })
+    await flush()
+    assert.deepEqual(diffCalls, [])
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+  })
+
+  it('reads the index, not the working tree, for a staged row (FR-2.2)', async () => {
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diffCalls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    await click(must(container, `[data-group="staged"] .${cls.row}`))
+    // A file with both a staged and an unstaged change appears in two groups;
+    // each row must open its own side.
+    assert.deepEqual(diffCalls, ['index:src/staged.ts@3'])
+    assert.equal(must(container, `.${cls.diffView}`).getAttribute('data-diff-area'), 'index')
+  })
+
+  it('stages from the + without opening a diff', async () => {
+    const calls: ActionLog = { entries: [] }
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, diffCalls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(container, `[data-group="unstaged"] .${cls.row}`)
+    await click(must(row, `.${cls.rowActions} button`))
+    // The action strip stops the row's own click: staging must not also open a
+    // diff, which is the one interaction §8 calls out by name.
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/changed.ts'])
+    assert.deepEqual(diffCalls, [])
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+    assert.equal(container.querySelector(`[data-group="unstaged"] .${cls.row}`) !== null, true)
+  })
+
+  it('folds a large diff until it is asked for (FR-2.6)', async () => {
+    const big = diffFixture({ large: true, lines: 9000 })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: big }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+
+    assert.equal(container.querySelectorAll(`.${cls.diffLine}`).length, 0)
+    assert.match(container.textContent ?? '', /Large diff \(9000 lines\): folded by default/)
+
+    const load = must<HTMLButtonElement>(container, `.${cls.primary}`)
+    assert.equal(load.textContent, 'Load')
+    await click(load)
+    assert.equal(container.querySelectorAll(`.${cls.diffLine}`).length, 6)
+  })
+
+  it('says so for a binary file instead of drawing nothing (FR-2.5)', async () => {
+    const binary = diffFixture({ binary: true, hunks: [], additions: 0, deletions: 0, lines: 0 })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: binary }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="untracked"] .${cls.row}`))
+
+    assert.equal(container.querySelectorAll(`.${cls.diffLine}`).length, 0)
+    assert.match(container.textContent ?? '', /Binary file: no diff is shown/)
+    assert.equal(
+      must(container, `.${cls.diffView}`).getAttribute('data-diff-state'),
+      'binary',
+    )
+  })
+
+  it('names the combined diff it cannot read rather than calling it empty', async () => {
+    // FR-9's conflict view is a later milestone; until then the honest answer is
+    // "not this renderer", not "no differences".
+    const combined = diffFixture({ combined: true, hunks: [] })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: combined }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="conflicted"] .${cls.row}`))
+
+    assert.equal(
+      must(container, `.${cls.diffView}`).getAttribute('data-diff-state'),
+      'combined',
+    )
+    assert.match(container.textContent ?? '', /combined \(diff --cc\) diff/)
+  })
+
+  it('reports a truncated diff as missing its tail, not as folded (FR-2.6)', async () => {
+    const truncated = diffFixture({ truncated: true })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: truncated }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+
+    // The lines are all there; only the end of the output is missing.
+    assert.equal(container.querySelectorAll(`.${cls.diffLine}`).length, 6)
+    assert.match(container.textContent ?? '', /end of the diff was not read/)
+  })
+
+  it('switches to side by side, pairs the changed lines, and remembers the choice', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+
+    const [inline, split] = [...container.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)]
+    assert.equal(inline?.getAttribute('aria-pressed'), 'true')
+    assert.equal(split?.getAttribute('aria-pressed'), 'false')
+
+    await click(split as HTMLButtonElement)
+    assert.equal(dom.window.localStorage.getItem(DIFF_LAYOUT_KEY), 'side-by-side')
+
+    // Context lines keep both sides; a removed/added pair is aligned, with each
+    // column showing its own file's line number.
+    const firstRow = [...container.querySelectorAll(`.${cls.diffRow}`)][0] as HTMLElement
+    const firstCells = [...firstRow.querySelectorAll(`.${cls.diffCell}`)]
+    assert.equal(firstCells.length, 2)
+    assert.equal(must<HTMLElement>(firstCells[0] as Element, `.${cls.diffGutter}`).textContent, '1')
+    assert.equal(must<HTMLElement>(firstCells[1] as Element, `.${cls.diffGutter}`).textContent, '1')
+
+    const changed = [...container.querySelectorAll(`.${cls.diffRow}`)][1] as HTMLElement
+    const cells = [...changed.querySelectorAll(`.${cls.diffCell}`)]
+    assert.equal(cells[0]?.getAttribute('data-line'), 'removed')
+    assert.equal(cells[1]?.getAttribute('data-line'), 'added')
+    assert.match(cells[0]?.textContent ?? '', /return thirty \+ two/)
+    assert.match(cells[1]?.textContent ?? '', /return sixty \+ four/)
+    // 6 inline lines collapse into 4 rows: each removed/added pair shares one.
+    assert.equal(container.querySelectorAll(`.${cls.diffRow}`).length, 4)
+
+    // A later mount reads the remembered choice (FR-2.4).
+    const reopened = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(reopened, `[data-group="unstaged"] .${cls.row}`))
+    const buttons = [...reopened.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)]
+    assert.equal(buttons[1]?.getAttribute('aria-pressed'), 'true')
+    assert.equal(reopened.querySelectorAll(`.${cls.diffRow}`).length, 4)
+  })
+
+  it('drops an open diff whose file is no longer changed', async () => {
+    // A committed or discarded file has no row to go back to, so the pane must
+    // not stay behind describing something the list no longer lists.
+    let status: Result<RepoStatus> = { ok: true, value: statusFixture() }
+    let listeners: (() => void)[] = []
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      status: () => Promise.resolve(status),
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((listener) => listener !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(container.querySelector(`.${cls.diffView}`) !== null, true)
+
+    status = { ok: true, value: statusWith({}) }
+    await act(async () => {
+      for (const listener of listeners) listener()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+    await flush()
+
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+    assert.equal(container.querySelector(`[data-git-panel-state="clean"]`) !== null, true)
   })
 })
 
