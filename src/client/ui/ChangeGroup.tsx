@@ -80,8 +80,11 @@ export function ChangeRow({
   const tooltip =
     entry.origPath === undefined ? entry.path : `${entry.origPath} → ${entry.path}`
   // A staged row offers `−`; everything else offers `+`. For a conflict, `+` is
-  // also how a merge is marked resolved — the same command git would be given.
+  // also how a merge is marked resolved — the same command git would be given
+  // (FR-9.2) — so it is labelled as what it does there rather than as "stage".
   const canUnstage = area === 'staged'
+  const stageLabel =
+    area === 'conflicted' ? t('action.markResolved', { path: entry.path }) : t('action.stage')
 
   return (
     <div
@@ -114,7 +117,7 @@ export function ChangeRow({
       <span className={cls.rowActions} onClick={(event) => event.stopPropagation()}>
         {!canUnstage && (
           <ToolButton
-            label={t('action.stage')}
+            label={stageLabel}
             disabled={busy}
             onClick={() => onStage([entry.path])}
           >

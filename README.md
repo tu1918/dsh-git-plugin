@@ -5,9 +5,10 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document, and currently at **M0 + M1 + M2 + M3**: the
-foundation, a read-only panel, the commit loop (stage → commit → push), and the
-diff view.
+Built to the requirements document, and currently at **M0 + M1 + M2 + M3 + M4**:
+the foundation, a read-only panel, the commit loop (stage → commit → push), the
+diff view, and branch management with the merge state, an AI-written commit
+message, and a commit detail.
 
 ## Docs
 
@@ -39,7 +40,13 @@ diff view.
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
-| Branching, discard/stash, AI commit message, undo | ⏳ M4–M5 |
+| Branch picker: switch, create (from HEAD or a chosen branch), delete — with the unmerged case asking for a second, forced click | ✅ |
+| A blocked switch shows git's own multi-line refusal, verbatim | ✅ |
+| Merge state: a bar with "continue" (git's own `MERGE_MSG`) and "abort" (two clicks), driven by `MERGE_HEAD` rather than by the conflict list | ✅ |
+| A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
+| Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
+| A history row expands into its metadata and file list, with per-file churn and git's own binary answer | ✅ |
+| Discard / stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -62,10 +69,12 @@ them.
 
 ```
 src/core/      pure TypeScript: types, ports, git parsers, argument validation,
-               the commit-scope decision, the unified-diff parser
+               the commit-scope decision, the unified-diff parser, and the AI
+               commit message's prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
-src/host/      git runner, git service, change watcher
-  adapter/     the only place the host names DSH (webServer, sessions, logger)
+src/host/      git runner, git service, change watcher, git directory lookup
+  adapter/     the only place the host names DSH (webServer, sessions, logger,
+               and the model services `llm` + `agentDefaultModel`)
 src/client/    browser half
   adapter/     the only place the browser names DSH (slots, tabs, locale) or a URL
   ui/          pure React over ports; no DSH import at all
@@ -78,11 +87,16 @@ outside an `adapter/` directory. One bare specifier is allowlisted in `src/core`
 `vscode-diff`, VS Code's diff engine extracted into a zero-dependency MIT package,
 which is what FR-2.3 asks for by name (see `docs/plan.md` D12).
 
+Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
+`host/adapter/llm.ts` uses the harness's own `BlockAssembler` and
+`createUserMessage` rather than reimplementing stream assembly, and declares
+`@deepseek-ai/dsh-llm` as a peer dependency (see `docs/plan.md` D23).
+
 ## Check
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 192 tests && build
+npm run check      # tsc --noEmit && 268 tests && build
 ```
 
 ## Install
@@ -118,17 +132,30 @@ npm test
   line numbers, word-level marks asserted by the text they cover, a whole-line
   replacement earning none, binary and combined (`diff --cc`) output, truncation,
   and the 5000-line fold gate
+- `test/commit-message.test.ts` — the AI message's pure halves: the truncation
+  budget and its line boundary, the prompt's language and its "the diff was cut"
+  sentence, and the cleaning rules for what models answer anyway
+- `test/llm-adapter.test.ts` — the one file that names the harness's model
+  services, driven with a stand-in context: the route comes from the deployment's
+  default selection, several text blocks are joined (reasoning is not), and a
+  missing model, a failed stream, and an empty answer each become a stated failure
 - `test/host-service.test.ts` — the git service and the `/git-panel` routes over a
   real socket: envelopes, 400/404/405/413, the same-origin refusal, the diff read
   (worktree vs index, untracked, unborn, binary, clean), and the SSE
   `ready` / `changed` / `unavailable` frames
-- `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire
+- `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, and the
+  panel mounting in a composition with no language model at all
 - `test/client-panel.test.ts` — the panel rendered in jsdom: groups, badges, path
   splitting, clean and failure states, lazy history, the commit box's four scopes
   and its `Ctrl+Enter`, per-row and per-group staging, the sync buttons' enabled
   states, in-place operation errors, the diff pane (opening, folding, layout
   memory, binary placeholder, the list→box→diff DOM order, and the dock's height
-  default and drag clamp), and the two-stage registration
+  default and drag clamp), the branch picker (listing, switching, creating from
+  HEAD or a base, the two-click delete, the forced second ask for an unmerged
+  branch, Escape), the merge bar (continue held while conflicts remain, abort
+  armed), the sparkle (offered only with a staged diff, the message landing in the
+  box, the truncation note, `no-llm`), the conflict row's label, the commit detail
+  (files, churn, binary, remembered across folds), and the two-stage registration
 
 ## Notes for the next milestone
 
@@ -155,3 +182,14 @@ npm test
   because a Typert Remote needs a wire schema from an unpublished generator. The
   choice is confined to `src/client/adapter/git-client.ts` and
   `src/host/adapter/routes.ts`; the ports do not change if it moves.
+- The model services are read through `ctx.get('llm')` / `ctx.get('agentDefaultModel')`
+  and are deliberately NOT in `inject`: a deployment without a model still mounts
+  the panel, and only FR-3.5's button answers `no-llm`. `src/host/adapter/llm.ts` is
+  the single file that names them.
+- `RepoStatus.merging` comes from stat-ing `MERGE_HEAD` in the git directory (the
+  same `gitDirOf` the watcher uses), not from the conflict group: once every
+  conflict is staged the group is empty while the merge is still open, and that is
+  exactly when "continue the merge" has to appear.
+- Unstaging on an **unborn** branch is a different command: `git restore --staged`
+  restores from HEAD, and an unborn repository has none. `unstage` probes with
+  `rev-parse --verify --quiet HEAD` and falls back to `git rm --cached`.

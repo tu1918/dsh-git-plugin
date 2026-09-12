@@ -57,9 +57,21 @@ const ROUTE_PREFIX = '/git-panel'
  * mutation, and a mutation can never arrive as a `GET` that a cross-site
  * `<img>` tag could trigger.
  */
-const READ_OPERATIONS: ReadonlySet<string> = new Set(['status', 'branches', 'log', 'diff'])
+const READ_OPERATIONS: ReadonlySet<string> = new Set([
+  'status',
+  'branches',
+  'log',
+  'diff',
+  'showCommit',
+])
 
-/** Operations that mutate the repository, and therefore require `POST`. */
+/**
+ * Operations that mutate the repository, and therefore require `POST`.
+ *
+ * `generateCommitMessage` is here although it changes nothing on disk: it spends
+ * the deployment's model budget, which a cross-site `<img>` tag must not be able
+ * to do, and `POST` plus the same-origin check is exactly that fence.
+ */
 const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'stage',
   'unstage',
@@ -67,6 +79,12 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'push',
   'pull',
   'sync',
+  'checkout',
+  'createBranch',
+  'deleteBranch',
+  'continueMerge',
+  'abortMerge',
+  'generateCommitMessage',
 ])
 
 /**
@@ -244,6 +262,24 @@ function stringArrayOf(body: Record<string, unknown>, name: string): Envelope<re
 }
 
 /**
+ * Read one field that must be a non-empty string.
+ *
+ * The wire shape is checked here and the git shape in `core/validate.ts`, the
+ * same split {@link stringArrayOf} follows: this layer answers "is it a string",
+ * the service answers "is it a branch name this plugin may hand to git".
+ * @param body - The parsed body.
+ * @param name - Field name.
+ * @returns The string, or the envelope to answer with.
+ */
+function stringOf(body: Record<string, unknown>, name: string): Envelope<string> {
+  const value = body[name]
+  if (typeof value !== 'string' || value === '') {
+    return fail('bad-request', `${name} must be a non-empty string`)
+  }
+  return { ok: true, value }
+}
+
+/**
  * Read a non-negative integer query parameter.
  * @param url - The request URL.
  * @param name - Parameter name.
@@ -333,6 +369,47 @@ export function registerGitPanelRoutes(
         return await service.pull(sessionId)
       case 'sync':
         return await service.sync(sessionId)
+      case 'showCommit': {
+        const hash = url.searchParams.get('hash')
+        if (hash === null || hash === '') {
+          return fail('bad-request', 'the hash query parameter is required')
+        }
+        return await service.showCommit(sessionId, hash)
+      }
+      case 'checkout': {
+        const name = stringOf(body, 'name')
+        if (!name.ok) return name
+        return await service.checkout(sessionId, name.value)
+      }
+      case 'createBranch': {
+        const name = stringOf(body, 'name')
+        if (!name.ok) return name
+        // An absent base means "from the current HEAD", which is FR-4.2's first
+        // choice; a present one must be a string, so `base: 7` is refused here
+        // rather than silently becoming the branch named "7".
+        const rawBase = body['base']
+        if (rawBase !== undefined && rawBase !== null && typeof rawBase !== 'string') {
+          return fail('bad-request', 'base must be a string when it is given')
+        }
+        const base = typeof rawBase === 'string' && rawBase !== '' ? rawBase : null
+        return await service.createBranch(sessionId, name.value, base)
+      }
+      case 'deleteBranch': {
+        const name = stringOf(body, 'name')
+        if (!name.ok) return name
+        return await service.deleteBranch(sessionId, name.value, body['force'] === true)
+      }
+      case 'continueMerge':
+        return await service.continueMerge(sessionId)
+      case 'abortMerge':
+        return await service.abortMerge(sessionId)
+      case 'generateCommitMessage': {
+        // The locale decides the message's language; an absent one falls back to
+        // the panel's own default instead of being an error, since it only
+        // affects the wording of the answer.
+        const locale = typeof body['locale'] === 'string' ? body['locale'] : 'en'
+        return await service.generateCommitMessage(sessionId, locale)
+      }
       default:
         return fail('bad-request', `unknown operation: ${operation}`)
     }

@@ -20,6 +20,7 @@ import type {
   BranchInfo,
   BranchRef,
   ChangeArea,
+  CommitFileStat,
   CommitInfo,
   FileChange,
   LogPage,
@@ -479,4 +480,61 @@ export function markPushed(
   unpushed: ReadonlySet<string>,
 ): readonly CommitInfo[] {
   return commits.map((commit) => ({ ...commit, pushed: !unpushed.has(commit.oid) }))
+}
+
+/**
+ * Parse `git show --numstat` output into one commit's file list (FR-3.6).
+ *
+ * The format is one line per file: `added<TAB>removed<TAB>path`. A binary file
+ * prints `-` for both counts, which is reported as {@link CommitFileStat.binary}
+ * with `null` counts rather than as two zeroes — "git would not count this" and
+ * "this changed no lines" are different answers, and the panel says which.
+ *
+ * A rename is printed as `path{old => new}` (or with a common prefix pulled out
+ * in front); the two halves are joined into the path the file has now, because
+ * the row names where the file is, and the old name is the diff view's business
+ * rather than the list's.
+ * @param raw - `--numstat` output, any number of lines.
+ * @returns One entry per file, in git's order.
+ */
+export function parseNumstat(raw: string): readonly CommitFileStat[] {
+  const files: CommitFileStat[] = []
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 3) continue
+    const [added, removed] = parts
+    // A path may itself contain a tab; everything past the second is the path.
+    const rawPath = parts.slice(2).join('\t')
+    if (added === undefined || removed === undefined) continue
+    const binary = added === '-' || removed === '-'
+    files.push({
+      path: renameTargetOf(rawPath),
+      additions: binary ? null : Number.parseInt(added, 10),
+      deletions: binary ? null : Number.parseInt(removed, 10),
+      binary,
+    })
+  }
+  return files
+}
+
+/**
+ * Reduce `--numstat`'s rename notation to the path the file has now.
+ *
+ * Two forms exist — `src/{old => new}.ts` and `old.ts => new.ts` — and both end
+ * with the new name, so the answer is "take the right-hand side of the last
+ * brace group, or of the arrow".
+ * @param path - The raw third column.
+ * @returns The current path.
+ */
+function renameTargetOf(path: string): string {
+  const braced = /\{([^{}]*)\s=>\s([^{}]*)\}/u.exec(path)
+  if (braced?.[2] !== undefined) {
+    const head = path.slice(0, braced.index)
+    const tail = path.slice(braced.index + braced[0].length).replace(/^\/+/u, '')
+    return `${head}${braced[2]}${tail}`
+  }
+  const arrow = path.lastIndexOf(' => ')
+  if (arrow !== -1) return path.slice(arrow + ' => '.length)
+  return path
 }

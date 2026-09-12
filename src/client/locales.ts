@@ -42,6 +42,10 @@ export const zh = {
   'action.sync': '同步（先拉取再推送）',
   'action.failed': '操作失败',
   'action.dismiss': '关闭提示',
+  'action.markResolved': '标记「{path}」为已解决',
+  'action.checkout': '切换分支',
+  'action.createBranch': '新建分支',
+  'action.deleteBranch': '删除分支',
 
   'commit.placeholder': '提交信息…',
   'commit.button': '提交',
@@ -54,6 +58,9 @@ export const zh = {
   'commit.hintConflicted': '还有 {count} 个冲突文件，解决后再提交。',
   'commit.hintClean': '没有可提交的更改。',
   'commit.done': '已提交 {hash}：{subject}',
+  'commit.ai': '用 AI 生成提交信息',
+  'commit.aiNeedsStaged': '先暂存要提交的更改，再生成提交信息',
+  'commit.aiTruncated': '暂存差异过大，已截断后再生成；请确认信息覆盖了全部改动。',
 
   'branch.detached': '游离 HEAD',
   'branch.unborn': '尚无提交',
@@ -62,6 +69,28 @@ export const zh = {
   'branch.behind': '落后上游 {count} 个提交',
   'branch.synced': '与上游一致',
   'branch.noUpstream': '尚未设置上游分支',
+  'branch.picker': '分支：{name}。点击切换、新建或删除分支',
+  'branch.pickerClose': '收起分支列表',
+  'branch.none': '还没有本地分支。',
+  'branch.current': '当前',
+  'branch.switchTo': '切换到 {name}',
+  'branch.create': '新建分支…',
+  'branch.createName': '新分支名称',
+  'branch.createBase': '起点',
+  'branch.createFromHead': '当前 HEAD',
+  'branch.createSubmit': '创建并切换',
+  'branch.createCancel': '取消',
+  'branch.delete': '删除分支 {name}',
+  'branch.deleteArmed': '再点一次删除「{name}」',
+  'branch.deleteForceArmed': '未合并：再点一次强制删除「{name}」',
+  'branch.deleteConfirm': '删除分支 {name}（不可恢复）',
+
+  'merge.inProgress': '合并进行中',
+  'merge.continue': '继续合并',
+  'merge.continueBlocked': '还有 {count} 个冲突文件未解决',
+  'merge.abort': '中止合并',
+  'merge.abortArmed': '再点一次放弃合并',
+  'merge.abortConfirm': '中止合并会把工作区恢复成合并前的样子（不可恢复）',
 
   'group.staged': '已暂存的更改',
   'group.unstaged': '更改',
@@ -90,6 +119,15 @@ export const zh = {
   'history.empty': '提交之后，历史会显示在这里。',
   'history.pushed': '已在远端',
   'history.unpushed': '尚未推送',
+  'history.open': '展开提交 {hash} 的详情',
+  'history.loading': '正在读取详情…',
+  'history.author': '作者',
+  'history.authoredAt': '作者时间',
+  'history.committedAt': '提交时间',
+  'history.parents': '父提交',
+  'history.files': '{count} 个文件',
+  'history.noFiles': '这次提交没有文件改动（合并提交按第一个父提交统计，也可能为空）。',
+  'history.binary': '二进制',
 
   'diff.open': '打开 {path} 的差异',
   'diff.close': '返回变更列表',
@@ -120,6 +158,8 @@ export const zh = {
   'error.nothingToCommit': '暂存区是空的，没有可提交的内容。',
   'error.nonFastForward': '远端有本地没有的提交，推送被拒绝。请改用「同步」：先拉取再推送。',
   'error.conflict': '这次合并产生了冲突，先解决冲突再提交。',
+  'error.notMerged': '这个分支还有未合并的提交。确实要删除，请在分支列表里再点一次删除。',
+  'error.noLlm': '这个部署没有配置可用的语言模型，因此无法生成提交信息。',
 } as const
 
 /** English dictionary, checked against the Chinese key set. */
@@ -141,6 +181,10 @@ export const en: Record<GitPanelKey, string> = {
   'action.sync': 'Sync (pull, then push)',
   'action.failed': 'failed',
   'action.dismiss': 'Dismiss',
+  'action.markResolved': 'Mark {path} as resolved',
+  'action.checkout': 'Switch branch',
+  'action.createBranch': 'Create branch',
+  'action.deleteBranch': 'Delete branch',
 
   'commit.placeholder': 'Commit message…',
   'commit.button': 'Commit',
@@ -154,6 +198,10 @@ export const en: Record<GitPanelKey, string> = {
   'commit.hintConflicted': '{count} file(s) still in conflict: resolve them before committing.',
   'commit.hintClean': 'There is nothing to commit.',
   'commit.done': 'Committed {hash}: {subject}',
+  'commit.ai': 'Write the message with AI',
+  'commit.aiNeedsStaged': 'Stage the changes you want described first',
+  'commit.aiTruncated':
+    'The staged diff was too large and was truncated before generating: check that the message covers every change.',
 
   'branch.detached': 'Detached HEAD',
   'branch.unborn': 'No commits yet',
@@ -162,6 +210,28 @@ export const en: Record<GitPanelKey, string> = {
   'branch.behind': '{count} commits behind upstream',
   'branch.synced': 'Up to date with upstream',
   'branch.noUpstream': 'No upstream branch set',
+  'branch.picker': 'Branch: {name}. Click to switch, create, or delete a branch',
+  'branch.pickerClose': 'Close the branch list',
+  'branch.none': 'There are no local branches yet.',
+  'branch.current': 'current',
+  'branch.switchTo': 'Switch to {name}',
+  'branch.create': 'New branch…',
+  'branch.createName': 'New branch name',
+  'branch.createBase': 'Start point',
+  'branch.createFromHead': 'Current HEAD',
+  'branch.createSubmit': 'Create and switch',
+  'branch.createCancel': 'Cancel',
+  'branch.delete': 'Delete branch {name}',
+  'branch.deleteArmed': 'Click again to delete {name}',
+  'branch.deleteForceArmed': 'Not merged: click again to force-delete {name}',
+  'branch.deleteConfirm': 'Delete branch {name} (cannot be undone)',
+
+  'merge.inProgress': 'Merge in progress',
+  'merge.continue': 'Continue the merge',
+  'merge.continueBlocked': '{count} file(s) are still in conflict',
+  'merge.abort': 'Abort the merge',
+  'merge.abortArmed': 'Click again to abandon the merge',
+  'merge.abortConfirm': 'Aborting restores the pre-merge working tree (cannot be undone)',
 
   'group.staged': 'Staged changes',
   'group.unstaged': 'Changes',
@@ -190,6 +260,16 @@ export const en: Record<GitPanelKey, string> = {
   'history.empty': 'Commits will show up here.',
   'history.pushed': 'On the remote',
   'history.unpushed': 'Not pushed yet',
+  'history.open': 'Expand commit {hash}',
+  'history.loading': 'Reading the detail…',
+  'history.author': 'Author',
+  'history.authoredAt': 'Authored',
+  'history.committedAt': 'Committed',
+  'history.parents': 'Parents',
+  'history.files': '{count} file(s)',
+  'history.noFiles':
+    'This commit changed no files (a merge is counted against its first parent, and can still be empty).',
+  'history.binary': 'binary',
 
   'diff.open': 'Open the diff of {path}',
   'diff.close': 'Back to the change list',
@@ -221,6 +301,9 @@ export const en: Record<GitPanelKey, string> = {
   'error.nonFastForward':
     'The remote has commits this branch does not, so the push was refused. Use Sync: pull, then push.',
   'error.conflict': 'That merge left conflicts. Resolve them, then commit.',
+  'error.notMerged':
+    'That branch has commits nothing else reaches. Click delete again in the branch list to discard them.',
+  'error.noLlm': 'This deployment has no language model configured, so no message can be written.',
 }
 
 /** Every key the panel can translate. */

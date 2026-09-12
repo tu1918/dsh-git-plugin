@@ -11,15 +11,22 @@
 
 import type {
   BranchRef,
+  CommitDetail,
+  CommitFileStat,
   CommitInfo,
   DiffArea,
   FileChange,
   FileDiff,
+  GeneratedMessage,
   LogLevel,
   LogPage,
   OperationReport,
   RepoStatus,
 } from './types.ts'
+
+// Re-exported so the wire contract stays one import for the halves that
+// implement it; the shapes themselves live with the rest of the domain model.
+export type { CommitDetail, CommitFileStat }
 
 /**
  * A failure the panel can show, in the panel's own vocabulary.
@@ -57,6 +64,10 @@ export type GitErrorCode =
   | 'non-fast-forward'
   /** The operation left the repository mid-merge with unmerged paths (FR-5.3). */
   | 'conflict'
+  /** `git branch -d` refused because the branch holds commits nothing else reaches (FR-4.3). */
+  | 'not-merged'
+  /** No language model is available in this composition, so FR-3.5 cannot run. */
+  | 'no-llm'
   /** The request itself was malformed. */
   | 'bad-request'
   /** The host-side handler threw. */
@@ -147,6 +158,19 @@ export interface HostPorts {
    * @param message - Line to record.
    */
   log(level: LogLevel, message: string): void
+  /**
+   * Ask the harness's language model for one completion (FR-3.5).
+   *
+   * The git service builds the prompt and core parses the answer; this port is
+   * only "words in, words out", so no component or service learns that
+   * `ctx.llm` exists (§5.3's decision row). A composition without a model
+   * answers `no-llm` rather than throwing, which is what lets the ✨ button
+   * explain itself instead of failing silently.
+   * @param prompt - The whole user-message text.
+   * @param signal - Cancels the call when the request goes away.
+   * @returns The model's text, or why there is none.
+   */
+  generateText(prompt: string, signal?: AbortSignal): Promise<Result<string>>
 }
 
 /** What the host exposes to the browser over the wire (doc §5.4). */
@@ -259,6 +283,94 @@ export interface WorkspaceGitService {
    * @param signal - Cancels the request when the tab goes away.
    */
   sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Switch HEAD to an existing local branch (FR-4.1).
+   *
+   * The branch must already exist: creating one is a separate operation so a
+   * typo cannot silently become a new branch (FR-4.2 keeps that as its own,
+   * deliberate entry point). A working tree that would be overwritten is refused
+   * by git itself, and git's multi-line refusal survives as `error.detail` for
+   * FR-4.4's sake.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param name - Local branch name, validated before any git call (§5.5).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  checkout(sessionId: string, name: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Create a branch and switch to it (FR-4.2).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param name - New branch name, validated before any git call.
+   * @param base - Branch or commit to start from, or `null` for the current HEAD.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  createBranch(
+    sessionId: string,
+    name: string,
+    base: string | null,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Delete a local branch (FR-4.3).
+   *
+   * `force` maps to `git branch -D`; without it an unmerged branch is refused
+   * with the `not-merged` code, which is what lets the panel turn the same
+   * click into its "delete anyway" confirmation instead of forwarding git's
+   * sentence and stopping there.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param name - Local branch name, validated before any git call.
+   * @param force - Whether an unmerged branch may be discarded.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  deleteBranch(
+    sessionId: string,
+    name: string,
+    force: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Finish an in-progress merge whose conflicts are all resolved (FR-9.3).
+   *
+   * Uses git's own `MERGE_MSG`, so the panel does not have to invent a message
+   * for a merge the user started outside it.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  continueMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Abandon an in-progress merge (FR-9.3).
+   *
+   * Destructive — the worktree returns to the pre-merge state — so the panel
+   * arms it behind the §4.3 two-click confirmation.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  abortMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Write a commit message for what is staged, with the language model (FR-3.5).
+   *
+   * The diff is truncated to a prompt budget and the answer says whether it was
+   * (§8.3). Nothing is committed: the text lands in the box, editable, and the
+   * user decides.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param locale - BCP-47 tag, so the message is written in the panel's language.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  generateCommitMessage(
+    sessionId: string,
+    locale: string,
+    signal?: AbortSignal,
+  ): Promise<Result<GeneratedMessage>>
+  /**
+   * Read one commit's metadata and file list (FR-3.6).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - Commit hash, validated as `^[0-9a-f]{4,40}$` before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  showCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<CommitDetail>>
 }
 
 /**
@@ -368,6 +480,73 @@ export interface GitRemoteClient {
    */
   sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
   /**
+   * Switch HEAD to an existing local branch (FR-4.1).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param name - Local branch name.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  checkout(sessionId: string, name: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Create a branch and switch to it (FR-4.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param name - New branch name.
+   * @param base - Branch or commit to start from, or `null` for the current HEAD.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  createBranch(
+    sessionId: string,
+    name: string,
+    base: string | null,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Delete a local branch (FR-4.3).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param name - Local branch name.
+   * @param force - Whether an unmerged branch may be discarded.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  deleteBranch(
+    sessionId: string,
+    name: string,
+    force: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Commit a merge whose conflicts are all resolved (FR-9.3).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  continueMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Abandon an in-progress merge (FR-9.3).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  abortMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Write a commit message for the staged diff (FR-3.5).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param locale - BCP-47 tag for the message's language.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  generateCommitMessage(
+    sessionId: string,
+    locale: string,
+    signal?: AbortSignal,
+  ): Promise<Result<GeneratedMessage>>
+  /**
+   * Read one commit's metadata and file list (FR-3.6).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - Commit hash.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  showCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<CommitDetail>>
+  /**
    * Subscribe to "the repository changed" notifications.
    *
    * The adapter owns the transport (an SSE stream, or a poll when the stream is
@@ -401,24 +580,4 @@ export interface ClientPorts {
    * @param vars - Values for `{name}` placeholders.
    */
   t(key: string, vars?: Readonly<Record<string, string | number>>): string
-}
-
-/** One commit's metadata plus its file list; the shape FR-3.6 drills into. */
-export interface CommitDetail {
-  /** The commit itself. */
-  readonly commit: CommitInfo
-  /** Files the commit touched, with per-file line counts. */
-  readonly files: readonly CommitFileStat[]
-}
-
-/** One file inside a commit, with its churn (FR-3.6). */
-export interface CommitFileStat {
-  /** Repo-relative path, `/`-separated. */
-  readonly path: string
-  /** Lines added. */
-  readonly additions: number
-  /** Lines removed. */
-  readonly deletions: number
-  /** True when git reported the path as binary rather than counting lines. */
-  readonly binary: boolean
 }

@@ -9,6 +9,10 @@
  * @module dsh-git-panel/host/git-service
  */
 
+import { stat } from 'node:fs/promises'
+import { join } from 'node:path'
+
+import { buildCommitMessagePrompt, cleanCommitMessage, truncateDiff } from '../core/commit-message.ts'
 import { parseUnifiedDiff } from '../core/diff-parse.ts'
 import {
   changedPathCount,
@@ -17,6 +21,7 @@ import {
   markPushed,
   parseBranches,
   parseLog,
+  parseNumstat,
   parseStatusV2,
 } from '../core/git-parse.ts'
 import type {
@@ -31,15 +36,24 @@ import type {
 import type {
   BranchInfo,
   BranchRef,
+  CommitDetail,
   CommitInfo,
   DiffArea,
   FileChange,
   FileDiff,
+  GeneratedMessage,
   LogPage,
   OperationReport,
   RepoStatus,
 } from '../core/types.ts'
-import { validateMessage, validatePaths } from '../core/validate.ts'
+import {
+  validateBranchBase,
+  validateBranchName,
+  validateHash,
+  validateMessage,
+  validatePaths,
+} from '../core/validate.ts'
+import { gitDirOf } from './git-dir.ts'
 
 /** The `for-each-ref` format the branch parser expects; the two must agree. */
 const BRANCH_FORMAT =
@@ -143,6 +157,13 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     pattern: /CONFLICT \(|Automatic merge failed|fix conflicts and then commit/iu,
     code: 'conflict',
     message: 'the merge left conflicts that must be resolved before committing',
+  },
+  {
+    // FR-4.3: an unmerged branch needs a second, armed confirmation, so the
+    // refusal has to be a code the panel can recognise rather than prose.
+    pattern: /not fully merged/iu,
+    code: 'not-merged',
+    message: 'the branch has commits that are not merged anywhere else',
   },
 ]
 
@@ -280,6 +301,7 @@ export function createGitService(
         root: root.value,
         branch: parsed.branch,
         groups: groupsOf(parsed.entries),
+        merging: await mergeInProgress(root.value),
         // §8.4: a listing cut at the cap is reported as incomplete rather than
         // quietly presented as the whole truth.
         truncated: outcome.value.truncated,
@@ -622,6 +644,248 @@ export function createGitService(
     return parsed(fresh.stdout, fresh.truncated)
   }
 
+  /**
+   * Whether a merge is waiting to be concluded (FR-9.3).
+   *
+   * `MERGE_HEAD` is the whole answer, and it is the one thing `git status
+   * --porcelain=v2` does not print: once every conflicted path has been staged,
+   * the unmerged list is empty while the merge is still open — which is exactly
+   * the state "continue / abort the merge" belongs to. The file is stat-ed rather
+   * than asked about, the same way the change watcher already treats it.
+   * @param root - Repository root.
+   * @returns Whether a merge is in progress.
+   */
+  async function mergeInProgress(root: string): Promise<boolean> {
+    try {
+      const dir = await gitDirOf(root)
+      await stat(join(dir, 'MERGE_HEAD'))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Whether a local branch of this name exists.
+   *
+   * Checked before `checkout`, because `git checkout <name>` is also how a
+   * branch gets created from a remote-tracking branch — a name the picker does
+   * not list must be a refusal, not a new branch.
+   * @param root - Repository root.
+   * @param name - Already-validated branch name.
+   * @returns Whether `refs/heads/<name>` resolves.
+   */
+  async function localBranchExists(root: string, name: string): Promise<boolean> {
+    const outcome = await runner.run(
+      ['show-ref', '--verify', '--quiet', `refs/heads/${name}`],
+      options(root, false),
+    )
+    return outcome.code === 0
+  }
+
+  /**
+   * Switch to an existing local branch (FR-4.1).
+   * @param sessionId - Session whose repository to act on.
+   * @param name - Local branch name from the browser.
+   */
+  async function checkout(sessionId: string, name: string): Promise<Result<OperationReport>> {
+    const valid = validateBranchName(name)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    if (!(await localBranchExists(root.value, valid.value))) {
+      return fail('bad-request', `there is no local branch called ${valid.value}`)
+    }
+    // No `--no-guess` (git 2.23+) is needed: the existence check above is what
+    // stops `checkout`'s DWIM from creating a branch out of a remote-tracking
+    // one, and staying off that flag keeps the plugin's git >= 2.20 promise.
+    const outcome = await run(['checkout', valid.value], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: checked out ${valid.value} in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Create a branch and switch to it (FR-4.2).
+   * @param sessionId - Session whose repository to act on.
+   * @param name - New branch name from the browser.
+   * @param base - Branch or commit to start from, or `null` for HEAD.
+   */
+  async function createBranch(
+    sessionId: string,
+    name: string,
+    base: string | null,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateBranchName(name)
+    if (!valid.ok) return valid
+    let start: string | null = null
+    if (base !== null && base !== '') {
+      const validBase = validateBranchBase(base)
+      if (!validBase.ok) return validBase
+      start = validBase.value
+    }
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    if (await localBranchExists(root.value, valid.value)) {
+      return fail('bad-request', `a branch called ${valid.value} already exists`)
+    }
+    const args =
+      start === null
+        ? ['checkout', '-b', valid.value]
+        : ['checkout', '-b', valid.value, start]
+    const outcome = await run(args, root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log(
+      'info',
+      `git-panel: created branch ${valid.value}${start === null ? '' : ` from ${start}`} in ${root.value}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Delete a local branch (FR-4.3).
+   * @param sessionId - Session whose repository to act on.
+   * @param name - Local branch name from the browser.
+   * @param force - Whether an unmerged branch may be discarded.
+   */
+  async function deleteBranch(
+    sessionId: string,
+    name: string,
+    force: boolean,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateBranchName(name)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    // Checked here rather than left to git: the panel should say which rule was
+    // broken, and "the branch you are on" is not the interesting refusal — the
+    // unmerged one is, because that is the one that offers to force.
+    const current = await currentBranch(root.value)
+    if (current.ok && current.value.name === valid.value) {
+      return fail('bad-request', 'the branch currently checked out cannot be deleted')
+    }
+    // `-d` refuses an unmerged branch with `not-merged` (see FAILURE_PATTERNS),
+    // and `-D` is the armed second click of FR-4.3.
+    const outcome = await run(['branch', force ? '-D' : '-d', valid.value], root.value, true)
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: a deletion names the branch and the repository.
+    ports.log(
+      'info',
+      `git-panel: deleted branch ${valid.value}${force ? ' (forced)' : ''} in ${root.value}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Conclude a merge whose conflicts are all resolved (FR-9.3).
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function continueMerge(sessionId: string): Promise<Result<OperationReport>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    if (!(await mergeInProgress(root.value))) {
+      return fail('bad-request', 'no merge is in progress')
+    }
+    // `--no-edit` takes git's own MERGE_MSG: there is no editor here, and the
+    // merge's message was written when the merge started.
+    const outcome = await run(['commit', '--no-edit'], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: concluded the merge in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Abandon an in-progress merge (FR-9.3).
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function abortMerge(sessionId: string): Promise<Result<OperationReport>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    if (!(await mergeInProgress(root.value))) {
+      return fail('bad-request', 'no merge is in progress')
+    }
+    const outcome = await run(['merge', '--abort'], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: aborted the merge in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Write a commit message for the staged diff, with the language model (FR-3.5).
+   *
+   * The doc's own cost rule (§8.3) is what shapes this: the diff is truncated to
+   * a budget, the prompt is built by a pure function, and the answer is cleaned
+   * before it reaches the box. Nothing is committed, and a trimmed diff is
+   * reported so the panel can say the message was written from part of the change.
+   * @param sessionId - Session whose repository to describe.
+   * @param locale - BCP-47 tag, so the message is written in the panel's language.
+   */
+  async function generateCommitMessage(
+    sessionId: string,
+    locale: string,
+  ): Promise<Result<GeneratedMessage>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const staged = await run(
+      ['diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=3'],
+      root.value,
+    )
+    if (!staged.ok) return staged
+    if (staged.value.stdout.trim() === '') {
+      return fail('bad-request', 'there is nothing staged to describe')
+    }
+
+    const { text, truncated } = truncateDiff(staged.value.stdout)
+    const answer = await ports.generateText(
+      buildCommitMessagePrompt(text, typeof locale === 'string' ? locale : '', truncated),
+    )
+    if (!answer.ok) return answer
+    const message = cleanCommitMessage(answer.value)
+    if (message === '') {
+      return fail('internal', 'the model answered with nothing that can be a commit message')
+    }
+    ports.log('info', `git-panel: generated a commit message in ${root.value}`)
+    return { ok: true, value: { message, truncated } }
+  }
+
+  /**
+   * Read one commit's metadata and its file list (FR-3.6).
+   *
+   * The metadata comes from the same `LOG_FORMAT` the list is parsed with, so a
+   * detail row can never disagree with the row it was opened from. The file list
+   * is `--numstat`, which carries both counts and git's own "binary" answer.
+   * @param sessionId - Session whose repository to read.
+   * @param hash - Commit hash from the browser.
+   */
+  async function showCommit(sessionId: string, hash: string): Promise<Result<CommitDetail>> {
+    const valid = validateHash(hash)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    const meta = await run(
+      ['log', '-1', '--date=iso-strict', `--format=${LOG_FORMAT}`, valid.value],
+      root.value,
+    )
+    if (!meta.ok) return meta
+    const commit = parseLog(meta.value.stdout).commits[0]
+    if (commit === undefined) {
+      return fail('bad-request', `no commit matches ${valid.value}`)
+    }
+
+    // A merge has two diffs and `git show` prints neither by default; against
+    // the first parent is the one every forge shows, so that is the one the
+    // detail lists. A normal commit needs no flag at all.
+    const stats = await run(
+      commit.parents.length > 1
+        ? ['show', '--numstat', '--format=', '-m', '--first-parent', valid.value]
+        : ['show', '--numstat', '--format=', valid.value],
+      root.value,
+    )
+    if (!stats.ok) return stats
+    return { ok: true, value: { commit, files: parseNumstat(stats.value.stdout) } }
+  }
+
   return {
     status: readStatus,
     diff: diffPath,
@@ -632,6 +896,13 @@ export function createGitService(
     push: pushRepo,
     pull: pullRepo,
     sync: syncRepo,
+    checkout,
+    createBranch,
+    deleteBranch,
+    continueMerge,
+    abortMerge,
+    generateCommitMessage,
+    showCommit,
 
     async branches(sessionId: string): Promise<Result<readonly BranchRef[]>> {
       const root = await repoRoot(sessionId)

@@ -13,8 +13,9 @@
  * list, which is the only place they have to hold.
  *
  * Later milestones' parameters arrive with their own validators, added when the
- * operation that needs them lands — a branch name for `createBranch`, a hash for
- * `undoCommit`. Writing them now would be code with no caller (see D7).
+ * operation that needs them lands (see D7). M4 brought the branch name for
+ * `checkout`/`createBranch`/`deleteBranch`, the base for a new branch, and the
+ * commit hash for `showCommit`; a hash for `undoCommit` still has no caller.
  *
  * @module dsh-git-panel/core/validate
  */
@@ -83,6 +84,92 @@ export function validatePaths(paths: unknown): Result<readonly string[]> {
     accepted.push(entry)
   }
   return { ok: true, value: accepted }
+}
+
+/**
+ * Characters no git ref may contain (§5.5, and git's own `check-ref-format`).
+ *
+ * Space and `~^:?*[\` are git's, not the doc's; they are here because every one
+ * of them makes the name a ref git cannot resolve, and passing it through would
+ * only move the refusal to a git process that has to be spawned first.
+ */
+const REF_FORBIDDEN = /[\u0000-\u001f\u007f ~^:?*[\\]/u
+
+/**
+ * Validate a branch name (§5.5, FR-4.1–4.3).
+ *
+ * The doc forbids `..`, `:` and control characters and a leading `-`; the rest
+ * is git's own grammar, applied for the same reason the `--` separator exists:
+ * the name is handed to git as an argument, so it must not be able to be
+ * anything else.
+ * @param name - Whatever the request carried for the branch name.
+ * @returns The accepted name, or the reason to refuse it.
+ */
+export function validateBranchName(name: unknown): Result<string> {
+  if (typeof name !== 'string' || name === '') {
+    return reject('a branch name is required')
+  }
+  if (name.length > 255) {
+    return reject('the branch name is too long')
+  }
+  if (name.startsWith('-')) {
+    return reject('a branch name may not start with a dash')
+  }
+  if (name === '@' || name.includes('..') || name.includes('@{')) {
+    return reject(`a branch name may not contain "@{" or "..": ${name}`)
+  }
+  if (REF_FORBIDDEN.test(name)) {
+    return reject(`a branch name may not contain spaces or any of ~^:?*[\\: ${name}`)
+  }
+  if (name.startsWith('/') || name.endsWith('/') || name.includes('//')) {
+    return reject(`a branch name may not begin or end with a slash, or contain "//": ${name}`)
+  }
+  if (name.endsWith('.') || name.endsWith('.lock')) {
+    return reject(`a branch name may not end with "." or ".lock": ${name}`)
+  }
+  // A name of only dots or a leading dot-segment is not a ref git will resolve.
+  if (name.split('/').some((segment) => segment.startsWith('.'))) {
+    return reject(`a branch name may not have a path segment starting with ".": ${name}`)
+  }
+  return { ok: true, value: name }
+}
+
+/**
+ * Validate a commit hash (§5.5).
+ *
+ * The doc's shape, verbatim: lowercase hex, four to forty characters. A hash
+ * reaches git only as a revision, so the shape is the whole defence — there is
+ * no `--` that could make `HEAD~1` or `--upload-pack=…` inert here.
+ * @param hash - Whatever the request carried for the hash.
+ * @returns The accepted hash, or the reason to refuse it.
+ */
+export function validateHash(hash: unknown): Result<string> {
+  if (typeof hash !== 'string' || hash === '') {
+    return reject('a commit hash is required')
+  }
+  if (!/^[0-9a-f]{4,40}$/u.test(hash)) {
+    return reject(`a commit hash must be 4 to 40 lowercase hex characters: ${hash}`)
+  }
+  return { ok: true, value: hash }
+}
+
+/**
+ * Validate what a new branch should start from (FR-4.2).
+ *
+ * Two shapes, both of which the picker offers: an existing local branch name, or
+ * a commit hash. Deliberately not "any revision expression" — `HEAD~1` and
+ * `origin/main^{commit}` would each need git to interpret an expression, and the
+ * doc's §5.5 rule is that the browser sends *intent*, not git syntax.
+ * @param base - Whatever the request carried for the base.
+ * @returns The accepted base, or the reason to refuse it.
+ */
+export function validateBranchBase(base: unknown): Result<string> {
+  if (typeof base !== 'string' || base === '') {
+    return reject('a base branch or commit is required')
+  }
+  const asHash = validateHash(base)
+  if (asHash.ok) return asHash
+  return validateBranchName(base)
 }
 
 /**

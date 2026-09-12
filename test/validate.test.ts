@@ -12,7 +12,13 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { validateMessage, validatePaths } from '../src/core/validate.ts'
+import {
+  validateBranchBase,
+  validateBranchName,
+  validateHash,
+  validateMessage,
+  validatePaths,
+} from '../src/core/validate.ts'
 
 describe('path validation', () => {
   it('accepts repo-relative paths and keeps their order', () => {
@@ -124,5 +130,87 @@ describe('message validation', () => {
     assert.match(result.ok ? '' : result.error.message, /too long/u)
     // The boundary itself is accepted.
     assert.equal(validateMessage('x'.repeat(64 * 1024)).ok, true)
+  })
+})
+
+describe('branch name validation (FR-4.1–4.3)', () => {
+  it('accepts the names git itself accepts', () => {
+    for (const name of ['main', 'feat/git-panel', 'release-1.2', 'fix_thing', 'a.b.c']) {
+      const result = validateBranchName(name)
+      assert.ok(result.ok, `${name}: ${result.ok ? '' : result.error.message}`)
+      assert.equal(result.value, name)
+    }
+  })
+
+  it('refuses a name that is not a non-empty string', () => {
+    for (const name of [undefined, null, '', 42, ['main']]) {
+      const result = validateBranchName(name)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(name)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+  })
+
+  it('refuses what §5.5 names: traversal, colons, control characters, a leading dash', () => {
+    for (const name of ['..', 'a..b', 'a:b', 'a\tb', 'a\nb', '-branch', '--upload-pack=x']) {
+      const result = validateBranchName(name)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(name)} to be refused`)
+    }
+  })
+
+  it('refuses the rest of git\u2019s ref grammar, so git never has to', () => {
+    // Each of these is a name `git check-ref-format` rejects; letting one through
+    // would only move the refusal into a spawned process.
+    for (const name of [
+      'has space',
+      'tilde~1',
+      'caret^',
+      'question?',
+      'star*',
+      'bracket[',
+      'back\\slash',
+      'at@{1}',
+      '@',
+      'trailing.',
+      'lock.lock',
+      'double//slash',
+      '/leading',
+      'trailing/',
+      '.hidden',
+    ]) {
+      const result = validateBranchName(name)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(name)} to be refused`)
+    }
+  })
+})
+
+describe('commit hash validation (§5.5)', () => {
+  it('accepts the doc\u2019s shape', () => {
+    for (const hash of ['abcd', 'a'.repeat(40), '0123456789abcdef']) {
+      const result = validateHash(hash)
+      assert.ok(result.ok, `${hash}: ${result.ok ? '' : result.error.message}`)
+    }
+  })
+
+  it('refuses anything that is not 4–40 lowercase hex characters', () => {
+    for (const hash of ['abc', 'a'.repeat(41), 'ABCD', 'xyz9', '', 'HEAD~1', 'abc def', '--all']) {
+      const result = validateHash(hash)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(hash)} to be refused`)
+    }
+  })
+})
+
+describe('branch base validation (FR-4.2)', () => {
+  it('accepts either a branch name or a commit hash', () => {
+    for (const base of ['main', 'feat/x', 'a'.repeat(40)]) {
+      const result = validateBranchBase(base)
+      assert.ok(result.ok, `${base}: ${result.ok ? '' : result.error.message}`)
+    }
+  })
+
+  it('refuses a revision expression, which is git syntax rather than intent', () => {
+    for (const base of ['HEAD~1', 'main^{commit}', 'origin/main..HEAD', '']) {
+      const result = validateBranchBase(base)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(base)} to be refused`)
+    }
   })
 })

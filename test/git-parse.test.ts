@@ -21,6 +21,7 @@ import {
   markPushed,
   parseBranches,
   parseLog,
+  parseNumstat,
   parseStatusV2,
 } from '../src/core/git-parse.ts'
 import type { CommitInfo, FileChange } from '../src/core/types.ts'
@@ -281,5 +282,44 @@ describe('logPageOf', () => {
     assert.deepEqual(logPageOf(commits, null, true), { commits, total: null, hasMore: true })
     assert.deepEqual(logPageOf(commits, null, false), { commits, total: null, hasMore: false })
     assert.deepEqual(logPageOf(commits, 1204, true), { commits, total: 1204, hasMore: true })
+  })
+})
+
+describe('parseNumstat (FR-3.6)', () => {
+  it('reads the counts and the path of each changed file', () => {
+    // Byte-exact `git show --numstat --format=` output, captured from a real
+    // repository (tabs, and no trailing newline expectations).
+    const files = parseNumstat('2\t1\trenamed.txt\n12\t0\tsrc/new.ts\n')
+    assert.deepEqual(files, [
+      { path: 'renamed.txt', additions: 2, deletions: 1, binary: false },
+      { path: 'src/new.ts', additions: 12, deletions: 0, binary: false },
+    ])
+  })
+
+  it('reports a binary file as binary rather than as zero lines', () => {
+    // git prints `-` for both counts; `+0 −0` would claim the file changed
+    // nothing, which is a different statement.
+    const files = parseNumstat('-\t-\tbin.dat\n')
+    assert.deepEqual(files, [{ path: 'bin.dat', additions: null, deletions: null, binary: true }])
+  })
+
+  it('reduces both of git\u2019s rename spellings to the path the file has now', () => {
+    // Both forms come from real `git show --numstat` output.
+    assert.deepEqual(parseNumstat('0\t0\ta.txt => renamed.txt\n'), [
+      { path: 'renamed.txt', additions: 0, deletions: 0, binary: false },
+    ])
+    assert.deepEqual(parseNumstat('0\t0\tsrc/deep/{one.ts => two.ts}\n'), [
+      { path: 'src/deep/two.ts', additions: 0, deletions: 0, binary: false },
+    ])
+  })
+
+  it('keeps a path that contains a tab, and ignores lines it cannot read', () => {
+    const files = parseNumstat('1\t1\tweird\tname.ts\n\nnot-a-numstat-line\n')
+    assert.deepEqual(files, [{ path: 'weird\tname.ts', additions: 1, deletions: 1, binary: false }])
+  })
+
+  it('answers an empty list for a commit with no changes of its own', () => {
+    // A merge read against `--first-parent` can legitimately be empty.
+    assert.deepEqual(parseNumstat(''), [])
   })
 })

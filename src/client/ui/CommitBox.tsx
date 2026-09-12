@@ -22,6 +22,7 @@ import { commitPlanOf } from '../../core/commit-scope.ts'
 import type { CommitScope } from '../../core/commit-scope.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
+import { SparkleGlyph } from './icons.tsx'
 
 /** Everything the box renders from. */
 export interface CommitBoxProps {
@@ -37,6 +38,20 @@ export interface CommitBoxProps {
   readonly error?: string
   /** Commit, with the scope the button is currently describing. */
   readonly onCommit: () => void
+  /**
+   * Ask the host to write a message for the staged diff (FR-3.5).
+   *
+   * Only offered when there IS a staged diff: the doc's prompt is built from
+   * `git diff --cached`, so with an empty index the button would be a round trip
+   * whose only possible answer is "there is nothing to describe".
+   */
+  readonly aiEnabled: boolean
+  /** True while a generation is running. */
+  readonly generating: boolean
+  /** A note about the last generation, e.g. that the diff was truncated. */
+  readonly aiNote?: string
+  /** Start a generation. */
+  readonly onGenerate: () => void
   /** The panel's translator. */
   readonly t: Translate
 }
@@ -92,6 +107,10 @@ export function CommitBox({
   busy,
   error,
   onCommit,
+  aiEnabled,
+  generating,
+  aiNote,
+  onGenerate,
   t,
 }: CommitBoxProps): ReactNode {
   const plan = commitPlanOf(scope)
@@ -105,22 +124,37 @@ export function CommitBox({
 
   return (
     <div className={cls.commitBox}>
-      <textarea
-        className={cls.commitInput}
-        value={message}
-        rows={2}
-        placeholder={t('commit.placeholder')}
-        aria-label={t('commit.placeholder')}
-        onChange={(event) => onMessage(event.target.value)}
-        onKeyDown={(event) => {
-          // Ctrl+Enter (⌘+Enter on a Mac) is FR-3.3's shortcut. Plain Enter stays
-          // a newline, because a commit message has a body.
-          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-            event.preventDefault()
-            submit()
-          }
-        }}
-      />
+      {/* The ✨ sits inside the box, as §4.2 draws it: it writes the text this
+          very textarea holds, so it belongs to the box rather than to the
+          action rail. */}
+      <div className={cls.commitInputWrap}>
+        <textarea
+          className={cls.commitInput}
+          value={message}
+          rows={2}
+          placeholder={t('commit.placeholder')}
+          aria-label={t('commit.placeholder')}
+          onChange={(event) => onMessage(event.target.value)}
+          onKeyDown={(event) => {
+            // Ctrl+Enter (⌘+Enter on a Mac) is FR-3.3's shortcut. Plain Enter stays
+            // a newline, because a commit message has a body.
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+              event.preventDefault()
+              submit()
+            }
+          }}
+        />
+        <button
+          type="button"
+          className={cls.aiButton}
+          disabled={!aiEnabled || busy || generating}
+          title={aiEnabled ? t('commit.ai') : t('commit.aiNeedsStaged')}
+          aria-label={aiEnabled ? t('commit.ai') : t('commit.aiNeedsStaged')}
+          onClick={onGenerate}
+        >
+          {generating ? <span className={cls.spinner} /> : <SparkleGlyph size={14} />}
+        </button>
+      </div>
       <div className={cls.commitFoot}>
         <span className={cls.commitScope} data-commit-scope={scope.kind}>
           {hintOf(scope, t)}
@@ -138,6 +172,11 @@ export function CommitBox({
       {error !== undefined && error !== '' && (
         <p className={cls.statusHint} data-commit-error="true">
           {error}
+        </p>
+      )}
+      {aiNote !== undefined && aiNote !== '' && (
+        <p className={cls.statusHint} data-ai-note="true">
+          {aiNote}
         </p>
       )}
     </div>

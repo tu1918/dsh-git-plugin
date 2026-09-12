@@ -29,7 +29,9 @@ import type { HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts
 import {
   cleanupRepos,
   commit,
+  currentBranch,
   git,
+  gitTry,
   makeBareRemote,
   makePlainDir,
   makeRepo,
@@ -40,7 +42,12 @@ import {
 after(cleanupRepos)
 
 /** A silent diagnostic port; a test asserting on logs would be testing noise. */
-const SILENT: HostPorts = { log: () => undefined }
+const SILENT: HostPorts = {
+  log: () => undefined,
+  // FR-3.5's generation has its own tests; everywhere else it must not be
+  // reachable, so an accidental call is a loud failure rather than a network hit.
+  generateText: () => Promise.reject(new Error('no model in this test')),
+}
 
 /** A resolver that maps one known session id onto a directory. */
 function resolverFor(sessions: Readonly<Record<string, string>>): SessionDirResolver {
@@ -61,6 +68,43 @@ function resolverFor(sessions: Readonly<Record<string, string>>): SessionDirReso
 /** The service over a real runner and a directory map. */
 function serviceFor(sessions: Readonly<Record<string, string>>) {
   return createGitService(createGitRunner(), resolverFor(sessions), SILENT)
+}
+
+/** The same, with a chosen port — for the tests that drive FR-3.5's model call. */
+function serviceWith(ports: HostPorts, sessions: Readonly<Record<string, string>>) {
+  return createGitService(createGitRunner(), resolverFor(sessions), ports)
+}
+
+/** A repository with one commit, and the branch it started on. */
+function repoWithBranch(prefix: string): { repo: string; base: string } {
+  const repo = makeRepo(prefix)
+  write(repo, 'a.txt', 'one\n')
+  stageAll(repo)
+  commit(repo, 'first')
+  return { repo, base: currentBranch(repo) }
+}
+
+/**
+ * A repository left in the middle of a conflicting merge of `side` into `base`.
+ *
+ * The conflict is real: `git merge` is what leaves the state the panel's merge
+ * bar acts on, and a hand-written `MERGE_HEAD` would not prove FR-9.3 works.
+ */
+function repoInConflict(prefix: string): { repo: string; base: string } {
+  const { repo, base } = repoWithBranch(prefix)
+  git(repo, ['checkout', '-q', '-b', 'side'])
+  write(repo, 'a.txt', 'side\n')
+  stageAll(repo)
+  commit(repo, 'side change')
+  git(repo, ['checkout', '-q', base])
+  write(repo, 'a.txt', 'base\n')
+  stageAll(repo)
+  commit(repo, 'base change')
+  const merged = gitTry(repo, ['merge', 'side'])
+  // git exits 1 on a conflicting merge; anything else means the fixture, not the
+  // plugin, is wrong.
+  if (merged.code !== 1) throw new Error(`expected a conflict, got ${merged.code}: ${merged.stderr}`)
+  return { repo, base }
 }
 
 describe('git service status', () => {
@@ -410,14 +454,18 @@ interface Harness {
 /**
  * Start a real HTTP server over the real route layer.
  * @param sessions - Session→directory map the service resolves against.
+ * @param ports - Diagnostic and model port; silent by default.
  * @returns The harness, already listening on a loopback port.
  */
-async function startHarness(sessions: Readonly<Record<string, string>>): Promise<Harness> {
+async function startHarness(
+  sessions: Readonly<Record<string, string>>,
+  ports: HostPorts = SILENT,
+): Promise<Harness> {
   const registrations: Registration[] = []
   const ctx = stubContext(registrations)
-  const service = serviceFor(sessions)
-  const watcher = createRepoWatcher(SILENT)
-  const dispose = registerGitPanelRoutes(ctx, service, watcher, SILENT)
+  const service = serviceWith(ports, sessions)
+  const watcher = createRepoWatcher(ports)
+  const dispose = registerGitPanelRoutes(ctx, service, watcher, ports)
 
   const server: Server = createServer((req, res) => dispatch(registrations, req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -941,6 +989,490 @@ describe('the change stream', () => {
         0,
         `reading status must not announce a change: ${JSON.stringify(frames)}`,
       )
+    } finally {
+      await harness.close()
+    }
+  })
+})
+
+describe('branch management (FR-4)', () => {
+  it('switches to an existing local branch', async () => {
+    const { repo, base } = repoWithBranch('svc-checkout')
+    git(repo, ['branch', 'feature-x'])
+    const service = serviceFor({ s1: repo })
+
+    const result = await service.checkout('s1', 'feature-x')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(currentBranch(repo), 'feature-x')
+    // git's own line travels back, so the panel can show what it did.
+    assert.match(result.value.detail, /feature-x/u)
+
+    assert.ok((await service.checkout('s1', base)).ok)
+    assert.equal(currentBranch(repo), base)
+  })
+
+  it('refuses a name that is not a local branch, rather than creating one', async () => {
+    const { repo } = repoWithBranch('svc-checkout-missing')
+    const service = serviceFor({ s1: repo })
+
+    const result = await service.checkout('s1', 'nope')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    // Nothing was created: `checkout <name>` would have DWIM-ed a new branch if
+    // the existence check were not there.
+    assert.equal(git(repo, ['branch', '--list', 'nope']).trim(), '')
+  })
+
+  it('refuses a malformed branch name before git is asked', async () => {
+    const { repo, base } = repoWithBranch('svc-checkout-bad')
+    const result = await serviceFor({ s1: repo }).checkout('s1', '../evil')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.equal(currentBranch(repo), base)
+  })
+
+  it('shows git’s own multi-line refusal when the working tree is in the way (FR-4.4)', async () => {
+    const { repo, base } = repoWithBranch('svc-checkout-dirty')
+    git(repo, ['checkout', '-q', '-b', 'other'])
+    write(repo, 'a.txt', 'other\n')
+    stageAll(repo)
+    commit(repo, 'other changes a.txt')
+    git(repo, ['checkout', '-q', base])
+
+    // A local edit to the same file the other branch changes.
+    write(repo, 'a.txt', 'local edit\n')
+
+    const result = await serviceFor({ s1: repo }).checkout('s1', 'other')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'git-failed')
+    // FR-4.4: the full output survives, not just its first line. D20 says the
+    // "stash, then switch" shortcut is NOT offered in M4.
+    assert.match(result.ok ? '' : (result.error.detail ?? ''), /would be overwritten/u)
+    assert.equal(currentBranch(repo), base)
+  })
+
+  it('creates a branch from HEAD and switches to it', async () => {
+    const { repo } = repoWithBranch('svc-create')
+    const result = await serviceFor({ s1: repo }).createBranch('s1', 'feature/new', null)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(currentBranch(repo), 'feature/new')
+  })
+
+  it('creates a branch from a named base and from a hash', async () => {
+    const { repo } = repoWithBranch('svc-create-base')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const head = git(repo, ['rev-parse', 'HEAD']).trim()
+    // An anchor branch parked on the older commit, so "from a named base" is
+    // genuinely a different start point from HEAD.
+    git(repo, ['branch', 'anchor', first])
+
+    const fromBase = await serviceFor({ s1: repo }).createBranch('s1', 'from-branch', 'anchor')
+    assert.ok(fromBase.ok, fromBase.ok ? '' : JSON.stringify(fromBase.error))
+    // The branch really starts where it was asked to, not at HEAD.
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+
+    const fromHash = await serviceFor({ s1: repo }).createBranch('s1', 'from-hash', head.slice(0, 8))
+    assert.ok(fromHash.ok, fromHash.ok ? '' : JSON.stringify(fromHash.error))
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), head)
+  })
+
+  it('refuses a duplicate name, a bad base, and a bad name', async () => {
+    const { repo, base } = repoWithBranch('svc-create-bad')
+    const service = serviceFor({ s1: repo })
+
+    const duplicate = await service.createBranch('s1', base, null)
+    assert.equal(duplicate.ok ? '' : duplicate.error.code, 'bad-request')
+
+    const badBase = await service.createBranch('s1', 'ok-name', 'HEAD~1')
+    assert.equal(badBase.ok ? '' : badBase.error.code, 'bad-request')
+    assert.equal(git(repo, ['branch', '--list', 'ok-name']).trim(), '')
+
+    const badName = await service.createBranch('s1', 'bad name', null)
+    assert.equal(badName.ok ? '' : badName.error.code, 'bad-request')
+  })
+
+  it('deletes a merged branch, and refuses the one that is checked out', async () => {
+    const { repo, base } = repoWithBranch('svc-delete')
+    git(repo, ['branch', 'merged'])
+    const service = serviceFor({ s1: repo })
+
+    const deleted = await service.deleteBranch('s1', 'merged', false)
+    assert.ok(deleted.ok, deleted.ok ? '' : JSON.stringify(deleted.error))
+    assert.equal(git(repo, ['branch', '--list', 'merged']).trim(), '')
+
+    const current = await service.deleteBranch('s1', base, false)
+    assert.equal(current.ok ? '' : current.error.code, 'bad-request')
+    assert.equal(currentBranch(repo), base)
+  })
+
+  it('refuses an unmerged branch with not-merged, then deletes it when forced (FR-4.3)', async () => {
+    const { repo, base } = repoWithBranch('svc-delete-unmerged')
+    const service = serviceFor({ s1: repo })
+    // A branch whose commit is reachable from nothing else.
+    assert.ok((await service.createBranch('s1', 'wip', null)).ok)
+    write(repo, 'wip.txt', 'work in progress\n')
+    stageAll(repo)
+    commit(repo, 'unmerged work')
+    assert.ok((await service.checkout('s1', base)).ok)
+
+    const refused = await service.deleteBranch('s1', 'wip', false)
+    assert.equal(refused.ok, false)
+    // The code is what arms the picker's forced click; prose alone could not.
+    assert.equal(refused.ok ? '' : refused.error.code, 'not-merged')
+    assert.notEqual(git(repo, ['branch', '--list', 'wip']).trim(), '')
+
+    const forced = await service.deleteBranch('s1', 'wip', true)
+    assert.ok(forced.ok, forced.ok ? '' : JSON.stringify(forced.error))
+    assert.equal(git(repo, ['branch', '--list', 'wip']).trim(), '')
+  })
+
+  it('shows the extended state a merge leaves behind', async () => {
+    const { repo } = repoInConflict('svc-status-merging')
+    const result = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(result.ok)
+    assert.equal(result.value.merging, true)
+    assert.deepEqual(result.value.groups.conflicted.map((e) => e.path), ['a.txt'])
+  })
+
+  it('reports merging = false on an ordinary repository', async () => {
+    const { repo } = repoWithBranch('svc-status-not-merging')
+    const result = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(result.ok)
+    assert.equal(result.value.merging, false)
+  })
+})
+
+describe('the merge state (FR-9.3)', () => {
+  it('concludes the merge once every conflict is resolved', async () => {
+    const { repo } = repoInConflict('svc-merge-continue')
+    const service = serviceFor({ s1: repo })
+
+    // git refuses to commit while unmerged paths remain, and the panel's button
+    // is disabled in that state; the service says so rather than lying.
+    const tooEarly = await service.continueMerge('s1')
+    assert.equal(tooEarly.ok, false)
+
+    assert.ok((await service.stage('s1', ['a.txt'])).ok)
+    const concluded = await service.continueMerge('s1')
+    assert.ok(concluded.ok, concluded.ok ? '' : JSON.stringify(concluded.error))
+
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.merging, false)
+    // git's own MERGE_MSG is what the commit carries; the panel invented nothing.
+    assert.match(git(repo, ['log', '-1', '--format=%s']).trim(), /^Merge/u)
+  })
+
+  it('abandons the merge and restores the pre-merge working tree', async () => {
+    const { repo } = repoInConflict('svc-merge-abort')
+    const service = serviceFor({ s1: repo })
+
+    const aborted = await service.abortMerge('s1')
+    assert.ok(aborted.ok, aborted.ok ? '' : JSON.stringify(aborted.error))
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.merging, false)
+    assert.deepEqual(after.value.groups.conflicted, [])
+    assert.equal(git(repo, ['show', 'HEAD:a.txt']), 'base\n')
+  })
+
+  it('refuses both actions when no merge is in progress', async () => {
+    const { repo } = repoWithBranch('svc-merge-none')
+    const service = serviceFor({ s1: repo })
+    for (const result of [await service.continueMerge('s1'), await service.abortMerge('s1')]) {
+      assert.equal(result.ok, false)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+  })
+})
+
+describe('git service showCommit (FR-3.6)', () => {
+  it('reports the commit and its per-file churn', async () => {
+    const repo = makeRepo('svc-show')
+    write(repo, 'a.txt', 'one\n')
+    write(repo, 'bin.dat', '\u0000\u0001binary\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'one\ntwo\nthree\n')
+    write(repo, 'bin.dat', '\u0000\u0001changed\n')
+    stageAll(repo)
+    commit(repo, 'second')
+
+    const head = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await serviceFor({ s1: repo }).showCommit('s1', head)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.commit.subject, 'second')
+    assert.equal(result.value.commit.oid, head)
+    const byPath = new Map(result.value.files.map((file) => [file.path, file]))
+    assert.deepEqual(byPath.get('a.txt'), {
+      path: 'a.txt',
+      additions: 2,
+      deletions: 0,
+      binary: false,
+    })
+    // git declined to count the binary file, so it is reported as binary rather
+    // than as a change of zero lines.
+    assert.equal(byPath.get('bin.dat')?.binary, true)
+    assert.equal(byPath.get('bin.dat')?.additions, null)
+  })
+
+  it('lists a merge against its first parent, which `git show` alone would not', async () => {
+    const { repo } = repoInConflict('svc-show-merge')
+    const service = serviceFor({ s1: repo })
+    assert.ok((await service.stage('s1', ['a.txt'])).ok)
+    assert.ok((await service.continueMerge('s1')).ok)
+
+    const head = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await service.showCommit('s1', head)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.commit.parents.length, 2)
+    assert.deepEqual(result.value.files.map((file) => file.path), ['a.txt'])
+  })
+
+  it('refuses a hash that is not one, and an unknown revision', async () => {
+    const { repo } = repoWithBranch('svc-show-bad')
+    const service = serviceFor({ s1: repo })
+
+    for (const hash of ['HEAD~1', 'main', 'zzz', 'abc']) {
+      const result = await service.showCommit('s1', hash)
+      assert.equal(result.ok, false, `expected ${hash} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+
+    const unknown = await service.showCommit('s1', 'deadbeef')
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.ok ? '' : unknown.error.code, 'git-failed')
+  })
+})
+
+describe('git service generateCommitMessage (FR-3.5)', () => {
+  /** A port that records what it was asked and answers with a chosen reply. */
+  function recordingPorts(reply: () => Promise<Result<string>>): {
+    ports: HostPorts
+    prompts: string[]
+  } {
+    const prompts: string[] = []
+    return {
+      prompts,
+      ports: {
+        log: () => undefined,
+        generateText: (prompt) => {
+          prompts.push(prompt)
+          return reply()
+        },
+      },
+    }
+  }
+
+  it('asks the model about the staged diff and cleans the answer', async () => {
+    const { repo } = repoWithBranch('svc-ai')
+    write(repo, 'a.txt', 'one\ntwo\n')
+    git(repo, ['add', 'a.txt'])
+    const { ports, prompts } = recordingPorts(() =>
+      Promise.resolve({ ok: true, value: '```\nfeat: from the model\n```' }),
+    )
+
+    const result = await serviceWith(ports, { s1: repo }).generateCommitMessage('s1', 'zh-CN')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.message, 'feat: from the model')
+    assert.equal(result.value.truncated, false)
+    assert.equal(prompts.length, 1)
+    assert.match(prompts[0] ?? '', /Staged diff/u)
+    assert.match(prompts[0] ?? '', /\+two/u)
+    // The panel's language decides the message's language.
+    assert.match(prompts[0] ?? '', /Simplified Chinese/u)
+  })
+
+  it('refuses when nothing is staged, without spending a model call', async () => {
+    const { repo } = repoWithBranch('svc-ai-empty')
+    write(repo, 'a.txt', 'unstaged only\n')
+    const { ports, prompts } = recordingPorts(() =>
+      Promise.resolve({ ok: true, value: 'should not be used' }),
+    )
+
+    const result = await serviceWith(ports, { s1: repo }).generateCommitMessage('s1', 'en')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.equal(prompts.length, 0)
+  })
+
+  it('passes a deployment without a model through as no-llm', async () => {
+    const { repo } = repoWithBranch('svc-ai-none')
+    write(repo, 'a.txt', 'staged\n')
+    git(repo, ['add', 'a.txt'])
+    const { ports } = recordingPorts(() =>
+      Promise.resolve({
+        ok: false,
+        error: { code: 'no-llm', message: 'this deployment has no language model configured' },
+      }),
+    )
+
+    const result = await serviceWith(ports, { s1: repo }).generateCommitMessage('s1', 'en')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'no-llm')
+  })
+
+  it('cuts the diff at the prompt budget and says that it did (§8.3)', async () => {
+    const { repo } = repoWithBranch('svc-ai-big')
+    // A staged diff far past the budget: the model must not receive all of it.
+    write(repo, 'big.txt', `${Array.from({ length: 2000 }, (_, i) => `line ${i}`).join('\n')}\n`)
+    git(repo, ['add', 'big.txt'])
+    const { ports, prompts } = recordingPorts(() =>
+      Promise.resolve({ ok: true, value: 'chore: add a big file' }),
+    )
+
+    const result = await serviceWith(ports, { s1: repo }).generateCommitMessage('s1', 'en')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.truncated, true)
+    assert.match(prompts[0] ?? '', /truncated before you saw it/u)
+  })
+
+  it('reports an answer that cleans to nothing rather than filling the box', async () => {
+    const { repo } = repoWithBranch('svc-ai-blank')
+    write(repo, 'a.txt', 'staged\n')
+    git(repo, ['add', 'a.txt'])
+    const { ports } = recordingPorts(() => Promise.resolve({ ok: true, value: '```\n```' }))
+
+    const result = await serviceWith(ports, { s1: repo }).generateCommitMessage('s1', 'en')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'internal')
+  })
+})
+
+describe('the M4 mutation routes', () => {
+  /** POST one mutation, with this origin's own headers. */
+  async function post(
+    harness: Harness,
+    path: string,
+    body: unknown,
+  ): Promise<{ ok: boolean; error?: { code: string }; value?: unknown }> {
+    const response = await fetch(`${harness.origin}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: harness.origin },
+      body: JSON.stringify(body),
+    })
+    return (await response.json()) as { ok: boolean; error?: { code: string }; value?: unknown }
+  }
+
+  it('creates, switches to, and deletes a branch over the wire', async () => {
+    const { repo, base } = repoWithBranch('routes-branch')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const created = await post(harness, '/git-panel/createBranch', {
+        session: 's1',
+        name: 'from-route',
+        base: null,
+      })
+      assert.equal(created.ok, true, JSON.stringify(created.error))
+      assert.equal(currentBranch(repo), 'from-route')
+
+      // Deleting the branch you are on is refused; the rail's own action has to
+      // leave first, which is what a user does too.
+      const onIt = await post(harness, '/git-panel/deleteBranch', {
+        session: 's1',
+        name: 'from-route',
+      })
+      assert.equal(onIt.ok, false)
+      assert.equal(onIt.error?.code, 'bad-request')
+
+      const switched = await post(harness, '/git-panel/checkout', { session: 's1', name: base })
+      assert.equal(switched.ok, true, JSON.stringify(switched.error))
+      const deleted = await post(harness, '/git-panel/deleteBranch', {
+        session: 's1',
+        name: 'from-route',
+      })
+      assert.equal(deleted.ok, true, JSON.stringify(deleted.error))
+      assert.equal(git(repo, ['branch', '--list', 'from-route']).trim(), '')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('answers a missing name as the operation-failure envelope, not as a 4xx', async () => {
+    const { repo } = repoWithBranch('routes-branch-shape')
+    const harness = await startHarness({ s1: repo })
+    try {
+      // The same convention every other mutation follows (see the plan's D10):
+      // the request WAS an operation, so it answers 200 with `ok: false`.
+      const response = await fetch(`${harness.origin}/git-panel/deleteBranch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ session: 's1' }),
+      })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; error?: { code: string } }
+      assert.equal(body.ok, false)
+      assert.equal(body.error?.code, 'bad-request')
+
+      const wrongType = await post(harness, '/git-panel/createBranch', {
+        session: 's1',
+        name: 'x',
+        base: 7,
+      })
+      assert.equal(wrongType.ok, false)
+      assert.equal(wrongType.error?.code, 'bad-request')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reads a commit detail over GET and refuses a request without a hash', async () => {
+    const { repo } = repoWithBranch('routes-show')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const missing = await fetch(`${harness.origin}/git-panel/showCommit?session=s1`)
+      // Same convention as the diff route's missing `path`: the request did
+      // become an operation, so its failure rides in the envelope on a 200.
+      assert.equal(missing.status, 200)
+      const missingBody = (await missing.json()) as { ok: boolean; error?: { code: string } }
+      assert.equal(missingBody.ok, false)
+      assert.equal(missingBody.error?.code, 'bad-request')
+      assert.match(missingBody.error === undefined ? '' : JSON.stringify(missingBody.error), /hash/u)
+
+      const head = git(repo, ['rev-parse', 'HEAD']).trim()
+      const found = await fetch(`${harness.origin}/git-panel/showCommit?session=s1&hash=${head}`)
+      assert.equal(found.status, 200)
+      const body = (await found.json()) as { ok: boolean; value?: { files: unknown[] } }
+      assert.equal(body.ok, true)
+      assert.deepEqual(
+        body.value?.files.map((file) => (file as { path: string }).path),
+        ['a.txt'],
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('generates a message over POST, and refuses the same over GET', async () => {
+    const { repo } = repoWithBranch('routes-ai')
+    write(repo, 'a.txt', 'staged for the model\n')
+    git(repo, ['add', 'a.txt'])
+    const prompts: string[] = []
+    const harness = await startHarness({ s1: repo }, {
+      log: () => undefined,
+      generateText: (prompt) => {
+        prompts.push(prompt)
+        return Promise.resolve({ ok: true, value: 'feat: generated over the wire' })
+      },
+    })
+    try {
+      const generated = await post(harness, '/git-panel/generateCommitMessage', {
+        session: 's1',
+        locale: 'en',
+      })
+      assert.equal(generated.ok, true, JSON.stringify(generated.error))
+      assert.deepEqual(generated.value, {
+        message: 'feat: generated over the wire',
+        truncated: false,
+      })
+      assert.equal(prompts.length, 1)
+
+      // Spending the deployment's model budget must not be reachable by a link.
+      const viaGet = await fetch(`${harness.origin}/git-panel/generateCommitMessage?session=s1`)
+      assert.equal(viaGet.status, 405)
     } finally {
       await harness.close()
     }

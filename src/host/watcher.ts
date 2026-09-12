@@ -16,9 +16,10 @@
  * @module dsh-git-panel/host/watcher
  */
 
-import { readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { HostPorts } from '../core/ports.ts'
+import { gitDirOf } from './git-dir.ts'
 
 /** How often the watched files are re-stat-ed while a subscriber exists. */
 const POLL_INTERVAL_MS = 1_000
@@ -59,38 +60,6 @@ interface WatchEntry {
    * SAME baseline instead of racing a fresh one of its own.
    */
   priming: Promise<void> | null
-}
-
-/**
- * Locate the git directory that owns a work tree's state files.
- *
- * A plain checkout has `.git/` as a directory; a linked worktree or a submodule
- * has `.git` as a FILE holding `gitdir: <path>`, and in that case HEAD and the
- * index live in the linked directory. Reading the pointer covers both without a
- * git process.
- * @param root - Absolute work tree root.
- * @returns Absolute git directory path.
- */
-async function gitDirOf(root: string): Promise<string> {
-  const dotGit = join(root, '.git')
-  try {
-    const info = await stat(dotGit)
-    if (info.isDirectory()) return dotGit
-  } catch {
-    return dotGit
-  }
-  try {
-    const pointer = await readFile(dotGit, 'utf8')
-    const match = /^gitdir:\s*(.+)$/mu.exec(pointer)
-    if (match?.[1] !== undefined) {
-      const target = match[1].trim()
-      return target.startsWith('/') ? target : join(root, target)
-    }
-  } catch {
-    // Fall through to the conventional path: a git that cannot read its own
-    // pointer is a git whose poll simply reports no change.
-  }
-  return dotGit
 }
 
 /**

@@ -185,6 +185,44 @@ export function CloseGlyph({ size = 12, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * A waste bin: delete a branch (FR-4.3).
+ *
+ * The only glyph here that stands for an irreversible action, which is why the
+ * button it sits in is one that arms rather than fires.
+ * @param props - Size and class.
+ */
+export function TrashGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M3.2 4.6h9.6" />
+      <path d="M6.4 4.6V3.4h3.2v1.2" />
+      <path d="M4.6 4.6l.6 8h5.6l.6-8" />
+      <path d="M6.8 7v3.4M9.2 7v3.4" />
+    </>,
+  )
+}
+
+/**
+ * A four-pointed star: generate the message with the model (FR-3.5).
+ *
+ * The doc draws this control as `✨`, and the shape is what makes it read as
+ * "written for you" rather than as one more git action.
+ * @param props - Size and class.
+ */
+export function SparkleGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M6.2 2.6l1.1 2.9 2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L2.2 6.6l2.9-1.1z" />
+      <path d="M11.6 9.2l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z" />
+    </>,
+  )
+}
+
+/**
  * Two columns: the side-by-side diff layout (FR-2.4).
  *
  * Deliberately a picture of the layout it selects rather than a generic "view

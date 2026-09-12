@@ -35,7 +35,12 @@ import {
 after(cleanupRepos)
 
 /** A silent diagnostic port; a test asserting on logs would be testing noise. */
-const SILENT: HostPorts = { log: () => undefined }
+const SILENT: HostPorts = {
+  log: () => undefined,
+  // FR-3.5's generation has its own tests; everywhere else it must not be
+  // reachable, so an accidental call is a loud failure rather than a network hit.
+  generateText: () => Promise.reject(new Error('no model in this test')),
+}
 
 /** A resolver that maps one known session id onto a directory. */
 function resolverFor(sessions: Readonly<Record<string, string>>): SessionDirResolver {

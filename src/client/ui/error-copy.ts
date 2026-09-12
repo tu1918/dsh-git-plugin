@@ -52,6 +52,15 @@ export function errorCopy(
       return { title: t('error.nonFastForward'), detail: error.detail }
     case 'conflict':
       return { title: t('error.conflict'), detail: error.detail }
+    case 'not-merged':
+      // FR-4.3: git's own words are "the branch ... is not fully merged", which
+      // says what is true but not what to do. The picker has already armed the
+      // forced click, so this sentence points at it.
+      return { title: t('error.notMerged'), detail: undefined }
+    case 'no-llm':
+      // FR-3.5 cannot run here, and the reason is the deployment's, not the
+      // user's — so it says which fact is missing rather than "try again".
+      return { title: t('error.noLlm'), detail: undefined }
     default:
       // git's own words, verbatim and with their newlines: FR-4.4.
       return {

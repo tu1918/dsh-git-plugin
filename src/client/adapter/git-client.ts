@@ -22,7 +22,9 @@
 import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
 import type {
   BranchRef,
+  CommitDetail,
   CommitInfo,
+  GeneratedMessage,
   LogPage,
   OperationReport,
   RepoStatus,
@@ -160,6 +162,27 @@ export function createGitRemoteClient(): GitRemoteClient {
     push: (sessionId, signal) => mutate<OperationReport>('/push', { session: sessionId }, signal),
     pull: (sessionId, signal) => mutate<OperationReport>('/pull', { session: sessionId }, signal),
     sync: (sessionId, signal) => mutate<OperationReport>('/sync', { session: sessionId }, signal),
+
+    checkout: (sessionId, name, signal) =>
+      mutate<OperationReport>('/checkout', { session: sessionId, name }, signal),
+    // `base: null` is the "from the current HEAD" case, and the host reads an
+    // absent base the same way — one argument, two spellings of the same intent.
+    createBranch: (sessionId, name, base, signal) =>
+      mutate<OperationReport>('/createBranch', { session: sessionId, name, base }, signal),
+    deleteBranch: (sessionId, name, force, signal) =>
+      mutate<OperationReport>('/deleteBranch', { session: sessionId, name, force }, signal),
+    continueMerge: (sessionId, signal) =>
+      mutate<OperationReport>('/continueMerge', { session: sessionId }, signal),
+    abortMerge: (sessionId, signal) =>
+      mutate<OperationReport>('/abortMerge', { session: sessionId }, signal),
+    generateCommitMessage: (sessionId, locale, signal) =>
+      mutate<GeneratedMessage>(
+        '/generateCommitMessage',
+        { session: sessionId, locale },
+        signal,
+      ),
+    showCommit: (sessionId, hash, signal) =>
+      request<CommitDetail>('/showCommit', { session: sessionId, hash }, signal),
 
     watch(sessionId, onChange) {
       // Polling only: no stream available in this browser.

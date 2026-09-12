@@ -32,6 +32,23 @@ export const cls = {
   branchGlyph: `${P}-branch-glyph`,
   branchName: `${P}-branch-name`,
   branchState: `${P}-branch-state`,
+  branchCaret: `${P}-branch-caret`,
+  branchPicker: `${P}-branch-picker`,
+  branchRow: `${P}-branch-row`,
+  branchPick: `${P}-branch-pick`,
+  branchCheck: `${P}-branch-check`,
+  branchPickName: `${P}-branch-pick-name`,
+  branchTag: `${P}-branch-tag`,
+  branchCreate: `${P}-branch-create`,
+  branchForm: `${P}-branch-form`,
+  branchInput: `${P}-branch-input`,
+  branchBaseLabel: `${P}-branch-base`,
+  branchSelect: `${P}-branch-select`,
+  branchFormActions: `${P}-branch-form-actions`,
+  branchFooter: `${P}-branch-footer`,
+  danger: `${P}-danger`,
+  mergeBox: `${P}-merge-box`,
+  mergeLabel: `${P}-merge-label`,
   track: `${P}-track`,
   trackIcon: `${P}-track-icon`,
   spacer: `${P}-spacer`,
@@ -56,6 +73,8 @@ export const cls = {
   rowActions: `${P}-row-actions`,
   commitBox: `${P}-commit-box`,
   commitInput: `${P}-commit-input`,
+  commitInputWrap: `${P}-commit-input-wrap`,
+  aiButton: `${P}-ai-button`,
   commitFoot: `${P}-commit-foot`,
   commitScope: `${P}-commit-scope`,
   commitButton: `${P}-commit-button`,
@@ -74,6 +93,13 @@ export const cls = {
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
   commitMeta: `${P}-commit-meta`,
+  historyCaret: `${P}-history-caret`,
+  commitDetail: `${P}-commit-detail`,
+  commitFields: `${P}-commit-fields`,
+  commitFilesHead: `${P}-commit-files-head`,
+  commitFile: `${P}-commit-file`,
+  commitFilePath: `${P}-commit-file-path`,
+  commitFileStat: `${P}-commit-file-stat`,
   marker: `${P}-marker`,
   spinner: `${P}-spinner`,
   spinnerGlyph: `${P}-spinner-glyph`,
@@ -157,7 +183,184 @@ export const css = `
   color: inherit;
   font: inherit;
   text-align: left;
+  /* The branch name IS the picker's handle (FR-4.1), so it has to read as one:
+     a pointer and a hover tint, which is exactly what §1.3's third lesson asks
+     for (a switcher nobody notices is a switcher nobody uses). */
+  cursor: pointer;
+}
+
+.${cls.branch}:hover {
+  background: var(--dsw-alias-fill-l2);
+}
+
+.${cls.branchCaret} {
+  flex: none;
+  margin-left: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+
+.${cls.branch}[aria-expanded='true'] .${cls.branchCaret} {
+  transform: rotate(90deg);
+}
+
+/* ── branch picker (FR-4.1–4.3) ─────────────────────────────────────────── */
+
+/* Inline under the rail rather than a floating overlay: the panel lives in a
+   resizable sidebar, and a list that re-flows the column is easier to use there
+   than one that covers the changes it sits above. */
+.${cls.branchPicker} {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 6px 8px 8px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.${cls.branchRow} {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.${cls.branchRow}[data-current='true'] {
+  color: var(--dsw-alias-label-primary);
+}
+
+.${cls.branchPick} {
+  display: flex;
+  flex: auto;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.${cls.branchPick}:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-l2);
+}
+
+.${cls.branchPick}:disabled {
   cursor: default;
+}
+
+.${cls.branchCheck} {
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+  justify-content: center;
+  color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.branchPickName} {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--dsh-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.${cls.branchTag} {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.branchCreate} {
+  padding-top: 4px;
+}
+
+.${cls.branchForm} {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.${cls.branchInput},
+.${cls.branchSelect} {
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.${cls.branchInput} {
+  font-family: var(--dsh-font-mono);
+}
+
+.${cls.branchBaseLabel} {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.branchSelect} {
+  flex: auto;
+  min-width: 0;
+  font-family: var(--dsh-font-mono);
+}
+
+.${cls.branchFormActions} {
+  display: flex;
+  gap: 6px;
+}
+
+.${cls.branchFooter} {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+/* The armed variant of a destructive control (§4.3): the second click is
+   visibly a different click, so it takes the danger colour rather than the
+   quiet ghost look its first click had. */
+.${cls.danger} {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-state-error-primary, var(--dsw-alias-border-l3));
+  border-radius: 6px;
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ── merge state (FR-9.3) ───────────────────────────────────────────────── */
+
+.${cls.mergeBox} {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-fill-l2);
+}
+
+.${cls.mergeLabel} {
+  flex: auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
 }
 
 .${cls.branchGlyph} {
@@ -553,6 +756,41 @@ export const css = `
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
+.${cls.commitInputWrap} {
+  position: relative;
+  display: flex;
+}
+
+/* The ✨ lives inside the box's corner (§4.2 draws it that way) instead of in the
+   footer row: it writes the textarea's content, so it belongs to the textarea,
+   and the footer's width is already spoken for by the scope sentence. */
+.${cls.aiButton} {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.${cls.aiButton}:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.aiButton}:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
 .${cls.commitInput} {
   width: 100%;
   min-height: 48px;
@@ -560,7 +798,8 @@ export const css = `
      it from eating the column, not the resize itself. */
   max-height: 260px;
   box-sizing: border-box;
-  padding: 6px 8px;
+  /* Room for the ✨ so the first line of a message never runs under it. */
+  padding: 6px 30px 6px 8px;
   border: 1px solid var(--dsw-alias-border-l3);
   border-radius: 6px;
   background: var(--dsw-alias-bg-layer-2);
@@ -834,11 +1073,85 @@ export const css = `
   padding: 4px 12px 5px 22px;
 }
 
+/* ── commit detail (FR-3.6) ─────────────────────────────────────────────── */
+
 .${cls.commitTop} {
   display: flex;
   min-width: 0;
   align-items: baseline;
   gap: 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.${cls.commitTop}:hover .${cls.commitSubject} {
+  color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.historyCaret} {
+  flex: none;
+  align-self: center;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+
+.${cls.commitTop}[aria-expanded='true'] .${cls.historyCaret} {
+  transform: rotate(90deg);
+}
+
+.${cls.commitDetail} {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 0 3px 18px;
+}
+
+.${cls.commitFields} {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px 8px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.${cls.commitFields} dt {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.${cls.commitFields} dd {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.${cls.commitFilesHead} {
+  margin: 4px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.commitFile} {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.${cls.commitFilePath} {
+  min-width: 0;
+  flex: auto;
+  overflow: hidden;
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.${cls.commitFileStat} {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
 }
 
 .${cls.commitHash} {

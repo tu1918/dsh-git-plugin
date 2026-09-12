@@ -37,16 +37,19 @@ import type {
 } from '../../core/types.ts'
 import { ChangeGroupPane } from './ChangeGroupPane.tsx'
 import { Group, ToolButton } from './ChangeGroup.tsx'
+import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
 import { BottomPane, type OpenFile } from './BottomPane.tsx'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
+import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
 import {
   ArrowDownGlyph,
   ArrowUpGlyph,
   BranchGlyph,
+  CaretGlyph,
   CloseGlyph,
   PlusGlyph,
   RefreshGlyph,
@@ -79,7 +82,19 @@ type Snapshot =
   | { readonly sessionId: string; readonly kind: 'failed'; readonly error: GitPanelError }
 
 /** The mutations the panel can start. */
-type ActionOp = 'stage' | 'unstage' | 'commit' | 'push' | 'pull' | 'sync'
+type ActionOp =
+  | 'stage'
+  | 'unstage'
+  | 'commit'
+  | 'push'
+  | 'pull'
+  | 'sync'
+  | 'checkout'
+  | 'createBranch'
+  | 'deleteBranch'
+  | 'mergeContinue'
+  | 'mergeAbort'
+  | 'generate'
 
 /**
  * What the panel is doing, or last did, at the operation level.
@@ -228,6 +243,8 @@ function BranchRail({
   onPull,
   onPush,
   onSync,
+  pickerOpen,
+  onTogglePicker,
 }: {
   readonly branch: BranchInfo
   /**
@@ -250,6 +267,10 @@ function BranchRail({
   readonly onPull: () => void
   readonly onPush: () => void
   readonly onSync: () => void
+  /** Whether the branch picker is unfolded. */
+  readonly pickerOpen: boolean
+  /** Fold or unfold the branch picker (FR-4.1). */
+  readonly onTogglePicker: () => void
 }): ReactNode {
   const track =
     branch.upstream === null
@@ -270,7 +291,17 @@ function BranchRail({
 
   return (
     <div className={cls.head}>
-      <div className={cls.branch} title={`${name} — ${track}`}>
+      {/* The branch name is the picker's handle (FR-4.1). It reads as a control
+          rather than as a label because §1.3's third lesson is that a branch
+          switcher nobody notices is a branch switcher nobody uses. */}
+      <button
+        type="button"
+        className={cls.branch}
+        title={`${name} — ${track}`}
+        aria-expanded={pickerOpen}
+        aria-label={t('branch.picker', { name })}
+        onClick={onTogglePicker}
+      >
         <BranchGlyph className={cls.branchGlyph} />
         <span className={cls.branchName}>{name}</span>
         {branch.head === 'unborn' && <span className={cls.branchState}>· {t('branch.unborn')}</span>}
@@ -280,7 +311,8 @@ function BranchRail({
         {upstreamGone && (
           <span className={cls.branchState}>· {t('branch.upstreamGone')}</span>
         )}
-      </div>
+        <CaretGlyph className={cls.branchCaret} />
+      </button>
       {/* Counts stay visible (the signal); the words live in the tooltip. */}
       {branch.ahead > 0 && (
         <span className={cls.track} title={t('branch.ahead', { count: branch.ahead })}>
@@ -334,6 +366,21 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * opened still exists.
    */
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  /** Whether the branch picker is unfolded (FR-4.1). */
+  const [pickerOpen, setPickerOpen] = useState(false)
+  /** The last refused branch deletion, so an unmerged branch can arm its force click. */
+  const [branchRefusal, setBranchRefusal] = useState<BranchRefusal | null>(null)
+  /** True while a commit message is being generated (FR-3.5). */
+  const [generating, setGenerating] = useState(false)
+  /** A note about the last generation, such as a truncated diff. */
+  const [aiNote, setAiNote] = useState<string | null>(null)
+  /** The two-click confirmation shared by every irreversible control here (§4.3). */
+  const {
+    armed: armedKey,
+    force: armedForce,
+    arm: armKey,
+    reset: disarm,
+  } = useArmedKey()
   // Folded groups are a preference, not a render detail: someone who folds
   // "untracked" away does not want it back on the next visit (§4.2 draws the
   // caret). Initialised from storage, written back whenever it changes.
@@ -360,7 +407,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setMessage('')
     setAction({ kind: 'idle' })
     setOpenFile(null)
-  }, [sessionId])
+    setPickerOpen(false)
+    setBranchRefusal(null)
+    setGenerating(false)
+    setAiNote(null)
+    disarm()
+  }, [sessionId, disarm])
 
   // A file committed or discarded while its diff is open no longer has a row to
   // return to, so the view is dropped rather than left showing a diff of
@@ -511,6 +563,79 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const sync = (): void => {
     void perform('sync', t('action.sync'), async () => reportOf(await git.sync(sessionId, signal)))
   }
+
+  /**
+   * Switch to another branch (FR-4.1).
+   *
+   * A refusal here is the interesting case, not an edge: git answers a dirty
+   * working tree with several lines naming the files it would overwrite, and
+   * `perform` renders them verbatim (FR-4.4). What M4 deliberately does NOT
+   * offer is the doc's "stash, then switch" shortcut — stash is FR-6.2, and it
+   * stays in M5 (D20).
+   */
+  const checkout = (name: string): void => {
+    setPickerOpen(false)
+    void perform('checkout', t('action.checkout'), async () =>
+      reportOf(await git.checkout(sessionId, name, signal)),
+    )
+  }
+  const createBranch = (name: string, base: string | null): void => {
+    setPickerOpen(false)
+    void perform('createBranch', t('action.createBranch'), async () =>
+      reportOf(await git.createBranch(sessionId, name, base, signal)),
+    )
+  }
+  /**
+   * Delete a branch (FR-4.3).
+   *
+   * The first click is `-d`; a `not-merged` answer is recorded rather than only
+   * reported, because the picker arms the same row as `-D` from it — the panel's
+   * second click is the "未合并需强制确认" the doc asks for.
+   */
+  const deleteBranch = (name: string, force: boolean): void => {
+    void perform('deleteBranch', t('action.deleteBranch'), async () => {
+      const result = await git.deleteBranch(sessionId, name, force, signal)
+      if (!result.ok) {
+        setBranchRefusal({ name, code: result.error.code })
+        return result
+      }
+      setBranchRefusal(null)
+      return reportOf(result)
+    })
+  }
+  const continueMerge = (): void => {
+    void perform('mergeContinue', t('merge.continue'), async () =>
+      reportOf(await git.continueMerge(sessionId, signal)),
+    )
+  }
+  const abortMerge = (): void => {
+    disarm()
+    void perform('mergeAbort', t('merge.abort'), async () =>
+      reportOf(await git.abortMerge(sessionId, signal)),
+    )
+  }
+  /**
+   * Ask the model for a commit message (FR-3.5).
+   *
+   * Not routed through {@link perform}: its result is a message to put in the
+   * box, not a one-line report, and the box is the thing that must change. A
+   * failure still lands in the same action box as every other operation, so the
+   * panel keeps one error path.
+   */
+  const generate = (): void => {
+    setGenerating(true)
+    setAiNote(null)
+    void (async () => {
+      const result = await git.generateCommitMessage(sessionId, locale, signal)
+      setGenerating(false)
+      if (!result.ok) {
+        setAction({ kind: 'failed', op: 'generate', label: t('commit.ai'), error: result.error })
+        return
+      }
+      setMessage(result.value.message)
+      if (result.value.truncated) setAiNote(t('commit.aiTruncated'))
+    })()
+  }
   /**
    * Open one row's diff (FR-2.1).
    * @param entry - The row that was activated.
@@ -536,7 +661,55 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         onPull={pull}
         onPush={push}
         onSync={sync}
+        pickerOpen={pickerOpen}
+        onTogglePicker={() => setPickerOpen((open) => !open)}
       />
+      {pickerOpen && (
+        <BranchPicker
+          branches={branches}
+          t={t}
+          busy={busy || pending}
+          onCheckout={checkout}
+          onCreate={createBranch}
+          onDelete={deleteBranch}
+          refusal={branchRefusal}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+      {/* FR-9.3's two ways out of a merge. The bar exists because the state is
+          otherwise invisible: with every conflict resolved, this panel looks
+          exactly like an ordinary staged change set. */}
+      {status.merging && (
+        <div className={cls.mergeBox} data-merge="true">
+          <span className={cls.mergeLabel}>{t('merge.inProgress')}</span>
+          <button
+            type="button"
+            className={cls.ghost}
+            disabled={pending || conflicted.length > 0}
+            title={
+              conflicted.length > 0
+                ? t('merge.continueBlocked', { count: conflicted.length })
+                : t('merge.continue')
+            }
+            onClick={continueMerge}
+          >
+            {t('merge.continue')}
+          </button>
+          <button
+            type="button"
+            className={armedKey === 'merge' ? cls.danger : cls.ghost}
+            data-armed={String(armedKey === 'merge')}
+            disabled={pending}
+            title={armedKey === 'merge' ? t('merge.abortConfirm') : t('merge.abort')}
+            onClick={() => {
+              if (armedKey === 'merge') abortMerge()
+              else armKey('merge')
+            }}
+          >
+            {armedKey === 'merge' ? t('merge.abortArmed') : t('merge.abort')}
+          </button>
+        </div>
+      )}
       {action.kind === 'failed' && failure !== null && (
         <div className={cls.actionBox} data-action-error={action.op}>
           <div className={cls.actionHead}>
@@ -599,6 +772,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         // the action box above, where the button that caused it lives.
         error={action.kind === 'failed' && action.op === 'commit' && failure !== null ? failure.title : undefined}
         onCommit={commitNow}
+        // FR-3.5's prompt is built from the staged diff, so the button is offered
+        // exactly when there is one — an empty index has nothing to describe.
+        aiEnabled={scope.kind === 'staged'}
+        generating={generating}
+        aiNote={aiNote ?? undefined}
+        onGenerate={generate}
         t={t}
       />
       <div className={cls.body}>

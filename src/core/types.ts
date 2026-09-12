@@ -107,6 +107,14 @@ export interface RepoStatus {
   readonly branch: BranchInfo
   /** The four change lists. */
   readonly groups: StatusGroups
+  /**
+   * True while a merge is in progress — `MERGE_HEAD` exists.
+   *
+   * Not derivable from {@link groups}: once every conflicted path has been
+   * marked resolved the conflict list is empty while the merge is still open, and
+   * that is exactly the state FR-9.3's "continue / abort the merge" speaks to.
+   */
+  readonly merging: boolean
   /** True when the listing hit the host's entry cap and is incomplete. */
   readonly truncated: boolean
   /** Changed paths counted once each, including untracked and conflicted ones. */
@@ -167,6 +175,46 @@ export interface LogPage {
   readonly total: number | null
   /** Whether more commits remain past this page. */
   readonly hasMore: boolean
+}
+
+/** One commit's metadata plus its file list; the shape FR-3.6 drills into. */
+export interface CommitDetail {
+  /** The commit itself. */
+  readonly commit: CommitInfo
+  /** Files the commit touched, with per-file line counts. */
+  readonly files: readonly CommitFileStat[]
+}
+
+/**
+ * One file inside a commit, with its churn (FR-3.6).
+ *
+ * The counts come from `git show --numstat`, which also answers the binary
+ * question: git prints `-` instead of a number for a file it will not count,
+ * and that absence is reported rather than turned into a zero.
+ */
+export interface CommitFileStat {
+  /** Repo-relative path, `/`-separated. */
+  readonly path: string
+  /** Lines added, or `null` when git reported the file as binary. */
+  readonly additions: number | null
+  /** Lines removed, or `null` when git reported the file as binary. */
+  readonly deletions: number | null
+  /** True when git reported the path as binary rather than counting lines. */
+  readonly binary: boolean
+}
+
+/**
+ * One AI-written commit message (FR-3.5).
+ *
+ * `truncated` says the staged diff was cut before the model saw it (§8.3), which
+ * the panel states rather than hiding: a message written from half a diff is
+ * still useful, but the user is the one who knows what the other half was.
+ */
+export interface GeneratedMessage {
+  /** The generated subject (and body, when the model wrote one). */
+  readonly message: string
+  /** True when the diff was cut to fit the prompt budget. */
+  readonly truncated: boolean
 }
 
 /**

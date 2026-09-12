@@ -62,7 +62,15 @@ const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
 )
 const { apply } = await import('../src/client/index.tsx')
 
-import type { BranchRef, CommitInfo, FileDiff, OperationReport, RepoStatus } from '../src/core/types.ts'
+import type {
+  BranchRef,
+  CommitDetail,
+  CommitInfo,
+  FileDiff,
+  GeneratedMessage,
+  OperationReport,
+  RepoStatus,
+} from '../src/core/types.ts'
 import type { GitRemoteClient, Result } from '../src/core/ports.ts'
 
 /** A translator over the real English dictionary. */
@@ -99,6 +107,7 @@ function statusFixture(): RepoStatus {
       ],
     },
     truncated: false,
+    merging: false,
     changedCount: 4,
   }
 }
@@ -209,6 +218,12 @@ function stubGit(options: {
   diff?: (path: string, area: string) => Result<FileDiff>
   /** Where diff requests are recorded, as `area:path@context`. */
   diffCalls?: string[]
+  /** What `showCommit` answers; an empty file list by default. */
+  showCommit?: Result<CommitDetail>
+  /** What `generateCommitMessage` answers; a fixed message by default. */
+  generated?: Result<GeneratedMessage>
+  /** What `deleteBranch` answers, for the unmerged-refusal path. */
+  deleteBranch?: Result<OperationReport>
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -254,6 +269,44 @@ function stubGit(options: {
     sync: () => {
       note('sync')
       return Promise.resolve(report)
+    },
+    checkout: (_sessionId, name) => {
+      note(`checkout:${name}`)
+      return Promise.resolve(report)
+    },
+    createBranch: (_sessionId, name, base) => {
+      note(`createBranch:${name}@${base ?? ''}`)
+      return Promise.resolve(report)
+    },
+    deleteBranch: (_sessionId, name, force) => {
+      note(`deleteBranch:${name}${force ? ':force' : ''}`)
+      return Promise.resolve(options.deleteBranch ?? report)
+    },
+    continueMerge: () => {
+      note('continueMerge')
+      return Promise.resolve(report)
+    },
+    abortMerge: () => {
+      note('abortMerge')
+      return Promise.resolve(report)
+    },
+    generateCommitMessage: (_sessionId, locale) => {
+      note(`generate:${locale}`)
+      return Promise.resolve(
+        options.generated ?? { ok: true, value: { message: 'feat: generated', truncated: false } },
+      )
+    },
+    showCommit: (_sessionId, hash) => {
+      note(`showCommit:${hash}`)
+      return Promise.resolve(
+        options.showCommit ?? {
+          ok: true,
+          value: {
+            commit: { ...commitFixture(), oid: hash, shortOid: hash.slice(0, 7) },
+            files: [],
+          },
+        },
+      )
     },
     watch: options.watch ?? (() => () => undefined),
   }
@@ -1664,5 +1717,384 @@ describe('the dictionaries', () => {
 
   it('names the namespace the adapter declares', () => {
     assert.equal(NS, 'gitPanel')
+  })
+})
+
+/* ── M4: branches, conflicts, AI message, commit detail ─────────────────── */
+
+/**
+ * The fixture with its conflict resolved, so the commit scope is the index.
+ *
+ * {@link statusWith} keeps only the groups it is given, which is the wrong tool
+ * here: these tests want everything the fixture has EXCEPT the conflict.
+ */
+function withoutConflicts(): RepoStatus {
+  const base = statusFixture()
+  return { ...base, groups: { ...base.groups, conflicted: [] } }
+}
+
+/** Two branches: the current one, and one that can be switched to. */
+function twoBranches(): readonly BranchRef[] {
+  return [
+    ...branchesFixture(),
+    {
+      name: 'feature/x',
+      current: false,
+      oid: 'c'.repeat(40),
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      upstreamGone: false,
+      committedAt: '2026-09-10T10:00:00+08:00',
+      subject: 'work in progress',
+    },
+  ]
+}
+
+/** Set an `<input>`'s value the way React's controlled inputs expect. */
+async function typeIntoInput(node: HTMLInputElement, value: string): Promise<void> {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(node, value)
+    node.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  await settle()
+}
+
+/** Choose an option the way a browser does, change event included. */
+async function selectOption(node: HTMLSelectElement, value: string): Promise<void> {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(node, value)
+    node.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  await settle()
+}
+
+/** Open the branch picker from the rail, and return it. */
+async function openPicker(container: HTMLElement): Promise<HTMLElement> {
+  await click(must(container, `.${cls.branch}`))
+  return must<HTMLElement>(container, '[data-branch-picker="true"]')
+}
+
+describe('the branch picker (FR-4.1–4.3)', () => {
+  it('lists the local branches and switches on a row click', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ branches: twoBranches(), calls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    // The list is folded until the rail's branch name is pressed: FR-4.1's
+    // control has to be discoverable, but it is not always on screen.
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
+
+    const picker = await openPicker(container)
+    const picks = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.branchPick}`)]
+    assert.equal(picks.length, 2)
+    // The current branch is a heading as much as an entry: switching to where
+    // HEAD already is would be a no-op round trip.
+    assert.equal(picks[0]?.disabled, true)
+    assert.equal(picks[1]?.disabled, false)
+
+    await click(picks[1] as Element)
+    assert.deepEqual(calls.entries, ['checkout:feature/x'])
+    // The picker folds itself away behind the action it started.
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
+  })
+
+  it('creates a branch from HEAD, and from a chosen base', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ branches: twoBranches(), calls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    await click(must(picker, `.${cls.ghost}`))
+    const input = must<HTMLInputElement>(picker, `.${cls.branchInput}`)
+    await typeIntoInput(input, 'feat/new')
+    await click(must(picker, 'button[type="submit"]'))
+    assert.deepEqual(calls.entries, ['createBranch:feat/new@'])
+
+    // Again, this time starting from a branch rather than from HEAD (FR-4.2's
+    // other half). `base: ''` in the log is the wire's "from the current HEAD".
+    const again = await openPicker(container)
+    await click(must(again, `.${cls.ghost}`))
+    await typeIntoInput(must<HTMLInputElement>(again, `.${cls.branchInput}`), 'feat/from-main')
+    await selectOption(must<HTMLSelectElement>(again, `.${cls.branchSelect}`), 'main')
+    await click(must(again, 'button[type="submit"]'))
+    assert.deepEqual(calls.entries, ['createBranch:feat/new@', 'createBranch:feat/from-main@main'])
+  })
+
+  it('deletes in two clicks, and refuses a delete the panel cannot confirm', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ branches: twoBranches(), calls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    const row = [...picker.querySelectorAll(`.${cls.branchRow}`)][1]
+    assert.ok(row)
+    await click(must(row, `.${cls.tool}`))
+
+    // §4.3's pattern: the first click only arms, and it does so in words.
+    const armed = must(row, `.${cls.danger}[data-armed="true"]`)
+    assert.match(armed.textContent ?? '', /Click again to delete feature\/x/)
+    assert.deepEqual(calls.entries, [], 'arming must not delete anything')
+
+    await click(armed)
+    assert.deepEqual(calls.entries, ['deleteBranch:feature/x'])
+  })
+
+  it('asks for a forced delete when the host refuses an unmerged branch (FR-4.3)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const refusal = {
+      ok: false as const,
+      error: { code: 'not-merged' as const, message: 'the branch has commits that are not merged anywhere else' },
+    }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ branches: twoBranches(), calls, deleteBranch: refusal }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    const row = [...picker.querySelectorAll(`.${cls.branchRow}`)][1]
+    assert.ok(row)
+    await click(must(row, `.${cls.tool}`))
+    await click(must(row, `.${cls.danger}`))
+
+    // The refusal is reported, and the SAME row is now armed as the forced
+    // variant — that is what "未合并需强制确认" has to look like.
+    assert.match(container.textContent ?? '', /commits nothing else reaches/)
+    const forced = must(picker, `.${cls.danger}[data-armed="true"]`)
+    assert.match(forced.textContent ?? '', /force-delete feature\/x/)
+
+    await click(forced)
+    assert.deepEqual(calls.entries, ['deleteBranch:feature/x', 'deleteBranch:feature/x:force'])
+  })
+
+  it('folds away on Escape', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+    await openPicker(container)
+    await act(async () => {
+      window.dispatchEvent(new window.Event('keydown', { bubbles: true }))
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await settle()
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
+  })
+})
+
+describe('the conflict row and the merge bar (FR-9.2–9.3)', () => {
+  it('labels a conflicted row’s action as marking it resolved', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const group = must(container, '[data-group="conflicted"]')
+    const action = must(group, `.${cls.tool}`)
+    assert.equal(action.getAttribute('title'), 'Mark both.txt as resolved')
+    // The command is the same one the `+` always ran: `git add` IS how a conflict
+    // is marked resolved, so there is no second code path to go wrong.
+    await click(action)
+    assert.deepEqual(calls.entries, ['stage:both.txt'])
+  })
+
+  it('offers the merge bar only while a merge is open, and holds continue until it can work', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: { ...statusFixture(), merging: true } }, calls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const bar = must(container, '[data-merge="true"]')
+    const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button')]
+    const [cont, abort] = buttons
+    assert.ok(cont && abort)
+    // Conflicts remain, so `git commit` would refuse; the button says why.
+    assert.equal(cont.disabled, true)
+    assert.match(cont.getAttribute('title') ?? '', /still in conflict/)
+
+    // Aborting is destructive, so it takes the same two clicks as a deletion.
+    await click(abort)
+    const armed = must(bar, `.${cls.danger}[data-armed="true"]`)
+    assert.match(armed.textContent ?? '', /Click again to abandon/)
+    assert.deepEqual(calls.entries, [])
+    await click(armed)
+    assert.deepEqual(calls.entries, ['abortMerge'])
+  })
+
+  it('continues the merge once every conflict is resolved', async () => {
+    const calls: ActionLog = { entries: [] }
+    const resolved = { ...withoutConflicts(), merging: true }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: resolved }, calls }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const bar = must(container, '[data-merge="true"]')
+    const cont = must<HTMLButtonElement>(bar, 'button')
+    assert.equal(cont.disabled, false)
+    await click(cont)
+    assert.deepEqual(calls.entries, ['continueMerge'])
+  })
+})
+
+describe('the AI commit message (FR-3.5)', () => {
+  it('offers the sparkle only when there is a staged diff to describe', async () => {
+    const untrackedOnly = statusWith({ conflicted: [], staged: [], unstaged: [] })
+    const without = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: untrackedOnly } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    const disabled = must<HTMLButtonElement>(without, `.${cls.aiButton}`)
+    assert.equal(disabled.disabled, true)
+    assert.match(disabled.getAttribute('title') ?? '', /Stage the changes/)
+
+    const withStaged = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: withoutConflicts() } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    assert.equal(must<HTMLButtonElement>(withStaged, `.${cls.aiButton}`).disabled, false)
+  })
+
+  it('puts the generated message in the box, and says when the diff was cut', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: withoutConflicts() },
+          calls,
+          generated: { ok: true, value: { message: 'feat: written for you', truncated: true } },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    await click(must(container, `.${cls.aiButton}`))
+    // The text lands in the box as editable text, not as a commit: FR-3.5's
+    // whole promise is that the user still decides.
+    assert.equal(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`).value, 'feat: written for you')
+    assert.deepEqual(calls.entries, ['generate:en'])
+    assert.match(must(container, '[data-ai-note="true"]').textContent ?? '', /was truncated/)
+  })
+
+  it('reports a deployment without a model instead of failing silently', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: withoutConflicts() },
+          generated: {
+            ok: false,
+            error: { code: 'no-llm', message: 'this deployment has no language model configured' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    await click(must(container, `.${cls.aiButton}`))
+    assert.match(container.textContent ?? '', /no language model configured/)
+    // The box keeps whatever it had; nothing was written on a failure.
+    assert.equal(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`).value, '')
+  })
+})
+
+describe('the commit detail (FR-3.6)', () => {
+  it('expands a commit into its metadata and file list', async () => {
+    const calls: ActionLog = { entries: [] }
+    const detail: CommitDetail = {
+      commit: { ...commitFixture(), parents: ['d'.repeat(40)], pushed: true },
+      files: [
+        { path: 'src/a.ts', additions: 12, deletions: 3, binary: false },
+        { path: 'bin.dat', additions: null, deletions: null, binary: true },
+      ],
+    }
+    const git: GitRemoteClient = {
+      ...stubGit({ calls, log: [commitFixture()] }),
+      showCommit: (_sessionId, hash) => {
+        calls.entries.push(`showCommit:${hash}`)
+        return Promise.resolve({ ok: true, value: { ...detail, commit: { ...detail.commit, oid: hash } } })
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+
+    await click(must(container, `.${cls.bottomTab}`))
+    assert.equal(container.querySelector('[data-commit-detail]'), null)
+
+    await click(must(container, `.${cls.commitTop}`))
+    await flush()
+
+    const panel = must(container, '[data-commit-detail]')
+    const text = panel.textContent ?? ''
+    assert.match(text, /src\/a\.ts/)
+    assert.match(text, /\+12/)
+    assert.match(text, /−3/)
+    // git declined to count the binary file, so the row says so rather than
+    // showing a churn of zero.
+    assert.match(text, /bin\.dat/)
+    assert.match(text, /binary/)
+    assert.match(text, /ddddddd/, 'the parent is named, shortened')
+    assert.deepEqual(calls.entries, [`showCommit:${'b'.repeat(40)}`])
+
+    // Folding and reopening costs no second git call: the detail is remembered.
+    await click(must(container, `.${cls.commitTop}`))
+    assert.equal(container.querySelector('[data-commit-detail]'), null)
+    await click(must(container, `.${cls.commitTop}`))
+    assert.equal(calls.entries.length, 1)
   })
 })

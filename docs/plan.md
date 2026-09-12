@@ -11,8 +11,8 @@
 下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
 「与需求文档的偏差」。
 
-- 代码：`src/`（28 个源文件）、`test/`（11 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 192 项测试 + 两个打包产物
+- 代码：`src/`（39 个源文件）、`test/`（13 个测试文件）
+- 校验：`npm run check` → `tsc --noEmit` + 268 项测试 + 两个打包产物
 
 ---
 
@@ -24,7 +24,7 @@
 | **M1** | host service + status/log/branches 只读 + sidebar tab 渲染变更列表 | 面板能看到当前仓库变更分组与分支 | ✅ 完成并在 GUI 中确认 |
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
-| **M4** | 新建/删除分支、sync、冲突标记、AI 提交信息 | 分支管理与同步全在面板内闭环 | ⏳ 下一步 |
+| **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
 | **M5** | discard、stash、提交图、撤销、多仓库 | 发布 v1.0 | ⬜ 未开始 |
 
 ---
@@ -115,6 +115,10 @@ discard/deleteBranch 一起写。
 | **D17** | §5.4 未规定 `diff` 的命令形状 | 固定 `--no-color --no-ext-diff --no-textconv --unified=N`，context 夹在 0–50 | 用户自己的 diff 配置会毁掉解析：外部 driver 输出解析器读不懂的语法，textconv 会把二进制文件转成文本——正好违反 FR-2.5 |
 | **D18** | §4.2 布局：分支行 → 提交框 → 变更分组 → 历史 | 基准是 VS Code 源代码管理视图，最终为：分支行 → **已暂存的更改（抽屉，常驻）** → **提交框** → **工作区列表**（冲突/更改/未跟踪）→ **底部 tab 区**（最近提交 / 所选文件的 diff）。中间经历过几版被推翻的顺序，以本行为准 | 产品方在 M3 验收后逐条调布局，最后定调「参考 VS Code」——那里没有需要发明的顺序：源代码管理视图就是 输入框 → 变更分组 → 图/历史。**唯一跟不了的一处**：VS Code 把 diff 开在编辑器区，而本插件只注册了右侧栏 tab（`sidebarRightTabs`，本 profile 的客户端包里没有主区 tab 的注册缝），所以 diff 停靠在最下、默认半屏——这也符合「点文件在提交框下方看 diff」的要求。**代价**：diff 是固定占位而不是占满 body，列表可用高度变小（`body` 留 56px 下限、dock 拖动上限留 200px 给上面） |
 | **D19** | FR-3.2 只说「分组标题行提供组级批量操作」，没规定显隐 | M2 做成了 hover 才显形（`opacity: 0` → 1）；M3 验收后改为**常显**，并把分组名改成可省略号收缩、标题行 `min-width: 0` | 产品方在界面上**找不到**「全部暂存」——hover-only 的控件在窄侧栏里等于不存在，而同一份文档的 §4.2 示意图本来就把这两个操作画成可见控件。行内 `+`/`−` 保持 hover 显形不动：FR-3.1 明文要求「hover 显现」，那是需求本身的决定 |
+| **D20** | FR-4.4 要求切换分支受阻时提供「**贮藏后切换**」快捷项 | M4 **只做降级**：原样展示 git 的多行输出并说明工作区不干净，不提供一键贮藏。stash 本身是 FR-6.2，排在 M5 | 一键贮藏会写 `git stash`（动 `refs/stash` + 工作区），是 M5 才交付的能力；在 M4 里半做它，等于把这个里程碑唯一的破坏性写操作藏在「切换失败」的补救路径里。产品方确认：先降级 |
+| **D21** | FR-9.2 每个冲突文件提供「**打开文件**（调 DSH 文件编辑器）」与「标记已解决」 | M4 **不做打开文件**；冲突行只提供「标记已解决」（即 `+`，与 git 同一命令），路径仍可从行 tooltip 读出 | 本 profile 的文件区是 `dsh-better-sidebar`，它对外的缝只有 `registerTab`/`registerFileViewer`/`registerFileIcon`，没有「按路径打开编辑器」；`dsh-client-ui-open-in-app` 打开的是工作区目录给本地应用，也不对口。产品方确认：往后排 |
+| **D22** | FR-3.6 提交详情「完整信息、文件清单、每文件增删行、**可下钻看该提交的 diff**」 | M4 做前三项（行内展开），**下钻 diff 与提交改写（drop/squash/reset、FR-3.8 的撤销）不在 M4** | 下钻需要一个「按提交取 diff」的第三种 `DiffArea`（客户端与路由都要扩），而提交改写是另一类操作（重写历史）。产品方确认：提交详情具备初步功能即可，提交管理往后排 |
+| **D23** | §5.2 的意图是「DSH 名字只在 adapter 里，且最好是类型」 | `host/adapter/llm.ts` 引入了 `@deepseek-ai/dsh-llm` 的**运行时值**（`BlockAssembler`、`createUserMessage`），并把它声明为 peerDependency | 手写一份流式装配会复刻 harness 的块合并规则（工具调用截断、未知块、delta-only 协议都已在那层处理过），手写 message 形状则要跟住它的不可变创建契约。用宿主自己的装配器是唯一不会随宿主漂移的选择。**代价**：host bundle 首次带一个 `@deepseek-ai/*` 的运行时 import（此前只有 Node 内建 + `vscode-diff`），安装时必须能解析到宿主提供的 `dsh-llm`——`link:` 安装由本仓 devDependencies 提供，npm 安装由 peer 自动补齐 |
 
 ---
 
@@ -141,7 +145,20 @@ discard/deleteBranch 一起写。
 4. **`optionalLocks` 的默认值写在 `run` 的形参上，不写在 `options` 里。**
    调用点必须**显式**说「我要写」，读代码的人才能一眼看出哪些调用会动 index。
 
-5. **`execFile` 的退出码在 `error.code`，不在 `error.status`。**
+5. **破坏性操作一律走 `ui/armed.ts` 的同一套武装。** 删分支与中止合并共用一个
+   `useArmedKey`：按 key 武装、3 秒过期、武装态**在界面上是可见的另一种按钮**。
+   本文件说的「点击武装 → 3s 内再点」（§4.3）只有这三条性质同时成立才算实现；
+   「未合并再点一次强制删除」是同一机制的第二种武装变体（`force` 标志）。
+
+6. **`llm` / `agentDefaultModel` 必须用 `ctx.get()` 读，不要写进 `inject`。**
+   写进去会让插件在没有模型的 composition 里直接不挂载——而面板 99% 的功能
+   与模型无关。`generateText` 在缺服务时返回 `no-llm`，是一个普通失败。
+
+7. **`RepoStatus.merging` 来自 `MERGE_HEAD` 的 `stat`，不是来自冲突分组。**
+   冲突全部 staged 之后分组就空了，而合并还在——那正是「继续合并」按钮该出现的
+   状态。改这块时不要把它换成「`groups.conflicted.length > 0`」。
+
+8. **`execFile` 的退出码在 `error.code`，不在 `error.status`。**
    实测（Node 24）：`git diff --no-index` 退出 1 时 `error.code === 1`、`error.status
    === undefined`。旧映射只读 `status`，于是**所有非零退出码都变成 `code: null`**——
    而 `null` 同时是「被信号杀掉」的意思，调用方再也分不清 git 的正常回答与崩溃。
@@ -194,7 +211,9 @@ discard/deleteBranch 一起写。
 - `git-service.ts` → `diff(sessionId, path, area, contextLines)`：`index` 用 `git diff --cached`，
   `worktree` 用 `git diff`，未跟踪用 `--no-index /dev/null`（D15），命令形状固定（D17）。
 - `routes.ts` → `GET /git-panel/diff?session&path&area&context`（读操作集合；缺 `path`
-  或 `area` 不在 {`worktree`,`index`} 走 400 信封）。
+  或 `area` 不在 {`worktree`,`index`} 时，请求本身仍是**一次操作**，所以按 D10 走
+  200 + `ok:false` 信封——不是 400。M4 给 `showCommit` 缺 `hash` 用了同一条规则，
+  并有一条测试钉住它）。
 - 测试 `test/host-service.test.ts`（+9 项）：真实仓库跑 worktree / index / 未跟踪 / unborn /
   二进制 / 无改动 / 非法路径与 area 拒绝 / context 夹取，外加路由的 200 信封、两个 400 信封与 405。
 
@@ -273,15 +292,43 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 
 ---
 
-## 9. M4–M5 概要
+## 9. M4 交付（已完成）与 M5 概要
 
 - **M3（diff）已完成**，见 §8。留给后面的两件：diff 的**虚拟滚动**（§6 性能 P1 未做，
   现在靠 FR-2.6 的折叠门兜底）；FR-7.2「提交详情里下钻看某文件 diff」现在可以直接复用
-  `DiffView` + `git show <hash> -- <path>`（尚未接）。
-- **M4**：分支新建/删除/切换（FR-4.1–4.4，含切换失败时展示 git 多行输出 + 「贮藏后切换」）、
-  sync、冲突态 UI（FR-9）、AI 提交信息（`HostPorts.generateText` ← `ctx.llm` adapter，§8.3 token 成本）。
-- **M5**：discard（二次确认「不可恢复」）、stash、提交图 SVG 泳道、撤销最近提交
-  （未推送 `reset --mixed`／已推送 `revert`，执行前后端重新核实 —— FR-3.8）、多仓库扫描（FR-8）。
+  `DiffView` + `git show <hash> -- <path>`（M4 只做到详情列表，下钻仍未接，见 D22）。
+- **M4（分支 + 冲突 + AI + 详情）已完成**，范围与产品方逐条确认，三项收窄见 D20–D22：
+
+| 文档要求 | 落点 |
+|---|---|
+| FR-4.1 分支下拉、切换 | `core/validate.ts` 的 `validateBranchName`（§5.5 + git 自己的 ref 语法）→ `git-service.checkout`（先 `show-ref --verify` 确认是**本地**分支，再 `checkout`，因此不会 DWIM 出分支）→ `ui/BranchPicker.tsx`；分支行本身变成可点的把手（`aria-expanded`） |
+| FR-4.2 新建分支（可指定基点） | `git-service.createBranch` + `validateBranchBase`（**只**接受本地分支名或 4–40 位 hash，不接受 `HEAD~1` 这类 git 表达式）；面板给「当前 HEAD / 指定分支」两种起点 |
+| FR-4.3 删除分支 + 保护提示 | `git-service.deleteBranch`（`-d`／`-D`）；当前分支由 host 直接以 `bad-request` 拒绝，未合并由 git 拒绝并被分类为新错误码 **`not-merged`**——面板据此把同一行**武装成强制删除**（`ui/armed.ts` 的 `useArmedKey`，§4.3 的「点击武装 → 3s 内再点」首次落地） |
+| FR-4.4 切换受阻展示 git 多行输出 | 复用 M2 的 `error.detail` 通道；测试驱动真实「local changes would be overwritten」拒绝，断言完整输出到达。**「贮藏后切换」按 D20 不做** |
+| FR-9.1 冲突独立分组 | M1 起就有；M4 只把行内 `+` 的文案改成「标记已解决」（命令不变：`git add` 就是标记已解决） |
+| FR-9.3 继续合并 / 中止合并 | `RepoStatus.merging`（`host/git-dir.ts` 的 `gitDirOf` + `stat MERGE_HEAD`，**不额外 spawn**；`git status --porcelain=v2` 不报告这件事，而冲突全部解决后分组会空掉）→ `git-service.continueMerge`（`commit --no-edit`，用 git 自己的 `MERGE_MSG`）／`abortMerge`（`merge --abort`，二次确认）；面板在合并期间顶部出一条状态栏 |
+| FR-3.5 AI 提交信息 | 纯函数 `core/commit-message.ts`（截断、提示词、清洗答案）+ `HostPorts.generateText` ← 新适配器 `host/adapter/llm.ts`（`ctx.llm.stream` 流式 + `BlockAssembler`，路由取自 `ctx.agentDefaultModel.currentSelection()`），服务端 `generateCommitMessage`，客户端提交框内的 ✨ | 
+| FR-3.6 提交详情（初步） | `parseNumstat`（两句 rename 写法都归到当前路径、二进制报 `null` 计数）→ `git-service.showCommit`（合并提交按 `-m --first-parent` 取，否则 `git show` 对合并什么都不打印）→ `GET /git-panel/showCommit` → 历史行内展开（元信息 + 文件清单 + `+n −m`） |
+
+**M4 的承重细节**
+
+1. **`llm` / `agentDefaultModel` 是可选服务，不进 `inject`。** 用 `ctx.get('llm')` 读，
+   没有模型时返回 `no-llm`——面板照常挂载，只有 ✨ 那个按钮解释自己。`host-mount.test.ts`
+   在「没有任何模型」的上下文里驱动了整条路由来钉住这一点。
+2. **删分支的「武装」必须看得见。** 第一次点击只把该行变成危险色 + 一句「再点一次…」，
+   第二次才调用；未合并被拒后，面板用拒绝里的 `not-merged` 把**同一行**武装为强制删除。
+   没有 `window.confirm`（§4.3 禁止），也没有「点了没反应」的悬空状态。
+3. **合并态的判定不能只看冲突分组。** 全部冲突解决后分组为空、`MERGE_HEAD` 仍在，
+   而那正是「继续合并」该出现的时刻；所以状态读取里多了一次 `stat`，而不是一次 git 进程。
+4. **AI 只看暂存区。** 提示词由 `git diff --cached` 构成，因此 ✨ 只在 `scope.kind === 'staged'`
+   时可点（否则它会是一次注定被拒的往返）；diff 超过 `MAX_PROMPT_DIFF_CHARS` 就截断，
+   并把 `truncated` 一路带到界面上说出来（§8.3）。
+5. **提示词与清洗是纯函数。** `core/commit-message.ts` 不含任何 DSH 名字，因此「问什么、
+   怎么读答案」可以在裸 Node 里测（13 项），只有「怎么调模型」在 adapter 里（7 项，用假 ctx 驱动）。
+
+**M5 概要**：discard（二次确认「不可恢复」）、stash、提交图 SVG 泳道、撤销最近提交
+（未推送 `reset --mixed`／已推送 `revert`，执行前后端重新核实 —— FR-3.8）、多仓库扫描（FR-8），
+以及 M4 明确留下的两件：提交详情里下钻单个文件的 diff（FR-7.2）、提交改写（drop/squash/reset）。
 
 ---
 
@@ -291,7 +338,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 |---|---|
 | 1 client-plugin API 稳定性 | **已证实是真问题**：本 profile 里装着 `@dsh-plugin/dsh-loader`，它的存在理由之一就是 `httpServer` 被改名为 `webServer`。防腐层正在起作用——DSH 变更的改动面被收口在 `adapter/` |
 | 2 watcher 可靠性 | 已用轮询（非 `fs.watch`）规避；但**同步盘/网络盘仍未实机验证** |
-| 3 AI 提交信息成本 | 未涉及（M4）。注意文档要求「默认按钮触发、不自动生成」 |
+| 3 AI 提交信息成本 | **已按文档落成**：只有 ✨ 被点才生成，`MAX_PROMPT_DIFF_CHARS = 12 000` 截断、`maxTokens = 512`、60s 截止。**未用一个真实 provider 跑过**——测试用的是桩模型（提示词、清洗、失败分类都验了，真实模型的措辞质量与延迟没验） |
 | 4 大仓库性能 | timeout 15s + `truncated` 标记已就位；**未在真实 monorepo 上压过** |
 | 5 兼容层的代价 | 接受。代价是简单功能也要过一道 ports；收益是 `core` 能在裸 Node 里测试 |
 | 新增 | **第三方 `webServer` 路由不在 DSH 鉴权范围内**（见 D6/§7）。凡是注册路由的插件都要自带网关 |
@@ -299,6 +346,11 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | 新增 | **凭据缺失的 push/pull 只报 git 原文**（`could not read Username … terminal prompts disabled`）。够用，但没有专门文案；等 M4 做远程同步完善时再分类 |
 | 新增 | **`push`/`pull` 会走真实网络**，测试里只覆盖了 file transport 与裸仓库；https/ssh 未实机验证 |
 | 新增 | **插件首次有运行时依赖**（`vscode-diff`，MIT、零依赖，见 D12）。host bundle 仍 `packages: 'external'`，运行时由 profile 的 node_modules 解析；client bundle 不引用它（构建的产物纯度检查会挡住意外引入）。换实现或升级只影响 `core/diff-engine/marks.ts` |
+| 新增 | **`llm`/`agentDefaultModel` 故意不在 `inject` 里**：面板在没有模型的 composition 里照样挂载，只有 FR-3.5 那个按钮返回 `no-llm`。代价是这条路径的类型安全靠 `ctx.get()` 的松弛签名兜底，而不是靠 cordis 的依赖声明 |
+| 新增 | **合并态靠 `stat MERGE_HEAD` 判断**（与 watcher 同一套 `gitDirOf` 假设）。如果某个 git 把合并态放在别处（rebase 用 `rebase-merge/`），当前的 `merging` 就只是「合并」这一种；rebase/cherry-pick 的状态栏不在 M4 |
+| 新增 | **`--numstat` 的 rename 归并是启发式**：`a => b` 与 `src/{a => b}.ts` 两种写法都覆盖了（有真实字节 fixture），但文件名里本身就含 ` => ` 的极端情况会归错。代价可接受：它只影响详情列表显示的名字 |
+| 新增 | **M4 的新写操作都经过与 M2 相同的网关**：POST + 同源 + 1 MiB body 上限 + loopback，破坏性的两个（删分支、中止合并）额外要两次点击。`generateCommitMessage` 也走 POST，因为它花的是模型预算 |
+| 新增 | **分支名/基点/哈希的校验在 core**（`validateBranchName`/`validateBranchBase`/`validateHash`）。基点**只**接受本地分支名或 4–40 位小写 hex，因此 `HEAD~1`、`origin/main^{commit}` 这类表达式一律拒绝——面板不替 git 解释语法 |
 | 新增 | **diff 没有虚拟滚动**（§6 性能 P1）：>5000 行默认折叠（FR-2.6），展开后整块渲染。千行量级在 jsdom 与手工构造的输入上没发现问题，**未在真实大文件上压过** |
 
 ---

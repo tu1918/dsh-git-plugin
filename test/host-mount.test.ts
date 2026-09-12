@@ -1,11 +1,17 @@
 /**
  * Host mount test: `apply()` from the plugin entry, all the way to the wire.
  *
- * This is the closest thing to a real mount that can run without a DSH process,
- * and it works because of a property worth stating: `lib/index.js` imports NOTHING
- * but Node builtins. Every DSH name in the host half is a type, erased at build
- * time, so the plugin's actual entry point can be called with a stand-in context
- * and then driven with real HTTP requests against a real repository.
+ * This is the closest thing to a real mount that can run without a DSH process.
+ * The host half is written so that the entry point can be called with a stand-in
+ * context and then driven with real HTTP requests against a real repository:
+ * almost every DSH name it uses is a type, erased at build time.
+ *
+ * The exception is `host/adapter/llm.ts` (M4), which imports the harness's own
+ * `BlockAssembler` and `createUserMessage` as VALUES — so the host bundle now
+ * carries one runtime `@deepseek-ai/*` import (`@deepseek-ai/dsh-llm`, declared
+ * as a peer dependency) instead of only Node builtins and `vscode-diff`. The
+ * stand-in context below simply answers `get('llm')` with `undefined`, which is
+ * the composition this file is about: the panel must mount without a model.
  *
  * What it proves: the assembly registers both routes, resolves a session through
  * the context's session store, serves a real status over the socket, and removes
@@ -116,6 +122,42 @@ async function serve(registrations: readonly Registration[]): Promise<{
 describe('the host plugin entry', () => {
   it('declares the services it needs', () => {
     assert.deepEqual([...inject].sort(), ['sessions', 'webServer'])
+  })
+
+  it('mounts in a composition with no language model, and says so on request', async () => {
+    const repo = makeRepo('mount-no-llm')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    // Staged, so the request reaches the model step: with an empty index the
+    // service refuses earlier, and for a different reason.
+    stageAll(repo)
+
+    const { ctx, registrations } = stubContext({ 'session-1': repo })
+    apply(ctx)
+    const server = await serve(registrations)
+    try {
+      // FR-3.5 is the only feature that needs a model, and `llm` is deliberately
+      // NOT in `inject`: the panel mounts without one, and the single button that
+      // cannot work explains itself instead of the panel failing to load.
+      const response = await fetch(`${server.origin}/git-panel/generateCommitMessage`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: server.origin },
+        body: JSON.stringify({ session: 'session-1', locale: 'en' }),
+      })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; error?: { code: string } }
+      assert.equal(body.ok, false)
+      assert.equal(body.error?.code, 'no-llm')
+
+      // The rest of the panel is unaffected.
+      const status = await fetch(`${server.origin}/git-panel/status?session=session-1`)
+      assert.equal(status.status, 200)
+      assert.equal(((await status.json()) as { ok: boolean }).ok, true)
+    } finally {
+      await server.close()
+    }
   })
 
   it('registers the two routes and serves a real status through them', async () => {
