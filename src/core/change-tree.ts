@@ -140,3 +140,24 @@ export function changeTreeOf(entries: readonly FileChange[]): readonly ChangeTre
 
   return finish(root, '')
 }
+
+/**
+ * Every changed file at or under a directory node, in draw order.
+ *
+ * The directory checkbox selects exactly these: what the tree shows is what the
+ * selection covers, and a compacted chain (`core/diff-engine`) still counts —
+ * its files are its child's files.
+ * @param node - The directory node to collect under.
+ * @returns The file entries below it, depth first.
+ */
+export function filesUnder(node: ChangeTreeDir): readonly FileChange[] {
+  const found: FileChange[] = []
+  const walk = (children: readonly ChangeTreeNode[]): void => {
+    for (const child of children) {
+      if (child.kind === 'file') found.push(child.entry)
+      else walk(child.children)
+    }
+  }
+  walk(node.children)
+  return found
+}

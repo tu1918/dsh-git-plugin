@@ -79,6 +79,8 @@ export const cls = {
   treeNode: `${P}-tree-node`,
   dirToggle: `${P}-dir-toggle`,
   dirName: `${P}-dir-name`,
+  selectBoxWrap: `${P}-select-box-wrap`,
+  selectBox: `${P}-select-box`,
   stagedPane: `${P}-staged-pane`,
   groupActions: `${P}-group-actions`,
   groupToggle: `${P}-group-toggle`,
@@ -802,12 +804,11 @@ export const css = `
   min-width: 0;
   align-items: center;
   gap: 6px;
-  /* The leading 12px is the group header's own leading padding and the rows' own
-     leading padding: a root directory's caret therefore starts in the same column
-     as the group's caret above it, and its label in the same column as the
-     group's label. The per-depth indent is the wrapper's, so this stays a
-     constant. */
-  padding: 3px 12px;
+  /* The leading 12px a root row used to carry now lives on the selection
+     checkbox's margin (see the select-box block below): the caret follows the
+     box, and both sit in the same columns as the file rows beneath them. The
+     trailing 12px is unchanged — it is still the scrollbar gutter column. */
+  padding: 3px 12px 3px 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -819,6 +820,59 @@ export const css = `
 
 .${cls.dirToggle}:hover .${cls.dirName} {
   color: var(--dsw-alias-label-primary);
+}
+
+/* ── row selection ────────────────────────────────────────────────────────── */
+
+/* The checkbox's wrapper is the row-click firewall (its stopPropagation is in
+   the component); the box itself is a 14px square in a fixed leading slot, so a
+   column of them reads as one column down a long list. */
+.${cls.selectBoxWrap} {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* In the tree the wrapper owns the depth indent as its inline padding, so the
+   slot the row's own leading padding would give has to come from this margin:
+   a root directory's box then starts in the same column as the file rows'
+   boxes beneath it. File rows need none — the row's own 12px does it. */
+.${cls.treeNode} > .${cls.selectBoxWrap} {
+  margin-left: 12px;
+}
+
+.${cls.selectBox} {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l3));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--dsw-alias-bg-layer-1);
+  cursor: pointer;
+}
+
+.${cls.selectBox}:hover {
+  border-color: var(--dsw-alias-label-tertiary);
+}
+
+/* The checked states are the only inked ones — a fill the tick contrasts
+   against, so a glance down the list picks out the selected rows. 'mixed'
+   fills the same way with a dash inside: partly selected still reads as
+   "this row is doing something about the selection". */
+.${cls.selectBox}[aria-checked='true'],
+.${cls.selectBox}[aria-checked='mixed'] {
+  border-color: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3));
+  background: var(--dsw-alias-state-business-primary, var(--dsw-alias-fill-l2));
+}
+
+/* A checked row is part of the pending batch; the faintest wash marks it,
+   the same token hover uses, so the two never fight. */
+.${cls.row}[data-selected='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .${cls.dirName} {

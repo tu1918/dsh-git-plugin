@@ -491,6 +491,21 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | `ui/BottomPane.tsx` + `ui/StatusPanel.tsx` | `onCommitMenu(commit, anchor)` 透传到面板：菜单状态并入既有的 `menu`（判别联合 `kind: 'file' | 'commit'`），同一套 `Popover` + `Menu`；条目只有一条 danger 的「撤销此提交」，`stayOpen` 武装（键 `undo:{oid}`），**武装文案跟着该行的 ○/● 标记走**：未推送「再点一次：改动退回工作区」、已推送「再点一次：创建反转提交（原历史保留）」——客户端的标记与 host 的现问同基准，所以预告不会说谎。成功通知按 host 返回的 `mode` 分两句，都点名被撤销的 subject（reset 后行已不在历史里，这句话是唯一记录）。「行从列表消失则收起菜单」的既有规则**不适用**于 commit 菜单（历史不在面板的 snapshot 里），过期行的答案就是 host 的拒绝 |
 | `ui/error-copy.ts` | `bad-request` 不再丢掉 `error.message`：§5.5 的形状校验在诚实 UI 下不可达，而 undo 的拒绝是**可达状态**（过期行、根提交、已发布合并），那句原因必须被看见。原先「请求不完整，请重新打开这个面板」的文案键随之删除 |
 | 测试 | 14 项（355 总计）：服务层 8 项真仓库（未推送 reset 且改动退回工作区、有上游但未推送仍 reset、已推送 revert 且远端不动而反转提交未推送、过期 hash 拒绝且 HEAD 不动、根提交拒绝、未出生与游离拒绝、已发布合并拒绝而未发布合并 reset 成功、五种非法 hash 不发 git）+ 审计 1 项（记 hash/仓库/mode/subject）+ 路由 1 项（POST 走通 + GET 405）+ 客户端 5 项（只有最新行有菜单且单条目 danger、未推送武装成 reset 文案且第二击执行并通知点名 subject、已推送武装成 revert 文案、Shift+F10 打开且 Enter 先武装后执行、拒绝落在列表旁且历史原样）；既有「不认识会话/非仓库」两表也补进 `undoCommit` |
+
+### 多选交付：变更行勾选与批量操作（2026-09-12，已完成）
+
+产品方要求：「支持选中文件。文件夹行也需要支持，选中文件夹中的文件行」。
+不在文档的 FR 清单里，是文档外新增；FR-3.2 的整组批量按钮升级成「有选中时作用于选中子集」。
+
+| 落点 | 内容 |
+|---|---|
+| `core/change-tree.ts` | 新增纯函数 `filesUnder(node)`：目录节点的全部后代文件 entry（深度优先、与渲染同序，compacted 链也算在其合并行的名下）。目录复选框「代表其下全部文件」靠它回答 |
+| `ui/ChangeGroup.tsx` | 新组件 `RowCheckbox`：`role="checkbox"` 按钮 + `aria-checked`（`true`/`false`/`'mixed'`），外层 span 承担 `stopPropagation`（与行内 `+`/`−` 同一套路——点复选框绝不打开 diff）；勾选用既有 `CheckGlyph`、半选用 `MinusGlyph`。`ChangeRow` 行首挂一个（带 `data-selected` 供高亮与测试寻址）；`TreeNodeView` 的目录行挂一个三态的：全选其下文件、部分选中显示 `mixed`、再点全不选。`Group` 的 `GroupBatch` 加 `selection?: { count, run }`；头部批量按钮有选中时改文案为「暂存选中（N）/取消暂存选中（N）」并只作用于选中路径。新增 `GroupDanger`（选中集的批量丢弃）：只由可丢弃的分组（unstaged/untracked，`canDiscard` 那条规则）在选中非空时传入，第一击武装成确认文案、第二击执行（§4.3，用面板共享的 `useArmedKey`，键 `discard-selected:{area}`） |
+| `ui/StatusPanel.tsx` | 选中状态：`Map<ChangeArea, Set<path>>`（同一路径可在两个分组各勾一次，是两句话）。**存活范围 = 当前会话**：快照刷新后修剪已不在该组的勾选（effect 里比较后再 set，不引发渲染循环）、切会话清空、不写 localStorage。`selectedIn(area, entries)` 按分组自身顺序返回选中路径——发给 git 的参数序 = 用户读列表的顺序。冲突组**保持无整组批量**的既有刻意决定，但选中非空时长出「暂存选中（N）」（即标记已解决，FR-9.2 同一命令）。批量丢弃的通知按条数说「已丢弃 N 个文件的更改」（逐个点名四十个路径不是一句话能承受的） |
+| `styles.ts` | 14px 方框复选框：未选中只有边框，选中/半选填充 `state-business-primary` 让 tick 反色；目录行的复选框用 `margin-left: 12px` 取得与文件行行内边距相同的前导列（`.dirToggle` 的前导内边距相应归零，caret 跟在框后）；`data-selected='true'` 的行加 hover 同款淡底 |
+| `locales.ts` | +9 键（中英）：`action.stageSelected` / `action.unstageSelected` / `action.discardSelected` / `action.discardSelectedArmed` / `select.check` / `select.uncheck` / `select.checkDir` / `select.uncheckDir` / `discard.doneSelected` |
+| 测试 | +10 项（365 总计）：`filesUnder` 3 项（嵌套顺序、compacted 链、多子目录）；客户端 7 项（勾两个行 → 头部「暂存选中 (2)」→ 只发这两个路径；无选中时头部仍是「全部暂存」；已暂存组的取消暂存选中；树模式目录框全选/半选、头部计数、点框不开 diff；丢弃选中先武装后执行且已暂存组无此按钮；行消失后勾选被修剪；冲突组选中即标记解决；切会话清空选择）。既有树测试的两处 `must(..., 'button')` 改为指向 `dirToggle`（目录行第一个按钮现在是复选框），对齐断言从「caret 与分组 caret 同列」更新为「复选框占据前导列」 |
+
 ### 10.2 M5b（M5a 验收之后）
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |

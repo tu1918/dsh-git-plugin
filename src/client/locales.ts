@@ -36,6 +36,10 @@ export const zh = {
   'action.unstage': '取消暂存',
   'action.stageAll': '全部暂存',
   'action.unstageAll': '全部取消暂存',
+  'action.stageSelected': '暂存选中（{count}）',
+  'action.unstageSelected': '取消暂存选中（{count}）',
+  'action.discardSelected': '丢弃选中（{count}）',
+  'action.discardSelectedArmed': '再点一次：丢弃 {count} 个更改（不可恢复）',
   'action.pull': '拉取',
   'action.push': '推送',
   'action.pushAhead': '推送 {count} 个提交',
@@ -55,6 +59,11 @@ export const zh = {
   'menu.fileRow': '{path} 的操作',
   'menu.commitRow': '提交 {hash} 的操作',
 
+  'select.check': '选中 {path}',
+  'select.uncheck': '取消选中 {path}',
+  'select.checkDir': '选中「{path}」中的全部文件',
+  'select.uncheckDir': '取消选中「{path}」中的全部文件',
+
   'action.undoCommit': '撤销此提交',
   'action.undoCommitArmedReset': '再点一次：改动退回工作区',
   'action.undoCommitArmedRevert': '再点一次：创建反转提交（原历史保留）',
@@ -73,6 +82,7 @@ export const zh = {
   'commit.hintClean': '没有可提交的更改。',
   'commit.done': '已提交 {hash}：{subject}',
   'discard.done': '已放弃「{path}」的更改',
+  'discard.doneSelected': '已丢弃 {count} 个文件的更改',
   'commit.ai': '用 AI 生成提交信息',
   'commit.aiNeedsStaged': '先暂存要提交的更改，再生成提交信息',
   'commit.aiTruncated': '暂存差异过大，已截断后再生成；请确认信息覆盖了全部改动。',
@@ -188,6 +198,10 @@ export const en: Record<GitPanelKey, string> = {
   'action.unstage': 'Unstage',
   'action.stageAll': 'Stage all',
   'action.unstageAll': 'Unstage all',
+  'action.stageSelected': 'Stage selected ({count})',
+  'action.unstageSelected': 'Unstage selected ({count})',
+  'action.discardSelected': 'Discard selected ({count})',
+  'action.discardSelectedArmed': 'Click again: discard {count} changes (cannot be undone)',
   'action.pull': 'Pull',
   'action.push': 'Push',
   'action.pushAhead': 'Push {count} commits',
@@ -206,6 +220,11 @@ export const en: Record<GitPanelKey, string> = {
 
   'menu.fileRow': 'Actions for {path}',
   'menu.commitRow': 'Actions for commit {hash}',
+
+  'select.check': 'Select {path}',
+  'select.uncheck': 'Unselect {path}',
+  'select.checkDir': 'Select every file in {path}',
+  'select.uncheckDir': 'Unselect every file in {path}',
 
   'action.undoCommit': 'Undo this commit',
   'action.undoCommitArmedReset': 'Click again: the changes return to the working tree',
@@ -226,6 +245,7 @@ export const en: Record<GitPanelKey, string> = {
   'commit.hintClean': 'There is nothing to commit.',
   'commit.done': 'Committed {hash}: {subject}',
   'discard.done': 'Discarded the changes to {path}',
+  'discard.doneSelected': 'Discarded the changes to {count} files',
   'commit.ai': 'Write the message with AI',
   'commit.aiNeedsStaged': 'Stage the changes you want described first',
   'commit.aiTruncated':

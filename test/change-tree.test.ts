@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { changeTreeOf, type ChangeTreeNode } from '../src/core/change-tree.ts'
+import { changeTreeOf, filesUnder, type ChangeTreeNode } from '../src/core/change-tree.ts'
 import type { ChangeArea, FileChange } from '../src/core/types.ts'
 import { badgeFor } from '../src/core/git-parse.ts'
 
@@ -135,5 +135,48 @@ describe('changeTreeOf (FR-1.3)', () => {
 
   it('answers an empty tree for an empty group', () => {
     assert.deepEqual(changeTreeOf([]), [])
+  })
+})
+
+describe('filesUnder', () => {
+  it('collects every file below a directory, in draw order', () => {
+    const tree = changeTreeOf([
+      change('src/a.ts'),
+      change('src/deep/b.ts'),
+      change('src/deep/deeper/c.ts'),
+      change('src/z.md'),
+    ])
+    const src = tree[0]
+    assert.ok(src?.kind === 'dir')
+    // Depth first, directories before files at each level: `deep`'s own dir
+    // child `deeper` is drawn (and walked) before its file `b.ts`, exactly the
+    // order the tree draws them.
+    assert.deepEqual(
+      filesUnder(src).map((entry) => entry.path),
+      ['src/deep/deeper/c.ts', 'src/deep/b.ts', 'src/a.ts', 'src/z.md'],
+    )
+  })
+
+  it('counts the files of a compacted chain under its merged row', () => {
+    // The row says `src/core`, so its checkbox must select `src/core`'s files —
+    // the chain is a drawing detail, not a selection boundary.
+    const tree = changeTreeOf([change('src/core/git-parse.ts'), change('src/core/format.ts')])
+    const dir = tree[0]
+    assert.ok(dir?.kind === 'dir')
+    assert.equal(dir.label, 'src/core')
+    assert.equal(filesUnder(dir).length, 2)
+  })
+
+  it('collects across several subdirectories of one directory', () => {
+    // A directory with two directory children is the one shape compaction
+    // leaves behind; its checkbox selects both branches.
+    const tree = changeTreeOf([change('a/x/c.ts'), change('a/y/d.ts')])
+    const dir = tree[0]
+    assert.ok(dir?.kind === 'dir')
+    assert.equal(dir.label, 'a')
+    assert.deepEqual(
+      filesUnder(dir).map((entry) => entry.path),
+      ['a/x/c.ts', 'a/y/d.ts'],
+    )
   })
 })

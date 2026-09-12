@@ -532,6 +532,74 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // back on every refresh would not be worth folding.
   const [mode, setMode] = useState<ViewMode>(readViewMode)
   const [collapsedDirs, setCollapsedDirs] = useState<ReadonlySet<string>>(readCollapsedDirs)
+  /**
+   * The rows checked in each group, by area.
+   *
+   * A selection is working state, not a preference: it belongs to this look at
+   * this repository and dies with it. Kept as a map of sets — the same path can
+   * be checked in the unstaged group and, after staging, count again in the
+   * staged one, and the two checks are separate statements.
+   */
+  const [selected, setSelected] = useState<ReadonlyMap<ChangeArea, ReadonlySet<string>>>(
+    new Map(),
+  )
+
+  /**
+   * Check or uncheck one row of one group.
+   * @param area - The group the row belongs to.
+   * @param path - The row's path, which is its identity in the group.
+   */
+  const toggleSelected = useCallback((area: ChangeArea, path: string): void => {
+    setSelected((current) => {
+      const had = current.get(area)?.has(path) ?? false
+      const nextArea = new Set(current.get(area) ?? [])
+      if (had) nextArea.delete(path)
+      else nextArea.add(path)
+      const next = new Map(current)
+      // An area with nothing checked is the same as an area never touched: not
+      // keeping it is what lets `get(area)` everywhere below mean "unchecked".
+      if (nextArea.size === 0) next.delete(area)
+      else next.set(area, nextArea)
+      return next
+    })
+  }, [])
+
+  /**
+   * The checked paths of one group that are still on its rows, in the group's
+   * own order — the exact argument the batch action sends, so the order the
+   * user reads the list in is the order git is asked in.
+   * @param area - The group to read.
+   * @param entries - The group's current rows.
+   */
+  const selectedIn = useCallback(
+    (area: ChangeArea, entries: readonly FileChange[]): readonly string[] =>
+      entries
+        .filter((entry) => selected.get(area)?.has(entry.path) === true)
+        .map((entry) => entry.path),
+    [selected],
+  )
+
+  /**
+   * A check is a statement about the list as it is now: a row that leaves it —
+   * staged away, discarded, committed from another window — takes its check
+   * with it. A checked path with no row left would aim a batch action at
+   * nothing, and the count in the header's label would lie.
+   */
+  useEffect(() => {
+    if (snapshot === null || snapshot.kind !== 'ready') return
+    const { groups } = snapshot.status
+    setSelected((current) => {
+      let changed = false
+      const next = new Map<ChangeArea, ReadonlySet<string>>()
+      for (const [area, paths] of current) {
+        const listed = new Set(groups[area].map((entry) => entry.path))
+        const kept = new Set([...paths].filter((path) => listed.has(path)))
+        if (kept.size !== paths.size) changed = true
+        if (kept.size > 0) next.set(area, kept)
+      }
+      return changed ? next : current
+    })
+  }, [snapshot])
 
   useEffect(() => {
     writeCollapsedGroups(collapsedGroups)
@@ -587,6 +655,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setBranchRefusal(null)
     setGenerating(false)
     setAiNote(null)
+    // The checked rows die with the session too: they were a statement about the
+    // old repository's list, and this one has never been read.
+    setSelected(new Map())
     // Neither the mode nor the folded directories are reset here: both are
     // preferences about how a list is drawn, exactly like the group folds above,
     // and a fold keyed by path is meaningful in the next repository too
@@ -696,6 +767,40 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
 
   const { status, branches } = snapshot
   const { staged, unstaged, untracked, conflicted } = status.groups
+  // The checked rows of each group, still on the list (the prune effect above
+  // keeps them that way). Everything the header buttons need is derived here:
+  // the paths in the group's order, and from them the counts the labels say.
+  const stagedSel = selectedIn('staged', staged)
+  const unstagedSel = selectedIn('unstaged', unstaged)
+  const untrackedSel = selectedIn('untracked', untracked)
+  const conflictedSel = selectedIn('conflicted', conflicted)
+  /**
+   * The selection-aware form of one group's bulk action, or `undefined` when
+   * nothing in the group is checked — the header then keeps the whole-group
+   * form (FR-3.2) it has always had.
+   */
+  const selectionOf = (
+    kind: 'stage' | 'unstage',
+    paths: readonly string[],
+  ): { count: number; run: () => void } | undefined =>
+    paths.length > 0
+      ? { count: paths.length, run: () => (kind === 'stage' ? stage(paths) : unstage(paths)) }
+      : undefined
+  /**
+   * The header's armed discard for one working-tree group: present only while
+   * rows are checked AND the group's rows can be discarded at all (a staged row
+   * has nothing to throw away — `canDiscard`'s rule, `ui/row-actions.ts`).
+   */
+  const dangerOf = (area: ChangeArea, paths: readonly string[]) => {
+    if (!canDiscard(area) || paths.length === 0) return undefined
+    const key = `discard-selected:${area}`
+    return {
+      count: paths.length,
+      armed: armedKey === key,
+      onArm: () => armKey(key),
+      onFire: () => discardSelected(paths),
+    }
+  }
   const scope = commitScopeOf(status.groups)
   // The branch listing is the only source that distinguishes a gone upstream
   // from a branch that simply has no counts.
@@ -745,6 +850,24 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       const result = await git.discard(sessionId, [entry.path], signal)
       if (!result.ok) return result
       return { ok: true, value: t('discard.done', { path: entry.path }) }
+    })
+  }
+
+  /**
+   * Discard every checked row of one working-tree group.
+   *
+   * Only reachable through the header's armed button, so the two-click
+   * confirmation has already been spent by the time this runs; the notice names
+   * the count rather than each path, the way the single-row sentence cannot
+   * afford to when forty files go at once.
+   * @param paths - The checked rows' paths, in the group's own order.
+   */
+  const discardSelected = (paths: readonly string[]): void => {
+    disarm()
+    void perform('discard', t('action.discard'), async () => {
+      const result = await git.discard(sessionId, paths, signal)
+      if (!result.ok) return result
+      return { ok: true, value: t('discard.doneSelected', { count: paths.length }) }
     })
   }
 
@@ -1167,16 +1290,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             t={t}
             busy={busy || pending}
             resident
-            batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+            batch={{
+              kind: 'unstage',
+              run: () => unstage(staged.map((entry) => entry.path)),
+              selection: selectionOf('unstage', stagedSel),
+            }}
             emptyNote={t('group.stagedEmpty')}
             collapsed={collapsedGroups.has('staged')}
             view={view}
             onToggle={() => toggleGroup('staged')}
+            isSelected={(path) => selected.get('staged')?.has(path) === true}
             onStage={stage}
             onUnstage={unstage}
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onToggleSelect={(path) => toggleSelected('staged', path)}
           />
         </div>
         <CommitBox
@@ -1205,25 +1334,39 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               the button that would do the committing. */}
           {/* Conflicts keep the top of the list, where VS Code puts them: while
               a merge is open, nothing in the panel matters more. They get a
-              group and a `+` per row, but no bulk action — the conflict UI
-              proper (FR-9) is a later milestone, and "stage all" over a
-              half-resolved merge is not a shortcut worth offering — and they are
-              NOT resident: a group that exists for one afternoon is not height
-              anyone wants to take back from the list for good. */}
+              group and a `+` per row, but no whole-group bulk action — the
+              conflict UI proper (FR-9) is a later milestone, and "stage all"
+              over a half-resolved merge is not a shortcut worth offering — and
+              they are NOT resident: a group that exists for one afternoon is
+              not height anyone wants to take back from the list for good.
+              What they do get is the selection: checked rows move together,
+              and the header then offers exactly those (which is also how a
+              merge is marked resolved, FR-9.2). */}
           <Group
             label={t('group.conflicted')}
             area="conflicted"
             entries={conflicted}
             t={t}
             busy={busy || pending}
+            batch={
+              conflictedSel.length > 0
+                ? {
+                    kind: 'stage',
+                    run: () => stage(conflicted.map((entry) => entry.path)),
+                    selection: selectionOf('stage', conflictedSel),
+                  }
+                : undefined
+            }
             collapsed={collapsedGroups.has('conflicted')}
             view={view}
             onToggle={() => toggleGroup('conflicted')}
+            isSelected={(path) => selected.get('conflicted')?.has(path) === true}
             onStage={stage}
             onUnstage={unstage}
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onToggleSelect={(path) => toggleSelected('conflicted', path)}
           />
           {/* The working tree as two more sections of this one list. They do not
               size themselves: the body scrolls, and its groups flow into it —
@@ -1238,15 +1381,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             t={t}
             busy={busy || pending}
             resident
-            batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
+            batch={{
+              kind: 'stage',
+              run: () => stage(unstaged.map((entry) => entry.path)),
+              selection: selectionOf('stage', unstagedSel),
+            }}
+            danger={dangerOf('unstaged', unstagedSel)}
             collapsed={collapsedGroups.has('unstaged')}
             view={view}
             onToggle={() => toggleGroup('unstaged')}
+            isSelected={(path) => selected.get('unstaged')?.has(path) === true}
             onStage={stage}
             onUnstage={unstage}
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onToggleSelect={(path) => toggleSelected('unstaged', path)}
           />
           <Group
             label={t('group.untracked')}
@@ -1255,15 +1405,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             t={t}
             busy={busy || pending}
             resident
-            batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
+            batch={{
+              kind: 'stage',
+              run: () => stage(untracked.map((entry) => entry.path)),
+              selection: selectionOf('stage', untrackedSel),
+            }}
+            danger={dangerOf('untracked', untrackedSel)}
             collapsed={collapsedGroups.has('untracked')}
             view={view}
             onToggle={() => toggleGroup('untracked')}
+            isSelected={(path) => selected.get('untracked')?.has(path) === true}
             onStage={stage}
             onUnstage={unstage}
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onToggleSelect={(path) => toggleSelected('untracked', path)}
           />
           {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
         </div>

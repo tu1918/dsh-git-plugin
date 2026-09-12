@@ -23,7 +23,7 @@
 
 import type { ReactNode } from 'react'
 
-import { changeTreeOf, type ChangeTreeNode } from '../../core/change-tree.ts'
+import { changeTreeOf, filesUnder, type ChangeTreeNode } from '../../core/change-tree.ts'
 import { pathParts } from '../../core/format.ts'
 import { badgeFor } from '../../core/git-parse.ts'
 import type { ChangeArea, FileChange } from '../../core/types.ts'
@@ -32,7 +32,7 @@ import { cls } from './styles.ts'
 import { useArmedKey } from './armed.ts'
 import { dirKey, type ChangeView } from './change-view.ts'
 import { canDiscard } from './row-actions.ts'
-import { CaretGlyph, DiscardGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
+import { CaretGlyph, CheckGlyph, DiscardGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
 
 /** One glyph button with a tooltip and an accessible name. */
 export function ToolButton({
@@ -70,6 +70,45 @@ export function ToolButton({
 }
 
 /**
+ * The selection checkbox a file row or a directory row carries.
+ *
+ * Not a native `<input type="checkbox">`: the row is a `role="button"` band whose
+ * whole area opens the diff, and the checkbox is one of the controls inside it —
+ * same containment story as the `+`/`−` strip. A wrapper span takes the
+ * stopPropagation so ticking a box never opens a diff, and the box itself is a
+ * real `role="checkbox"` button so the tick is one Tab stop with an
+ * `aria-checked` state, including `mixed` for a directory whose files are only
+ * partly chosen.
+ */
+export function RowCheckbox({
+  checked,
+  label,
+  onToggle,
+}: {
+  /** Selected, unselected, or (a directory only) partly selected. */
+  readonly checked: boolean | 'mixed'
+  /** The accessible name; the caller builds it from the row's path. */
+  readonly label: string
+  readonly onToggle: () => void
+}): ReactNode {
+  return (
+    <span className={cls.selectBoxWrap} onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={label}
+        className={cls.selectBox}
+        onClick={onToggle}
+      >
+        {checked === true && <CheckGlyph size={10} />}
+        {checked === 'mixed' && <MinusGlyph size={10} />}
+      </button>
+    </span>
+  )
+}
+
+/**
  * One changed file, with the badge its group gives it and its staging action.
  *
  * The whole row opens the diff (FR-2.1) rather than only its path: a row is the
@@ -96,11 +135,13 @@ export function ChangeRow({
   t,
   busy,
   showDirectory = true,
+  selected,
   onStage,
   onUnstage,
   onOpen,
   onMenu,
   onDiscard,
+  onToggleSelect,
 }: {
   readonly entry: FileChange
   readonly area: ChangeArea
@@ -114,6 +155,8 @@ export function ChangeRow({
    * sidebar, the reason the file name itself gets truncated.
    */
   readonly showDirectory?: boolean
+  /** Whether this row is part of the selection the group's batch acts on. */
+  readonly selected: boolean
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
@@ -126,6 +169,8 @@ export function ChangeRow({
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
   /** Discard this row's working-tree change, once the row is armed (FR-6.1). */
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  /** Add this row to the selection, or take it out. */
+  readonly onToggleSelect: (path: string) => void
 }): ReactNode {
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
@@ -151,6 +196,7 @@ export function ChangeRow({
       title={tooltip}
       role="button"
       tabIndex={0}
+      data-selected={String(selected)}
       aria-label={t('diff.open', { path: entry.path })}
       onClick={() => onOpen(entry, area)}
       onContextMenu={(event) => {
@@ -179,6 +225,15 @@ export function ChangeRow({
         onOpen(entry, area)
       }}
     >
+      <RowCheckbox
+        checked={selected}
+        label={
+          selected
+            ? t('select.uncheck', { path: entry.path })
+            : t('select.check', { path: entry.path })
+        }
+        onToggle={() => onToggleSelect(entry.path)}
+      />
       <span className={cls.badge} data-status={badge}>
         {badge}
       </span>
@@ -242,10 +297,38 @@ export function ChangeRow({
 
 /** A group's bulk action (FR-3.2). */
 export interface GroupBatch {
-  /** Which way the whole group moves. */
+  /** Which way the group moves. */
   readonly kind: 'stage' | 'unstage'
   /** Run it over every path in the group. */
   readonly run: () => void
+  /**
+   * The selection-aware form of the same action, or `undefined` while nothing in
+   * this group is selected: with rows checked the header button acts on exactly
+   * those paths instead of the whole group, and says so.
+   */
+  readonly selection?: {
+    /** How many rows are checked. */
+    readonly count: number
+    /** Run it over the selected paths only. */
+    readonly run: () => void
+  }
+}
+
+/**
+ * The selection's destructive action, shown beside the bulk action (FR-6.1).
+ *
+ * Like every irreversible control here it arms rather than fires (§4.3): the
+ * first click turns the button into its own confirmation, the second runs it.
+ */
+export interface GroupDanger {
+  /** How many selected rows the confirmed click would discard. */
+  readonly count: number
+  /** Whether the first click has been spent. */
+  readonly armed: boolean
+  /** §4.3's first click: arm the confirmation. */
+  readonly onArm: () => void
+  /** The second click: discard the selection. */
+  readonly onFire: () => void
 }
 
 /**
@@ -273,11 +356,13 @@ function TreeNodeView({
   t,
   busy,
   view,
+  isSelected,
   onStage,
   onUnstage,
   onOpen,
   onMenu,
   onDiscard,
+  onToggleSelect,
 }: {
   readonly node: ChangeTreeNode
   readonly area: ChangeArea
@@ -285,11 +370,14 @@ function TreeNodeView({
   readonly t: Translate
   readonly busy: boolean
   readonly view: ChangeView
+  readonly isSelected: (path: string) => boolean
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  /** Add a row to the selection, or take it out (called once per path). */
+  readonly onToggleSelect: (path: string) => void
 }): ReactNode {
   // Depth alone: the 12px that lines the tree up with the group header's caret
   // belongs to the button and the row themselves (both carry it in the
@@ -305,11 +393,13 @@ function TreeNodeView({
           t={t}
           busy={busy}
           showDirectory={false}
+          selected={isSelected(node.entry.path)}
           onStage={onStage}
           onUnstage={onUnstage}
           onOpen={onOpen}
           onMenu={onMenu}
           onDiscard={onDiscard}
+          onToggleSelect={onToggleSelect}
         />
       </div>
     )
@@ -319,9 +409,32 @@ function TreeNodeView({
   // folding `src` in the staged drawer must not fold it in Changes too.
   const key = dirKey(area, node.path)
   const folded = view.collapsedDirs.has(key)
+  // The directory's box stands for its files, so its state is their state in
+  // aggregate: every one chosen is "on", some chosen is "mixed" — which is the
+  // honest answer when the user ticks one file under a folder and the folder
+  // still holds four more.
+  const under = filesUnder(node)
+  const chosen = under.filter((entry) => isSelected(entry.path)).length
+  const dirState = chosen === under.length ? true : chosen > 0 ? 'mixed' : false
+  const toggleDirSelection = (): void => {
+    // All chosen → drop them all; otherwise adopt them all. The guard on each
+    // path keeps a 'mixed' box from first unticking the chosen file on its way
+    // to ticking the rest.
+    if (dirState === true) under.forEach((entry) => { if (isSelected(entry.path)) onToggleSelect(entry.path) })
+    else under.forEach((entry) => { if (!isSelected(entry.path)) onToggleSelect(entry.path) })
+  }
   return (
     <>
       <div className={cls.treeNode} style={indent} data-tree-dir={node.path}>
+        <RowCheckbox
+          checked={dirState}
+          label={
+            dirState === true
+              ? t('select.uncheckDir', { path: node.path })
+              : t('select.checkDir', { path: node.path })
+          }
+          onToggle={toggleDirSelection}
+        />
         <button
           type="button"
           className={cls.dirToggle}
@@ -346,11 +459,13 @@ function TreeNodeView({
             t={t}
             busy={busy}
             view={view}
+            isSelected={isSelected}
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onToggleSelect={onToggleSelect}
           />
         ))}
     </>
@@ -379,16 +494,19 @@ export function Group({
   t,
   busy,
   batch,
+  danger,
   emptyNote,
   resident,
   collapsed,
   view,
   onToggle,
+  isSelected,
   onStage,
   onUnstage,
   onOpen,
   onMenu,
   onDiscard,
+  onToggleSelect,
 }: {
   readonly label: string
   readonly area: ChangeArea
@@ -396,6 +514,14 @@ export function Group({
   readonly t: Translate
   readonly busy: boolean
   readonly batch?: GroupBatch
+  /**
+   * The selection's destructive action, beside the bulk action.
+   *
+   * Only working-tree groups pass it (a staged row has nothing to discard), and
+   * only while their selection is non-empty: without rows checked there is no
+   * second target for the two-click confirmation to hit.
+   */
+  readonly danger?: GroupDanger
   /**
    * Copy to show when the group has no rows, under its header.
    *
@@ -421,11 +547,15 @@ export function Group({
   readonly view: ChangeView
   /** Fold or unfold this group. */
   readonly onToggle: () => void
+  /** Whether one row is part of the selection, by path. */
+  readonly isSelected: (path: string) => boolean
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  /** Add a row to the selection, or take it out (called once per path). */
+  readonly onToggleSelect: (path: string) => void
 }): ReactNode {
   // An empty group is drawn when the caller says it is furniture, or when it has
   // an empty note to show — the note is what a resident group says INSTEAD of
@@ -452,10 +582,13 @@ export function Group({
         {/* The bulk action follows the rows: an empty section offers nothing to
             move, so its button would be a disabled control with nothing to explain
             it. The staged drawer is the exception, and it is the caller's to make:
-            it passes an empty note, and the note is the explanation. */}
-        {batch !== undefined &&
-          (entries.length > 0 || emptyNote !== undefined) && (
-            <span className={cls.groupActions}>
+            it passes an empty note, and the note is the explanation. With rows
+            checked the same button becomes the selection's action: what it will
+            move is no longer "everything" but "these N", and its label says so. */}
+        {(batch !== undefined && (entries.length > 0 || emptyNote !== undefined)) ||
+        danger !== undefined ? (
+          <span className={cls.groupActions}>
+            {batch !== undefined && (entries.length > 0 || emptyNote !== undefined) && (
               <button
                 type="button"
                 className={cls.ghost}
@@ -470,12 +603,36 @@ export function Group({
                     ? `${batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')} · ${emptyNote}`
                     : undefined
                 }
-                onClick={batch.run}
+                onClick={batch.selection !== undefined ? batch.selection.run : batch.run}
               >
-                {batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')}
+                {batch.selection !== undefined
+                  ? batch.kind === 'stage'
+                    ? t('action.stageSelected', { count: batch.selection.count })
+                    : t('action.unstageSelected', { count: batch.selection.count })
+                  : batch.kind === 'stage'
+                    ? t('action.stageAll')
+                    : t('action.unstageAll')}
               </button>
-            </span>
-          )}
+            )}
+            {danger !== undefined && (
+              // The selection's discard is the one irreversible bulk action, so it
+              // is a word button in the danger colour and arms instead of firing:
+              // the first click renames it into its own confirmation (§4.3), and
+              // only the second discards anything.
+              <button
+                type="button"
+                className={cls.danger}
+                data-armed={String(danger.armed)}
+                disabled={busy}
+                onClick={danger.armed ? danger.onFire : danger.onArm}
+              >
+                {danger.armed
+                  ? t('action.discardSelectedArmed', { count: danger.count })
+                  : t('action.discardSelected', { count: danger.count })}
+              </button>
+            )}
+          </span>
+        ) : null}
       </div>
       {!collapsed && entries.length === 0 && emptyNote !== undefined && (
         <p className={cls.groupEmpty}>{emptyNote}</p>
@@ -489,11 +646,13 @@ export function Group({
             area={area}
             t={t}
             busy={busy}
+            selected={isSelected(entry.path)}
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onToggleSelect={onToggleSelect}
           />
         ))}
       {!collapsed &&
@@ -506,11 +665,13 @@ export function Group({
             t={t}
             busy={busy}
             view={view}
+            isSelected={isSelected}
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onToggleSelect={onToggleSelect}
           />
         ))}
     </section>

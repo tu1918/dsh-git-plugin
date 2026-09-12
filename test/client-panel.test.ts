@@ -1559,6 +1559,293 @@ describe('staging from the change list', () => {
   })
 })
 
+describe('selecting rows for batch actions', () => {
+  /** The selection checkbox inside one row band. */
+  function boxOf(row: Element): HTMLButtonElement {
+    return must<HTMLButtonElement>(row, `.${cls.selectBox}`)
+  }
+
+  /** The group header's bulk button (the first button in the actions span). */
+  function bulkButton(container: HTMLElement, area: string): HTMLButtonElement {
+    return must<HTMLButtonElement>(
+      must(container, `[data-group="${area}"] .${cls.groupActions}`),
+      'button',
+    )
+  }
+
+  it('stages exactly the checked unstaged rows from the group header', async () => {
+    const calls: ActionLog = { entries: [] }
+    const status = statusWith({
+      unstaged: [
+        { path: 'a.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'b.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'c.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const group = must(container, '[data-group="unstaged"]')
+    // Nothing checked: the header is FR-3.2's whole-group action, unchanged.
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage all')
+
+    const rows = group.querySelectorAll(`.${cls.row}`)
+    await click(boxOf(rows[0] as Element))
+    await click(boxOf(rows[1] as Element))
+    // The label now names what it will move — "these 2", not "everything".
+    const button = bulkButton(container, 'unstaged')
+    assert.equal(button.textContent, 'Stage selected (2)')
+    // Checked rows are marked; the unchecked one is not.
+    assert.equal(
+      group.querySelectorAll(`.${cls.row}[data-selected='true']`).length,
+      2,
+    )
+
+    await click(button)
+    assert.deepEqual(calls.entries, ['stage:a.ts,b.ts'])
+  })
+
+  it('unstages exactly the checked staged rows', async () => {
+    const calls: ActionLog = { entries: [] }
+    const status = statusWith({
+      staged: [
+        { path: 'a.ts', index: 'M', worktree: '.', staged: true, untracked: false, conflicted: false },
+        { path: 'b.ts', index: 'A', worktree: '.', staged: true, untracked: false, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    assert.equal(bulkButton(container, 'staged').textContent, 'Unstage all')
+    const rows = must(container, '[data-group="staged"]').querySelectorAll(`.${cls.row}`)
+    await click(boxOf(rows[1] as Element))
+    const button = bulkButton(container, 'staged')
+    assert.equal(button.textContent, 'Unstage selected (1)')
+    await click(button)
+    assert.deepEqual(calls.entries, ['unstage:b.ts'])
+  })
+
+  it('selects every file under a directory from the tree, and reads "mixed" on a part', async () => {
+    const calls: ActionLog = { entries: [] }
+    const diffCalls: string[] = []
+    const status = statusWith({
+      unstaged: [
+        { path: 'deep/nested/dir/changed.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'deep/nested/dir/other.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, diffCalls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const dir = dirNode(container, 'unstaged', 'deep/nested/dir')
+    const dirBox = boxOf(dir)
+    assert.equal(dirBox.getAttribute('aria-checked'), 'false')
+
+    await click(dirBox)
+    // The directory adopts its whole subtree: both file rows checked, the box
+    // reads "on", and the header counts exactly the files the box stands for.
+    assert.equal(dirBox.getAttribute('aria-checked'), 'true')
+    assert.equal(
+      must(container, '[data-tree-file="deep/nested/dir/changed.ts"]')
+        .querySelector(`.${cls.selectBox}`)
+        ?.getAttribute('aria-checked'),
+      'true',
+    )
+    assert.equal(
+      must(container, '[data-tree-file="deep/nested/dir/other.ts"]')
+        .querySelector(`.${cls.selectBox}`)
+        ?.getAttribute('aria-checked'),
+      'true',
+    )
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage selected (2)')
+
+    // Ticking one file back off leaves the other checked: the directory's own
+    // box is the honest "some", not a silent "all" or "none".
+    await click(
+      must<HTMLButtonElement>(
+        must(container, '[data-tree-file="deep/nested/dir/changed.ts"]'),
+        `.${cls.selectBox}`,
+      ),
+    )
+    assert.equal(dirBox.getAttribute('aria-checked'), 'mixed')
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage selected (1)')
+    // The checkbox is a control, not the row: ticking it opened no diff.
+    assert.deepEqual(diffCalls, [])
+
+    await click(bulkButton(container, 'unstaged'))
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/other.ts'])
+  })
+
+  it('discards the selection only after the header button arms, and never offers it on the staged group', async () => {
+    const calls: ActionLog = { entries: [] }
+    const status = statusWith({
+      unstaged: [
+        { path: 'a.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'b.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+      staged: [
+        { path: 's.ts', index: 'M', worktree: '.', staged: true, untracked: false, conflicted: false },
+      ],
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: status } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // A staged row has no working-tree change to throw away, so its header
+    // never grows the destructive button — not even with rows checked.
+    await click(
+      must<HTMLButtonElement>(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.selectBox}`),
+    )
+    assert.equal(
+      container.querySelector(`[data-group="staged"] .${cls.groupActions} .${cls.danger}`),
+      null,
+    )
+
+    const group = must(container, '[data-group="unstaged"]')
+    const rows = group.querySelectorAll(`.${cls.row}`)
+    await click(boxOf(rows[0] as Element))
+    await click(boxOf(rows[1] as Element))
+
+    const danger = must<HTMLButtonElement>(
+      must(group, `.${cls.groupActions}`),
+      `.${cls.danger}`,
+    )
+    assert.equal(danger.textContent, 'Discard selected (2)')
+    // The first click arms rather than fires (§4.3)...
+    await click(danger)
+    assert.deepEqual(calls.entries, [])
+    const armed = must<HTMLButtonElement>(must(group, `.${cls.groupActions}`), `.${cls.danger}`)
+    assert.match(armed.textContent ?? '', /cannot be undone/)
+    // ...and the second discards exactly the checked paths, naming the count.
+    await click(armed)
+    assert.deepEqual(calls.entries, ['discard:a.ts,b.ts'])
+    assert.match(must(container, '[data-action-done]').textContent ?? '', /2 files/)
+  })
+
+  it('drops the checks of rows that leave the list', async () => {
+    // The first reading has three files; once the repository reports two of
+    // them gone (staged elsewhere, say), their checks must not linger — a
+    // checked path with no row would aim the next batch at nothing.
+    let listeners: ((change: GitChange) => void)[] = []
+    const full = statusWith({
+      unstaged: [
+        { path: 'a.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'b.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+        { path: 'c.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+    })
+    const rest = statusWith({
+      unstaged: [
+        { path: 'c.ts', index: '.', worktree: 'M', staged: false, untracked: false, conflicted: false },
+      ],
+    })
+    let current = full
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      status: () => Promise.resolve({ ok: true, value: current }),
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((l) => l !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+
+    const rows = must(container, '[data-group="unstaged"]').querySelectorAll(`.${cls.row}`)
+    await click(boxOf(rows[0] as Element))
+    await click(boxOf(rows[1] as Element))
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage selected (2)')
+
+    // The repository moves on without the panel acting; the re-read that
+    // follows must take the vanished rows' checks with them.
+    current = rest
+    await act(async () => {
+      for (const listener of listeners) listener({ kinds: ['worktree'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage all')
+    assert.equal(
+      container.querySelectorAll(`[data-group="unstaged"] .${cls.row}[data-selected='true']`).length,
+      0,
+    )
+  })
+
+  it('lets a checked conflict move with the same header action that marks one resolved', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The conflict group has no whole-group bulk action — half-resolved merges
+    // must not be stageable in one click — so its header starts empty...
+    assert.equal(container.querySelector(`[data-group="conflicted"] .${cls.groupActions}`), null)
+    // ...and grows one only for a selection.
+    await click(
+      must<HTMLButtonElement>(must(container, `[data-group="conflicted"] .${cls.row}`), `.${cls.selectBox}`),
+    )
+    const button = bulkButton(container, 'conflicted')
+    assert.equal(button.textContent, 'Stage selected (1)')
+    await click(button)
+    assert.deepEqual(calls.entries, ['stage:both.txt'])
+  })
+
+  it('forgets the selection when the panel switches sessions', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    rendered.push(root)
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }))
+    })
+    await settle()
+
+    await click(
+      must<HTMLButtonElement>(must(container, `[data-group="unstaged"] .${cls.row}`), `.${cls.selectBox}`),
+    )
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage selected (1)')
+
+    // A different session is a different repository: the check was a statement
+    // about the old list and must not ride along.
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's2', git: stubGit({}), t, locale: 'en' }))
+    })
+    await settle()
+    assert.equal(bulkButton(container, 'unstaged').textContent, 'Stage all')
+  })
+})
+
 describe('the commit box (FR-3.3, FR-3.4)', () => {
   it('commits the index, and says how many files that is', async () => {
     const calls: ActionLog = { entries: [] }
@@ -3506,8 +3793,10 @@ describe('the file tree (FR-1.3)', () => {
     const compacted = dirNode(container, 'unstaged', 'deep/nested/dir')
     assert.match(compacted.textContent ?? '', /deep\/nested\/dir/)
     // The row draws the chain, the tooltip and the key carry the real path.
+    // The compacted chain's disclosure is still a button, now behind the row's
+    // selection checkbox — the checkbox leads, the disclosure follows.
     assert.equal(
-      must<HTMLButtonElement>(compacted, 'button').getAttribute('title'),
+      must<HTMLButtonElement>(compacted, `button.${cls.dirToggle}`).getAttribute('title'),
       'deep/nested/dir',
     )
     // The count of everything under it stays visible, folded or not.
@@ -3518,10 +3807,12 @@ describe('the file tree (FR-1.3)', () => {
     assert.equal(compacted.style.paddingLeft, '0px')
     assert.equal(deepest.style.paddingLeft, '18px')
 
-    // The root directory's caret starts in the same column as the group header's
-    // caret above it, which is what the two 12px paddings agree on: the header's
-    // own leading padding, and the directory button's. Measured rather than
-    // assumed, because this is exactly the kind of thing that drifts.
+    // The selection checkbox now leads every row. Its slot is what the two 12px
+    // paddings used to agree on: a file row's box rides on the row's own leading
+    // padding, a directory row's on this margin, so both columns line up. The
+    // disclosure button follows the box with no leading padding of its own.
+    // Measured rather than assumed, because this is exactly the kind of thing
+    // that drifts.
     const headerCaret = must(
       must(container, '[data-group="unstaged"]'),
       `.${cls.groupToggle} .${cls.groupCaret}`,
@@ -3529,8 +3820,12 @@ describe('the file tree (FR-1.3)', () => {
     const dirCaret = must(compacted, `.${cls.groupCaret}`)
     const computed = (node: Element): string => window.getComputedStyle(node).paddingLeft
     assert.equal(
-      computed(must(compacted, 'button')),
-      computed(must(container, `.${cls.groupHead}`)),
+      computed(must<HTMLButtonElement>(compacted, `button.${cls.dirToggle}`)),
+      '0px',
+    )
+    assert.equal(
+      window.getComputedStyle(must(compacted, `.${cls.selectBoxWrap}`)).marginLeft,
+      '12px',
     )
     assert.equal(computed(headerCaret.parentElement as Element), '0px')
     assert.equal(dirCaret.parentElement?.className, cls.dirToggle)
@@ -3551,7 +3846,7 @@ describe('the file tree (FR-1.3)', () => {
     await settle()
 
     const dir = dirNode(container, 'unstaged', 'deep/nested/dir')
-    const toggle = must<HTMLButtonElement>(dir, 'button')
+    const toggle = must<HTMLButtonElement>(dir, `button.${cls.dirToggle}`)
     assert.equal(toggle.getAttribute('aria-expanded'), 'true')
     // The caret is the only thing that says "this row holds rows". It must
     // actually turn — the directory rows share the group header's glyph, and a
@@ -3577,9 +3872,10 @@ describe('the file tree (FR-1.3)', () => {
     )
     await settle()
     assert.equal(
-      must<HTMLButtonElement>(dirNode(again, 'unstaged', 'deep/nested/dir'), 'button').getAttribute(
-        'aria-expanded',
-      ),
+      must<HTMLButtonElement>(
+        dirNode(again, 'unstaged', 'deep/nested/dir'),
+        `button.${cls.dirToggle}`,
+      ).getAttribute('aria-expanded'),
       'false',
     )
   })
