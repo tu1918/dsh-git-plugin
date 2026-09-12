@@ -1120,17 +1120,30 @@ export const css = `
   gap: 1px;
 }
 
-/* The hover band and the selected band. The row wrapper carries them because
-   both the entry button and the metadata line are part of "the row the pointer
-   is on" — a highlight that stopped at the title would make the caption look
-   like a different thing. The tokens are the GUI's own interactive aliases, the
-   same ones the built-in sidebars use for a hovered or current row. */
+/* The row itself is the button, and it holds both of its lines. That is what
+   makes the hot zone equal to the hover band: a band that covered the caption
+   while only the title answered a click would be lying about where the click
+   lands. So the button carries the reset (no chrome, the row's type, the full
+   width) AND the bands — the GUI's own interactive aliases, the same ones the
+   built-in sidebars use for a hovered or current row. The element's
+   data-selected attribute is the "you are here" state: the commit whose detail
+   is open. (No backticks in this file's comments: the sheet is a template
+   string, and one would end it early.) */
 .${cls.commitRow} {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
   flex-direction: column;
+  align-items: stretch;
   gap: 1px;
   padding: 4px 12px 5px 22px;
+  border: 0;
   border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .${cls.commitRow}:hover {
@@ -1141,37 +1154,20 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-active);
 }
 
+.${cls.commitRow}:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
 /* ── commit detail (FR-3.6) ─────────────────────────────────────────────── */
 
-/* The row's entry is a real button — it is the handle for per-commit operations
-   — so it needs the reset a div never did: no chrome of its own, the row's type,
-   and the full width of the row. Its own aria-expanded turns the caret, exactly
-   as the change group's header does. (No backticks in this file's comments: the
-   sheet is a template string.) */
+/* The button's two lines. They are plain flex rows now that the button is the
+   row: no reset of their own to keep in step with. */
 .${cls.commitTop} {
   display: flex;
-  width: 100%;
-  box-sizing: border-box;
   min-width: 0;
   align-items: baseline;
   gap: 6px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.${cls.commitTop}:hover .${cls.commitSubject} {
-  color: var(--dsw-alias-brand-primary);
-}
-
-.${cls.commitTop}:focus-visible {
-  outline: 1px solid var(--dsw-alias-brand-primary);
-  outline-offset: 1px;
 }
 
 .${cls.historyCaret} {
@@ -1181,7 +1177,7 @@ export const css = `
   transition: transform 120ms ease;
 }
 
-.${cls.commitTop}[aria-expanded='true'] .${cls.historyCaret} {
+.${cls.commitRow}[aria-expanded='true'] .${cls.historyCaret} {
   transform: rotate(90deg);
 }
 

@@ -101,34 +101,34 @@ function CommitRow({
     // (M5's drop/squash/reset) address a commit by that id and the DOM is where a
     // future action strip will read it from. The short hash stays what is shown.
     <div className={cls.commit} data-open={String(open)} data-commit={commit.oid}>
-      {/* The row the pointer is on: the entry button plus the metadata line,
-          wrapped so ONE hover band covers both — the same effect the comparable
-          sidebar's commit rows have, and the reason a row reads as one control
-          rather than as a title with a caption. The detail below stays OUTSIDE
-          this wrapper, so an open commit's highlight ends where its detail
-          begins. `data-selected` marks the commit whose detail is showing, which
-          is what turns the band from a hover state into a "you are here". */}
-      <div className={cls.commitRow} data-selected={String(open)}>
-        {/* A real `<button>`, not a div wearing `role="button"`: the row is the
-            handle for everything that will be done TO this commit, so it gets the
-            element that already has focus, Enter/Space activation, and a disabled
-            state for free. Consequence to keep in mind for that action strip: its
-            buttons have to be SIBLINGS of this one, never children — a button
-            inside a button is invalid markup and the inner one is not reliably
-            clickable (the same rule the change group's header follows). */}
-        <button
-          type="button"
-          className={cls.commitTop}
-          aria-expanded={open}
-          aria-label={t('history.open', { hash: commit.shortOid })}
-          title={commit.subject}
-          onClick={onToggle}
-        >
+      {/* The row IS the button, and it holds both of its lines.
+          That is the whole point: the hot zone has to be what the hover band
+          covers, or the band lies about where a click lands. The comparable
+          sidebar's commit rows have the same reach (they are a div wearing
+          `role="button"`, which is the same shape with worse semantics); ours is
+          a real `<button>`, so focus, Enter/Space and a future disabled state
+          come from the element rather than from a hand-rolled key handler.
+          Consequence to keep in mind for the action strip recorded in
+          docs/plan.md: it has to be a SIBLING of this button, never a child —
+          a button inside a button is invalid markup, and the inner one is not
+          reliably clickable (the same rule the change group's header follows).
+          That is also why the reference implementation keeps its per-commit
+          operations in a row-level context menu. */}
+      <button
+        type="button"
+        className={cls.commitRow}
+        data-selected={String(open)}
+        aria-expanded={open}
+        aria-label={t('history.open', { hash: commit.shortOid })}
+        title={commit.subject}
+        onClick={onToggle}
+      >
+        <span className={cls.commitTop}>
           <CaretGlyph className={cls.historyCaret} />
           <span className={cls.commitHash}>{commit.shortOid}</span>
           <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
-        </button>
-        <div className={cls.commitMeta}>
+        </span>
+        <span className={cls.commitMeta} data-commit-meta="true">
           <span>{relative}</span>
           <span>·</span>
           <span>{commit.authorName}</span>
@@ -141,8 +141,8 @@ function CommitRow({
               {commit.pushed ? <DotGlyph /> : <RingGlyph />}
             </span>
           )}
-        </div>
-      </div>
+        </span>
+      </button>
       {open && (
         <div className={cls.commitDetail} data-commit-detail={commit.shortOid}>
           {detail === null && <p className={cls.note}>{t('history.loading')}</p>}

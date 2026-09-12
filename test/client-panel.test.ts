@@ -2101,11 +2101,10 @@ describe('the commit detail (FR-3.6)', () => {
     await click(must(container, `.${cls.bottomTab}`))
     assert.equal(container.querySelector('[data-commit-detail]'), null)
 
-    // The entry is the handle for per-commit operations, so it is a real
-    // `<button>` — focusable and Enter/Space-activatable without a hand-rolled
-    // keyboard handler — and it carries the commit's full id for those
-    // operations to address.
-    const entry = must<HTMLButtonElement>(container, `.${cls.commitTop}`)
+    // The row IS the button — not just its title line. The hot zone has to be
+    // what the hover band covers, or the band lies about where a click lands;
+    // both of the row's lines are inside this one element.
+    const entry = must<HTMLButtonElement>(container, `.${cls.commitRow}`)
     assert.equal(entry.tagName, 'BUTTON')
     assert.equal(entry.getAttribute('role'), null)
     assert.equal(entry.getAttribute('aria-expanded'), 'false')
@@ -2113,15 +2112,18 @@ describe('the commit detail (FR-3.6)', () => {
     assert.equal(document.activeElement, entry, 'the row must be reachable by keyboard')
     const row = must(container, `.${cls.commit}`)
     assert.equal(row.getAttribute('data-commit'), 'b'.repeat(40))
-    // The band that covers the row's two lines, and the state that keeps it lit
-    // while its detail is open.
-    const band = must(container, `.${cls.commitRow}`)
-    assert.equal(band.getAttribute('data-selected'), 'false')
+    // The band covers the title line AND the metadata line: both are children of
+    // the button, so there is no part of the band that does not respond.
+    assert.ok(entry.contains(must(container, `.${cls.commitTop}`)))
+    assert.ok(entry.contains(must(container, `[data-commit-meta]`)))
+    assert.equal(entry.getAttribute('data-selected'), 'false')
 
-    await click(entry)
+    // Clicking the CAPTION toggles too. That is the assertion that would fail if
+    // the button ever went back to wrapping only the title.
+    await click(must(container, `[data-commit-meta]`))
     await flush()
     assert.equal(entry.getAttribute('aria-expanded'), 'true')
-    assert.equal(band.getAttribute('data-selected'), 'true')
+    assert.equal(entry.getAttribute('data-selected'), 'true')
 
     const panel = must(container, '[data-commit-detail]')
     const text = panel.textContent ?? ''
@@ -2139,7 +2141,7 @@ describe('the commit detail (FR-3.6)', () => {
     await click(entry)
     assert.equal(container.querySelector('[data-commit-detail]'), null)
     assert.equal(entry.getAttribute('aria-expanded'), 'false')
-    assert.equal(band.getAttribute('data-selected'), 'false')
+    assert.equal(entry.getAttribute('data-selected'), 'false')
     await click(entry)
     assert.equal(calls.entries.length, 1)
   })
