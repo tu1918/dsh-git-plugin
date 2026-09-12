@@ -9,10 +9,17 @@
  * - the **change list** takes whatever is left (`flex: 1 1 auto`) and scrolls, so
  *   a repository with a thousand changed files costs the regions above and below
  *   nothing;
- * - everything else is bounded by a number from this file, in **both**
- *   directions. A region that can grow without a ceiling is a region that
- *   eventually squeezes the list to nothing, and a region with no floor is one
- *   that can disappear behind a drag.
+ * - everything else is bounded by a number from this file. A region that can grow
+ *   without a ceiling is a region that eventually squeezes the list to nothing,
+ *   and a region with no floor is one that can disappear behind a drag.
+ *
+ * One of those numbers is not a floor the stylesheet enforces. The staged drawer
+ * is **content-sized** — a folded or empty drawer is as tall as its own header, so
+ * the commit box sits tight against it (asked for from the running panel: the
+ * reserved floor left a blank band under a collapsed drawer). What
+ * {@link STAGED_RESERVED_HEIGHT} buys is the room the dock's drag must leave for
+ * it, which is what keeps a dragged-open dock from leaving the index nowhere to
+ * show a single row.
  *
  * Two rules keep the arithmetic honest, and both are checked by
  * `test/client-panel.test.ts` rather than trusted:
@@ -41,8 +48,13 @@
  */
 export const RAIL_HEIGHT = 38
 
-/** The staged drawer's floor: its header, its bulk action, and one row. */
-export const STAGED_MIN_HEIGHT = 72
+/**
+ * The staged drawer's reserved height: its header, its bulk action, and one row.
+ *
+ * A reservation rather than a floor — see the module doc. The drawer draws itself
+ * at its content's height; this is the room the dock's drag has to leave for it.
+ */
+export const STAGED_RESERVED_HEIGHT = 72
 
 /**
  * The staged drawer's absolute ceiling.
@@ -108,4 +120,4 @@ export const COLUMN_SEPARATORS = 4
  * computes from its `reserved` prop.
  */
 export const DOCK_RESERVED =
-  RAIL_HEIGHT + STAGED_MIN_HEIGHT + COMMIT_MIN_HEIGHT + CHANGE_MIN_HEIGHT + COLUMN_SEPARATORS
+  RAIL_HEIGHT + STAGED_RESERVED_HEIGHT + COMMIT_MIN_HEIGHT + CHANGE_MIN_HEIGHT + COLUMN_SEPARATORS

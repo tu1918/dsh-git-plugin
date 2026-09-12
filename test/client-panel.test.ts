@@ -71,7 +71,7 @@ const {
   DOCK_MIN_HEIGHT,
   DOCK_RESERVED,
   STAGED_MAX_HEIGHT,
-  STAGED_MIN_HEIGHT,
+  STAGED_RESERVED_HEIGHT,
 } = await import('../src/client/ui/panel-layout.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
@@ -727,7 +727,9 @@ describe('StatusPanel rendering', () => {
     // two fifths and the drawer's own maximum.
     const stagedStyle = window.getComputedStyle(stagedPane)
     assert.equal(stagedStyle.maxHeight, `min(40%, ${String(STAGED_MAX_HEIGHT)}px)`)
-    assert.equal(stagedStyle.minHeight, `${String(STAGED_MIN_HEIGHT)}px`)
+    // No floor: the drawer hugs its content, so a collapsed one leaves no blank
+    // band above the commit box.
+    assert.equal(stagedStyle.minHeight, '0px')
     assert.equal(stagedStyle.overflow, 'auto')
 
     // And the single scroller is the body.
@@ -760,8 +762,12 @@ describe('StatusPanel rendering', () => {
     )
     await settle()
 
+    // The staged drawer is the one region with no floor: a folded or empty drawer
+    // is as tall as its header, so the commit box sits tight against it (asked for
+    // from the running panel). What the budget keeps for it is a reservation
+    // against the dock's drag, which the arithmetic test below pins.
     const staged = window.getComputedStyle(must(container, `[data-pane="staged"]`))
-    assert.equal(staged.minHeight, `${String(STAGED_MIN_HEIGHT)}px`)
+    assert.equal(staged.minHeight, '0px')
     assert.equal(staged.maxHeight, `min(40%, ${String(STAGED_MAX_HEIGHT)}px)`)
 
     const box = window.getComputedStyle(must(container, `.${cls.commitBox}`))
@@ -817,7 +823,7 @@ describe('StatusPanel rendering', () => {
     assert.equal(
       DOCK_RESERVED,
       RAIL_HEIGHT +
-        STAGED_MIN_HEIGHT +
+        STAGED_RESERVED_HEIGHT +
         COMMIT_MIN_HEIGHT +
         CHANGE_MIN_HEIGHT +
         COLUMN_SEPARATORS,

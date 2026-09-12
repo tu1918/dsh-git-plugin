@@ -31,7 +31,7 @@ import {
   DOCK_MIN_HEIGHT,
   DOCK_RESERVED,
   STAGED_MAX_HEIGHT,
-  STAGED_MIN_HEIGHT,
+  STAGED_RESERVED_HEIGHT,
 } from './panel-layout.ts'
 
 /** Prefix for every class, so nothing here can collide with another plugin. */
@@ -585,13 +585,16 @@ export const css = `
    pushing the commit box off screen. */
 .${cls.stagedPane} {
   display: flex;
-  /* Shrinkable, but never past its floor: a long index scrolls in its own share
-     instead of pushing the commit box and the change list down the panel. The two
-     ceilings are the drawer's own (two fifths of the panel) and the budget's
-     absolute one — whichever bites first. */
+  /* Sized by its CONTENT, capped by two ceilings — the drawer's own (two fifths of
+     the panel) and the budget's absolute one, whichever bites first — and with no
+     floor: a folded or empty drawer is as tall as its own header, so the commit box
+     sits tight against it. The floor the budget keeps for it is a reservation
+     against the dock's drag (see ui/panel-layout.ts), not a band of blank space.
+     A long index scrolls in its own share instead of pushing the commit box and
+     the change list down the panel. */
   flex: 0 1 auto;
   flex-direction: column;
-  min-height: ${STAGED_MIN_HEIGHT}px;
+  min-height: 0;
   max-height: min(40%, ${STAGED_MAX_HEIGHT}px);
   overflow: auto;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
