@@ -525,10 +525,10 @@ export function Group({
   /**
    * Copy to show when the group has no rows, under its header.
    *
-   * Only the staged drawer has one: its header alone does not say why it is empty,
-   * and it is the anchor of the commit box above it. The working-tree sections
-   * answer the same question with their count, which is why they are
-   * {@link resident} without a note.
+   * The three resident groups all carry one — a bare count of 0 never says
+   * whether it means "nothing here" or "this was never read". The conflict
+   * group has none: it is not resident, and while a merge is open its emptiness
+   * (no conflicts left) is not the question the panel has to answer.
    */
   readonly emptyNote?: string
   /**
@@ -581,10 +581,10 @@ export function Group({
         </button>
         {/* The bulk action follows the rows: an empty section offers nothing to
             move, so its button would be a disabled control with nothing to explain
-            it. The staged drawer is the exception, and it is the caller's to make:
-            it passes an empty note, and the note is the explanation. With rows
-            checked the same button becomes the selection's action: what it will
-            move is no longer "everything" but "these N", and its label says so. */}
+            it — the resident groups pass an empty note, and the note is the
+            explanation their disabled button's tooltip uses. With rows checked
+            the same button becomes the selection's action: what it will move is
+            no longer "everything" but "these N", and its label says so. */}
         {(batch !== undefined && (entries.length > 0 || emptyNote !== undefined)) ||
         danger !== undefined ? (
           <span className={cls.groupActions}>
@@ -594,9 +594,9 @@ export function Group({
                 className={cls.ghost}
                 // A group with no rows has nothing to move, so the bulk action is
                 // unavailable rather than a round trip that comes back as a refused
-                // request. The staged drawer is why this matters in practice: it is
-                // the one group that keeps its button while empty, and its own empty
-                // note is what explains the grey.
+                // request. The resident groups are why this matters in practice:
+                // they keep their button while empty, and each one's empty note is
+                // what explains the grey.
                 disabled={busy || entries.length === 0}
                 title={
                   entries.length === 0 && emptyNote !== undefined

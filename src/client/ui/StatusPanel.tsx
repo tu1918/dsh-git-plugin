@@ -1372,8 +1372,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               size themselves: the body scrolls, and its groups flow into it —
               which is what the comparable sidebar's source-control view does, and
               the reason the panel needs no grip per group. Both are resident: an
-              empty section keeps its header and its 0, which is the whole of what
-              the panel has to say about a clean working tree. */}
+              empty section keeps its header, its 0, and its own empty sentence —
+              the same answer the staged drawer gives, because a bare count never
+              says whether "0" means "nothing here" or "this was never read". */}
           <Group
             label={t('group.unstaged')}
             area="unstaged"
@@ -1387,6 +1388,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               selection: selectionOf('stage', unstagedSel),
             }}
             danger={dangerOf('unstaged', unstagedSel)}
+            emptyNote={t('group.unstagedEmpty')}
             collapsed={collapsedGroups.has('unstaged')}
             view={view}
             onToggle={() => toggleGroup('unstaged')}
@@ -1411,6 +1413,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               selection: selectionOf('stage', untrackedSel),
             }}
             danger={dangerOf('untracked', untrackedSel)}
+            emptyNote={t('group.untrackedEmpty')}
             collapsed={collapsedGroups.has('untracked')}
             view={view}
             onToggle={() => toggleGroup('untracked')}

@@ -779,11 +779,12 @@ export const css = `
 }
 
 /* The empty state of a resident group. Indented to the rows' text column
-   (12px of row padding + a 12px badge + the 8px gap) so it reads as "this group
-   has no rows" rather than as a stray sentence. */
+   (12px of row padding, a 14px checkbox, the 8px gap, a 12px badge, and the
+   8px gap again) so it reads as "this group has no rows" rather than as a
+   stray sentence. */
 .${cls.groupEmpty} {
   margin: 0;
-  padding: 4px 12px 6px 32px;
+  padding: 4px 12px 6px 54px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
 }

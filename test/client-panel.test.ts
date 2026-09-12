@@ -704,10 +704,20 @@ describe('StatusPanel rendering', () => {
     // not furniture.
     assert.equal(container.querySelector('[data-group="conflicted"]'), null)
     // The staged drawer is a fixture of the panel for the same reason: it is the
-    // commit box's anchor, and its own empty state says so in words.
+    // commit box's anchor, and its own empty state says so in words. The two
+    // working-tree sections carry their own sentence now (asked for: a bare 0
+    // never says whether it means "nothing here" or "never read").
     const drawer = must(container, `[data-group="staged"]`)
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
+    assert.equal(
+      must(container, `[data-group="unstaged"] .${cls.groupEmpty}`).textContent,
+      'No changes',
+    )
+    assert.equal(
+      must(container, `[data-group="untracked"] .${cls.groupEmpty}`).textContent,
+      'No untracked files',
+    )
   })
 
   it('gives the panel one scroller and one grip, not a grip per group', async () => {
@@ -935,13 +945,11 @@ describe('StatusPanel rendering', () => {
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
   })
 
-  it('keeps the working-tree sections on screen when they are empty, without a note', async () => {
-    // The other half of the same decision: "Changes" and "Untracked" are the
-    // panel's furniture too, so a section with no rows keeps its header and its 0 —
-    // that count is what the panel now says about a clean working tree — while
-    // taking no space for a note, and without a bulk action (an empty section has
-    // nothing to move, and a greyed-out button with no note to explain it is the
-    // thing the staged drawer's own note exists to avoid).
+  it('keeps the working-tree sections on screen when they are empty, with their own note', async () => {
+    // The same decision as the staged drawer, applied to the whole furniture:
+    // a section with no rows keeps its header, its 0, and its own empty sentence.
+    // Its bulk action stays too — disabled, with the note borrowing its tooltip
+    // the way the staged drawer's button already did.
     const status = statusFixture()
     const onlyUntracked = {
       ...status,
@@ -960,12 +968,16 @@ describe('StatusPanel rendering', () => {
     const empty = must(container, `[data-group="unstaged"]`)
     assert.equal(must(empty, `.${cls.groupHead} .${cls.count}`).textContent, '0')
     assert.equal(empty.querySelector(`.${cls.row}`), null)
-    assert.equal(empty.querySelector(`.${cls.groupEmpty}`), null, 'the count is the whole message')
-    assert.equal(empty.querySelector(`.${cls.groupActions}`), null, 'nothing to stage all')
+    assert.equal(must(empty, `.${cls.groupEmpty}`).textContent, 'No changes')
+    // Greyed out, and the note is what explains the grey.
+    const bulk = must<HTMLButtonElement>(empty, `.${cls.groupActions} button`)
+    assert.equal(bulk.disabled, true)
+    assert.match(bulk.getAttribute('title') ?? '', /Stage all · No changes/)
 
     const full = must(container, `[data-group="untracked"]`)
     assert.equal(must(full, `.${cls.groupHead} .${cls.count}`).textContent, '1')
     assert.notEqual(full.querySelector(`.${cls.groupActions}`), null, 'rows bring their bulk action')
+    assert.equal(full.querySelector(`.${cls.groupEmpty}`), null, 'rows replace the note')
   })
 
   it('renders a git failure in the panel’s own words, with git’s text as detail', async () => {
