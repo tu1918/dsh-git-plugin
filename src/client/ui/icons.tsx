@@ -205,12 +205,13 @@ export function TrashGlyph({ size = 13, className }: GlyphProps): ReactNode {
 }
 
 /**
- * An arrow curving backwards: discard the change (FR-6.1).
+ * An arrow pointing backwards with a hooked tail: discard the change (FR-6.1).
  *
- * The mirror of {@link RefreshGlyph} — the same motion read the other way — rather
- * than the bin {@link TrashGlyph} draws: this button reverts a tracked file's edits,
- * where nothing is deleted at all, and only an untracked file is actually removed.
- * A bin would be true for half of its clicks.
+ * A hook that ends pointing left, never closing into a loop: a closed loop reads
+ * as "reload" (see {@link RefreshGlyph}), this control is undo, not retry. Not
+ * the bin {@link TrashGlyph} draws either: this button reverts a tracked file's
+ * edits, where nothing is deleted at all, and only an untracked file is actually
+ * removed. A bin would be true for half of its clicks.
  * @param props - Size and class.
  */
 export function DiscardGlyph({ size = 14, className }: GlyphProps): ReactNode {
@@ -218,8 +219,8 @@ export function DiscardGlyph({ size = 14, className }: GlyphProps): ReactNode {
     size,
     className,
     <>
-      <path d="M3 8a5 5 0 1 0 1.6-3.7" />
-      <path d="M3 2.6V5.4h2.8" />
+      <path d="M6.8 7.2 3.2 10.4l3.6 3.2" />
+      <path d="M3.5 10.4h4.8c2.8 0 4.5-1.2 4.5-3.4 0-2.3-1.9-3.4-4.3-3.4H7.7" />
     </>,
   )
 }
