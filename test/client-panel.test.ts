@@ -60,6 +60,19 @@ const { Menu } = await import('../src/client/ui/menu.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
 const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
 const { BOTTOM_PANE_KEY } = await import('../src/client/ui/bottom-view.ts')
+const {
+  CHANGE_MIN_HEIGHT,
+  COLUMN_SEPARATORS,
+  RAIL_HEIGHT,
+  COMMIT_INPUT_MAX_HEIGHT,
+  COMMIT_INPUT_MIN_HEIGHT,
+  COMMIT_MAX_HEIGHT,
+  COMMIT_MIN_HEIGHT,
+  DOCK_MIN_HEIGHT,
+  DOCK_RESERVED,
+  STAGED_MAX_HEIGHT,
+  STAGED_MIN_HEIGHT,
+} = await import('../src/client/ui/panel-layout.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
@@ -692,9 +705,12 @@ describe('StatusPanel rendering', () => {
     )
 
     // The staged list is capped rather than draggable: a long index scrolls in
-    // its own share instead of pushing the commit box away.
+    // its own share instead of pushing the commit box away. Both ends of that
+    // share come from the budget, and the relative ceiling is the smaller of the
+    // two fifths and the drawer's own maximum.
     const stagedStyle = window.getComputedStyle(stagedPane)
-    assert.equal(stagedStyle.maxHeight, '40%')
+    assert.equal(stagedStyle.maxHeight, `min(40%, ${String(STAGED_MAX_HEIGHT)}px)`)
+    assert.equal(stagedStyle.minHeight, `${String(STAGED_MIN_HEIGHT)}px`)
     assert.equal(stagedStyle.overflow, 'auto')
 
     // And the single scroller is the body.
@@ -714,6 +730,137 @@ describe('StatusPanel rendering', () => {
     // No group carries a grip, and no group is a resizable box of its own.
     assert.equal(stagedPane.querySelector(`.${cls.paneGrip}`), null)
     assert.equal(body.querySelector(`:scope > .${cls.group} .${cls.paneGrip}`), null)
+  })
+
+  it('bounded every region, so nothing can squeeze the change list out of shape', async () => {
+    // Reported from the running panel: with the dock dragged open and a full
+    // index, the change list was squeezed to a header and a scrollbar. The fix is
+    // a budget rather than more flex: every region has a floor, the change list is
+    // the only one that grows, and the dock's drag is clamped at what the others'
+    // floors leave (`ui/panel-layout.ts`).
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const staged = window.getComputedStyle(must(container, `[data-pane="staged"]`))
+    assert.equal(staged.minHeight, `${String(STAGED_MIN_HEIGHT)}px`)
+    assert.equal(staged.maxHeight, `min(40%, ${String(STAGED_MAX_HEIGHT)}px)`)
+
+    const box = window.getComputedStyle(must(container, `.${cls.commitBox}`))
+    assert.equal(box.minHeight, `${String(COMMIT_MIN_HEIGHT)}px`)
+    assert.equal(box.maxHeight, `${String(COMMIT_MAX_HEIGHT)}px`)
+    // A refused commit's reason and the AI's truncation note land in this box, so
+    // its ceiling scrolls rather than hiding them.
+    assert.equal(box.overflow, 'auto')
+
+    // The message is what varies inside that box, and it is bounded by its own
+    // floor and ceiling rather than by the box clipping the commit button.
+    const input = window.getComputedStyle(must(container, `.${cls.commitInput}`))
+    assert.equal(input.minHeight, `${String(COMMIT_INPUT_MIN_HEIGHT)}px`)
+    assert.equal(input.maxHeight, `${String(COMMIT_INPUT_MAX_HEIGHT)}px`)
+    assert.equal(input.resize, 'vertical', 'the handle still works, inside those bounds')
+    assert.equal(window.getComputedStyle(must(container, `.${cls.commitFoot}`)).flexGrow, '0')
+
+    // The change list: the one elastic region, and the reason the budget exists.
+    const body = window.getComputedStyle(must(container, `.${cls.body}`))
+    assert.equal(body.minHeight, `${String(CHANGE_MIN_HEIGHT)}px`)
+    assert.equal(body.flexGrow, '1')
+    // A zero basis, so the list's CONTENT never enters the flex arithmetic: with
+    // the default 'auto' basis a thousand changed files make the column over-full
+    // and flexbox shrinks the staged drawer and the dock to pay for it.
+    assert.match(body.flexBasis, /^0(px)?$/u)
+    assert.equal(body.overflow, 'auto')
+
+    // The dock: the tab strip at its smallest, and never more than the rest of
+    // the column's floors leave.
+    const dock = must<HTMLElement>(container, `.${cls.bottom}`)
+    const dockStyle = window.getComputedStyle(dock)
+    assert.equal(dockStyle.minHeight, `${String(DOCK_MIN_HEIGHT)}px`)
+    // The dock opens on the history tab, whose default is "content height, up to
+    // two fifths of the window" — and never more than the budget leaves.
+    assert.equal(dockStyle.maxHeight, `min(40vh, 100% - ${String(DOCK_RESERVED)}px)`)
+
+    // A dragged height is remembered, but clamped by the same number — otherwise
+    // a reload in a shorter window would squeeze the regions above the dock.
+    await dragGrip(must(dock, `.${cls.paneGrip}`), 300, 0)
+    assert.equal(dock.style.height, '300px')
+    assert.equal(dock.style.maxHeight, `calc(100% - ${String(DOCK_RESERVED)}px)`)
+  })
+
+  it('keeps the column in one budget, shared by the stylesheet and the grip', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+
+    // The number the drag clamps to IS the sum of the other regions' floors: one
+    // constant, used by both halves. Written out here rather than imported so that
+    // changing a floor without changing the sum goes red.
+    assert.equal(
+      DOCK_RESERVED,
+      RAIL_HEIGHT +
+        STAGED_MIN_HEIGHT +
+        COMMIT_MIN_HEIGHT +
+        CHANGE_MIN_HEIGHT +
+        COLUMN_SEPARATORS,
+    )
+    // ...and the stylesheet does not carry its own copy of it.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.bottom}\\s*\\{[^}]*max-height:\\s*calc\\(100% - ${String(DOCK_RESERVED)}px\\)`,
+        'u',
+      ),
+    )
+  })
+
+  it('pins each section header to the top of the list it scrolls in', async () => {
+    // Requirement from the running panel: scrolling a long change list must keep
+    // "Changes" on screen, and the untracked files below must announce themselves
+    // the same way when they arrive — so a partially scrolled region still says
+    // what it is.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // Every section that can scroll carries a sticky header: the three in the
+    // body's scroller, and the staged drawer's own.
+    const body = must(container, `.${cls.body}`)
+    const sections = [
+      ...body.querySelectorAll(`:scope > .${cls.group}`),
+      must(must(container, `[data-pane="staged"]`), `.${cls.group}`),
+    ]
+    assert.equal(sections.length, 4)
+    for (const section of sections) {
+      const head = must(section, `.${cls.groupHead}`)
+      const style = window.getComputedStyle(head)
+      assert.equal(style.position, 'sticky', `${section.getAttribute('data-group')} header sticks`)
+      assert.equal(style.top, '0px')
+    }
+
+    // The band is opaque (rows scroll under it) and carries the hairline on its
+    // own bottom edge, so the sticky header reads as a lid rather than as a list
+    // that stopped. jsdom cannot resolve var(), so the rule itself is asserted.
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.groupHead}\\s*\\{[^}]*border-bottom: 0\\.5px solid var\\(--dsw-alias-border-l3\\)[^}]*background: var\\(--dsw-alias-bg-layer-1\\)`,
+        'u',
+      ),
+    )
+    // And the rule that used to separate two sections (a top border on the NEXT
+    // group) is gone: it would draw a second line against that lid.
+    assert.doesNotMatch(
+      sheet,
+      new RegExp(`\\.${cls.body} > \\.${cls.group} \\+ \\.${cls.group}\\s*\\{[^}]*border-top`, 'u'),
+    )
+    assert.ok(body.contains(must(body, `.${cls.group} .${cls.groupHead}`)))
   })
 
   it('keeps the staged drawer on screen when only the index is empty', async () => {
@@ -871,8 +1018,10 @@ describe('StatusPanel rendering', () => {
     )
 
     // The same grip, dragged past the top of the panel: the clamp is what this
-    // reads, since the pointer itself can go anywhere.
-    const ceiling = Math.max(32, window.innerHeight - 200)
+    // reads, since the pointer itself can go anywhere. jsdom gives the panel no
+    // height, so the resizer falls back to the window — and the number it clamps
+    // to is the budget's, the same one the stylesheet puts on this pane.
+    const ceiling = Math.max(DOCK_MIN_HEIGHT, window.innerHeight - DOCK_RESERVED)
     await dragGrip(grip, 0, -1000)
     assert.equal(pane.style.height, `${ceiling}px`)
 

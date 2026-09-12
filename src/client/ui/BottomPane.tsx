@@ -26,6 +26,15 @@
  * closes itself on every page load is one the user has to re-open every time. It
  * opens on the history tab by default.
  *
+ * ## What the height may cost
+ *
+ * The dock is the column's only draggable region, and the rest of the column has
+ * floors (`panel-layout.ts`). Those two facts are one rule: a drag is clamped at
+ * `panel − DOCK_RESERVED`, and the same number is written into this pane's
+ * `max-height`, so a height remembered from a taller window is clamped too —
+ * otherwise a reload in a shorter window would squeeze the change list below the
+ * floor the budget promised it.
+ *
  * @module dsh-git-panel/client/ui/BottomPane
  */
 
@@ -36,6 +45,7 @@ import { pathParts } from '../../core/format.ts'
 import type { GitRemoteClient } from '../../core/ports.ts'
 import type { DiffArea } from '../../core/types.ts'
 import { readBottomPane, writeBottomPane } from './bottom-view.ts'
+import { DOCK_MIN_HEIGHT, DOCK_RESERVED } from './panel-layout.ts'
 import { DiffPane } from './DiffView.tsx'
 import { HistoryPanel } from './History.tsx'
 import { PaneResizer } from './pane-resizer.tsx'
@@ -45,15 +55,6 @@ import { CaretGlyph, CloseGlyph } from './icons.tsx'
 
 /** Which tab of the bottom pane is showing. */
 export type BottomTab = 'history' | 'diff'
-
-/** Smallest the pane may be dragged to: its own tab strip. */
-const MIN_PANE_HEIGHT = 32
-
-/**
- * Height kept for everything above the pane — the rail, the commit box and a
- * usable change list — however far the pointer travels.
- */
-const PANE_RESERVED_HEIGHT = 200
 
 /** One change-list row whose diff is open. */
 export interface OpenFile {
@@ -145,7 +146,13 @@ export function BottomPane({
       // body, so it is only applied while a panel is showing — and it comes back
       // when the pane is expanded again.
       style={
-        expanded && height !== null ? { height: `${height}px`, maxHeight: 'none' } : undefined
+        expanded && height !== null
+          ? // A dragged height wins over the per-tab default in the stylesheet, but
+            // not over the column's budget: `maxHeight` is the same clamp the drag
+            // itself was limited by, and it is what a remembered height from a
+            // taller window runs into.
+            { height: `${height}px`, maxHeight: `calc(100% - ${String(DOCK_RESERVED)}px)` }
+          : undefined
       }
     >
       {/* The dock is bottom-anchored: its bottom edge is pinned to the panel's,
@@ -154,8 +161,8 @@ export function BottomPane({
           instead of carrying one each. */}
       <PaneResizer
         label={t('bottom.resize')}
-        minHeight={MIN_PANE_HEIGHT}
-        reserved={PANE_RESERVED_HEIGHT}
+        minHeight={DOCK_MIN_HEIGHT}
+        reserved={DOCK_RESERVED}
         onResize={(next) => {
           setHeight(next)
           setExpanded(true)

@@ -49,6 +49,8 @@ message, and a commit detail.
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
 | Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
 | A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — and selecting it splits the pane: the entries stay on the left, that commit's information opens on the right (metadata, then its file list with per-file churn and git's own binary answer) | ✅ |
+| One height budget for the whole column (`ui/panel-layout.ts`): every region has a floor and a ceiling, the change list is the only one that grows (a zero flex basis keeps its content out of the arithmetic, so a thousand changed files cannot squeeze the drawers or the dock), and the dock's drag — and any height it remembers from a taller window — is clamped at what the other regions' floors leave | ✅ |
+| Section headers pinned to the top of the list they scroll in: a partially scrolled change list still says whether it is showing changes or untracked files | ✅ |
 | A change row's menu: right-click it (or Shift+F10 / the menu key on the focused row) for that row's own action — stage, unstage, or mark a conflict resolved. It opens in the same floating layer as the branch list, flipping above the row when the panel has no room below | ✅ |
 | Discard a change (FR-6.1): a working-tree row gains a third button — and its menu a third entry — that takes two clicks and says "cannot be undone" between them. It restores a tracked file from the index (never from HEAD, so it also works before the first commit) and deletes a file the index has never seen; a staged or conflicted row offers it nowhere | ✅ |
 | Stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
@@ -103,7 +105,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 335 tests && build
+npm run check      # tsc --noEmit && 338 tests && build
 ```
 
 ## Install

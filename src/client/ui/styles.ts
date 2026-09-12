@@ -21,6 +21,19 @@
  * @module dsh-git-panel/client/ui/styles
  */
 
+import {
+  CHANGE_MIN_HEIGHT,
+  COLUMN_SEPARATORS,
+  COMMIT_INPUT_MAX_HEIGHT,
+  COMMIT_INPUT_MIN_HEIGHT,
+  COMMIT_MAX_HEIGHT,
+  COMMIT_MIN_HEIGHT,
+  DOCK_MIN_HEIGHT,
+  DOCK_RESERVED,
+  STAGED_MAX_HEIGHT,
+  STAGED_MIN_HEIGHT,
+} from './panel-layout.ts'
+
 /** Prefix for every class, so nothing here can collide with another plugin. */
 const P = 'dgp'
 
@@ -573,10 +586,14 @@ export const css = `
    pushing the commit box off screen. */
 .${cls.stagedPane} {
   display: flex;
+  /* Shrinkable, but never past its floor: a long index scrolls in its own share
+     instead of pushing the commit box and the change list down the panel. The two
+     ceilings are the drawer's own (two fifths of the panel) and the budget's
+     absolute one — whichever bites first. */
   flex: 0 1 auto;
   flex-direction: column;
-  min-height: 0;
-  max-height: 40%;
+  min-height: ${STAGED_MIN_HEIGHT}px;
+  max-height: min(40%, ${STAGED_MAX_HEIGHT}px);
   overflow: auto;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   padding-right: 10px;
@@ -595,12 +612,27 @@ export const css = `
    and it is why the panel needs only one grip (the dock's) instead of one per
    group. */
 .${cls.body} {
-  /* 'flex: auto' with a floor: the body yields space to a dragged diff dock,
-     but never so much that the change list it holds stops being usable. */
+  /* The column's ONE elastic region, and the only one that grows: it takes what
+     the regions around it leave, and it scrolls rather than asking for more.
+
+     'flex-basis: 0' is what keeps a repository with a thousand changed files from
+     taxing the regions around it. With the default 'auto' basis the list's
+     CONTENT height is its base size, so a long list makes the column over-full and
+     flexbox then shrinks every shrinkable region to pay for it — the staged drawer
+     and the dock included, which is exactly the squeeze reported from the running
+     panel. With a zero basis the content never enters the flex arithmetic at all:
+     what the list gets is the leftover plus this floor, and anything longer than
+     that scrolls inside it.
+
+     Spelled as three longhands rather than the 'flex' shorthand: jsdom does not
+     expand 'flex: 1 1 0', so the shorthand would leave the layout contracts in
+     test/client-panel.test.ts asserting nothing. */
   display: flex;
-  flex: auto;
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
   flex-direction: column;
-  min-height: 56px;
+  min-height: ${CHANGE_MIN_HEIGHT}px;
   margin-right: 2px;
   /* The rows put their '+'/'−' (and each group header its bulk action) against
      the right edge of whichever pane scrolls them. See the scrollbar block below
@@ -621,12 +653,21 @@ export const css = `
   flex: none;
 }
 
-/* Hairline between two groups in the list, and none above the first, which
-   follows the commit box. */
-.${cls.body} > .${cls.group} + .${cls.group} {
-  border-top: 0.5px solid var(--dsw-alias-border-l3);
-}
+/* No rule between two groups: each section header carries its own lid (see
+   above), which is the edge that has to stay visible while the rows scroll under
+   it. Two rules would put a line right against the next section's header. */
 
+/* The section header pins itself to the top of whichever scroller holds it, so
+   the answer to "what am I looking at?" is always on screen: scrolling through a
+   long change list keeps "Changes" at the top, and the list of untracked files
+   below announces itself the same way the moment it arrives. Reported from the
+   running panel as the thing that makes partial sections legible.
+
+   Two details are load-bearing. The background has to be OPAQUE — rows scroll
+   under this band, and the text behind it is unreadable otherwise — and the
+   hairline is on the header's BOTTOM edge rather than on the next section's top
+   edge, so the band reads as a lid over the rows (a sticky header with no rule
+   under it looks like the list just stopped). */
 .${cls.groupHead} {
   position: sticky;
   top: 0;
@@ -638,6 +679,7 @@ export const css = `
   /* 12px on the trailing side to match the row: the group's bulk action and the
      rows' '+'/'−' are the same column of controls and should read as one. */
   padding: 5px 12px 4px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -893,10 +935,24 @@ export const css = `
 /* ── commit box ─────────────────────────────────────────────────────────── */
 
 .${cls.commitBox} {
+  /* Bounded in both directions by the budget: the textarea is what varies, and
+     the footer does not shrink, so a box that hits its ceiling shrinks the
+     textarea down to its own floor rather than clipping the commit button.
+
+     'overflow: auto' rather than 'hidden' because of what else lands in this box:
+     a refused commit's reason and the AI's "the diff was cut" note. Both are
+     things the user must be able to read (FR-3.5, §4.3), and a ceiling that hid
+     them would be a ceiling that hides the answer to "why did nothing happen?" —
+     so the box scrolls instead, and only in that rare case. */
   display: flex;
   flex: none;
   flex-direction: column;
   gap: 5px;
+  min-height: ${COMMIT_MIN_HEIGHT}px;
+  max-height: ${COMMIT_MAX_HEIGHT}px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
   padding: 8px 12px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
@@ -938,10 +994,13 @@ export const css = `
 
 .${cls.commitInput} {
   width: 100%;
-  min-height: 48px;
-  /* The textarea carries a native vertical resize handle; the cap is what stops
-     it from eating the column, not the resize itself. */
-  max-height: 260px;
+  /* The one thing in the region whose size the user decides: the message. The
+     native vertical resize handle works between these two numbers, and the cap is
+     what stops it from eating the column — the budget above measured the commit
+     box assuming exactly this ceiling. */
+  flex: 0 1 auto;
+  min-height: ${COMMIT_INPUT_MIN_HEIGHT}px;
+  max-height: ${COMMIT_INPUT_MAX_HEIGHT}px;
   box-sizing: border-box;
   /* Room for the ✨ so the first line of a message never runs under it. */
   padding: 6px 30px 6px 8px;
@@ -965,6 +1024,7 @@ export const css = `
 
 .${cls.commitFoot} {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
 }
@@ -1099,21 +1159,32 @@ export const css = `
    replaces that with pixels. */
 .${cls.bottom} {
   display: flex;
+  /* Shrinkable to its tab strip, and never taller than what the rest of the
+     column's floors leave — the same number the grip's drag is clamped to, so a
+     remembered height from a taller window cannot squeeze the regions above it
+     either. */
   flex: 0 1 auto;
   flex-direction: column;
-  min-height: 0;
+  min-height: ${DOCK_MIN_HEIGHT}px;
+  max-height: calc(100% - ${DOCK_RESERVED}px);
   height: auto;
   overflow: hidden;
   border-top: 0.5px solid var(--dsw-alias-border-l3);
 }
 
-/* A diff gets a fixed half-screen — that is what a diff needs. The commit list
-   instead takes its content's height up to a cap: a five-commit history that
-   reserved half the panel would be mostly empty box. */
-.${cls.bottom}[data-expanded='true'][data-tab='diff'] { height: 50vh; }
+/* A per-tab default height, for a dock nobody has dragged yet. A diff gets half
+   the screen — that is what a diff needs — while the commit list takes its
+   content's height up to a cap, because a five-commit history that reserved half
+   the panel would be mostly empty box. Both are fractions of the WINDOW, so both
+   are re-clamped by the column budget: the dock may be 50vh on a tall window and
+   the same rule gives it far less on a short one. */
+.${cls.bottom}[data-expanded='true'][data-tab='diff'] {
+  height: 50vh;
+  max-height: calc(100% - ${DOCK_RESERVED}px);
+}
 .${cls.bottom}[data-expanded='true'][data-tab='history'] {
   height: auto;
-  max-height: 40vh;
+  max-height: min(40vh, calc(100% - ${DOCK_RESERVED}px));
 }
 
 .${cls.bottomTabs} {
