@@ -57,6 +57,7 @@ const { act } = await import('react')
 const { StatusPanel } = await import('../src/client/ui/StatusPanel.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
 const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
+const { BOTTOM_PANE_KEY } = await import('../src/client/ui/bottom-view.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
@@ -746,7 +747,7 @@ describe('StatusPanel rendering', () => {
     assert.match(container.textContent ?? '', /not a git repository/)
   })
 
-  it('loads history only when its tab is opened', async () => {
+  it('opens the dock on the history tab, and still reads lazily while folded', async () => {
     let logCalls = 0
     const git: GitRemoteClient = {
       ...stubGit({}),
@@ -758,11 +759,23 @@ describe('StatusPanel rendering', () => {
         })
       },
     }
-    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+
+    // Folded (a remembered choice, see the preference test below) means folded:
+    // the pane spends no git call until its tab is showing.
+    window.localStorage.setItem(BOTTOM_PANE_KEY, JSON.stringify({ expanded: false, height: null }))
+    const folded = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
     await settle()
     assert.equal(logCalls, 0, 'a folded pane must not spend a git call')
+    await click(must(folded, `.${cls.bottomTab}`))
 
-    await click(must(container, `.${cls.bottomTab}`))
+    // The default is the other way round: the dock is open on the history tab, so
+    // its first page is read as the panel mounts.
+    window.localStorage.clear()
+    logCalls = 0
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
+    assert.equal(logCalls, 1, 'the default is an open history tab')
 
     assert.equal(logCalls, 1)
     const text = container.textContent ?? ''
@@ -774,21 +787,20 @@ describe('StatusPanel rendering', () => {
     assert.equal(marker?.getAttribute('data-pushed'), 'false')
   })
 
-  it('folds the bottom pane to its tabs, and sizes it from the grip', async () => {
+  it('opens by default, folds to its tabs, and sizes itself from the grip', async () => {
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
     )
     await settle()
 
-    // Folded is the resting state: the tab strip and nothing else, so the change
-    // list keeps the height.
+    // Open on the history tab is the resting state now: the pane's job is to be
+    // read, and a strip of tabs with nothing behind it is not a default anyone
+    // asked for (reported from the running panel: "I have to open it every
+    // refresh").
     const pane = must(container, `.${cls.bottom}`) as HTMLElement
-    assert.equal(pane.getAttribute('data-expanded'), 'false')
-    assert.equal(container.querySelector(`.${cls.bottomBody}`), null)
-
-    await click(must(container, `.${cls.bottomTab}`))
     assert.equal(pane.getAttribute('data-expanded'), 'true')
     assert.equal(pane.getAttribute('data-tab'), 'history')
+    assert.notEqual(container.querySelector(`.${cls.bottomBody}`), null)
     // No inline height yet: the tab's own default (the stylesheet) applies.
     assert.equal(pane.style.height, '')
 
@@ -826,6 +838,29 @@ describe('StatusPanel rendering', () => {
     await click(must(container, `.${cls.tool}[aria-expanded]`))
     assert.equal(pane.getAttribute('data-expanded'), 'true')
     assert.equal(pane.style.height, `${ceiling}px`)
+
+    // The dock's state is a preference, not component state: folding it and
+    // coming back must not re-open it, and the dragged height comes back with it.
+    const reopened = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    assert.equal(must(reopened, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
+    assert.equal((must(reopened, `.${cls.bottom}`) as HTMLElement).style.height, `${ceiling}px`)
+    await click(must(reopened, `.${cls.tool}[aria-expanded]`))
+    assert.equal(
+      (must(reopened, `.${cls.bottom}`) as HTMLElement).getAttribute('data-expanded'),
+      'false',
+    )
+    const stillFolded = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    assert.equal(
+      must(stillFolded, `.${cls.bottom}`).getAttribute('data-expanded'),
+      'false',
+      'a folded dock stays folded across a reload',
+    )
   })
 
   it('re-reads when the watcher reports a change', async () => {
@@ -2295,7 +2330,24 @@ describe('the file tree (FR-1.3)', () => {
     // Indentation is the wrapper's, one step per level: the directory sits at
     // the group's left edge and the file it holds one step in.
     assert.equal(compacted.style.paddingLeft, '0px')
-    assert.equal(deepest.style.paddingLeft, '14px')
+    assert.equal(deepest.style.paddingLeft, '18px')
+
+    // The root directory's caret starts in the same column as the group header's
+    // caret above it, which is what the two 12px paddings agree on: the header's
+    // own leading padding, and the directory button's. Measured rather than
+    // assumed, because this is exactly the kind of thing that drifts.
+    const headerCaret = must(
+      must(container, '[data-group="unstaged"]'),
+      `.${cls.groupToggle} .${cls.groupCaret}`,
+    )
+    const dirCaret = must(compacted, `.${cls.groupCaret}`)
+    const computed = (node: Element): string => window.getComputedStyle(node).paddingLeft
+    assert.equal(
+      computed(must(compacted, 'button')),
+      computed(must(container, `.${cls.groupHead}`)),
+    )
+    assert.equal(computed(headerCaret.parentElement as Element), '0px')
+    assert.equal(dirCaret.parentElement?.className, cls.dirToggle)
 
     // A top-level file has no directory row above it.
     assert.match(fileNode(container, 'untracked', 'notes.md').textContent ?? '', /notes\.md/)

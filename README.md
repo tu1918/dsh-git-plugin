@@ -24,7 +24,7 @@ message, and a commit detail.
 | Change list: staged / changes / untracked / conflicts, git's own status letters | ✅ |
 | That list as a **file tree** — directories fold, single-child chains compact into one row, each directory carries its subtree's file count — or as a flat list; the choice is remembered per user | ✅ |
 | Branch rail: name, detached / unborn / upstream-gone, ↑ahead ↓behind | ✅ |
-| Recent commits: lazy-loaded, paged by look-ahead, pushed/unpushed marker | ✅ |
+| Recent commits: paged by look-ahead, pushed/unpushed marker, read only while its tab is showing | ✅ |
 | Auto-refresh from `.git/index` + `.git/HEAD` change, pushed over SSE | ✅ |
 | Live git status/branches/log over `/git-panel/*` | ✅ |
 | Stage / unstage, one file or a whole group | ✅ |
@@ -36,7 +36,7 @@ message, and a commit detail.
 | A resident staged drawer directly above the commit box: it is what that box commits, and its empty state says so | ✅ |
 | Changes and Untracked are drawers of the same shape — own grip, own cap, own scroller — so each partition's height is its own, and a long group cannot push the others off screen | ✅ |
 | A group with no rows keeps its bulk action on screen but disabled, and says why — an empty group has nothing to stage, so it never becomes a refused request | ✅ |
-| One bottom pane, two tabs — recent commits and the selected file's diff — folding to its tab strip, sized by a drag handle, keeping both tabs' content loaded | ✅ |
+| One bottom pane, two tabs — recent commits and the selected file's diff — opening on the history tab by default, foldable to its tab strip, sized by a drag handle, keeping both tabs' content loaded; the fold and the height are remembered | ✅ |
 | Diff view: click a change row → the diff opens as the bottom pane's second tab (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |

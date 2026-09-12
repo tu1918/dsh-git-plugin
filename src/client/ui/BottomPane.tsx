@@ -21,6 +21,11 @@
  * defaults live in the stylesheet, keyed by `data-tab`, so a window resize keeps
  * meaning what it meant.
  *
+ * The dock's own state — whether it is open and how tall it was dragged — is a
+ * preference rather than component state (`bottom-view.ts`), because a pane that
+ * closes itself on every page load is one the user has to re-open every time. It
+ * opens on the history tab by default.
+ *
  * @module dsh-git-panel/client/ui/BottomPane
  */
 
@@ -30,6 +35,7 @@ import type { ReactNode } from 'react'
 import { pathParts } from '../../core/format.ts'
 import type { GitRemoteClient } from '../../core/ports.ts'
 import type { DiffArea } from '../../core/types.ts'
+import { readBottomPane, writeBottomPane } from './bottom-view.ts'
 import { DiffPane } from './DiffView.tsx'
 import { HistoryPanel } from './History.tsx'
 import { PaneResizer } from './pane-resizer.tsx'
@@ -92,10 +98,19 @@ export function BottomPane({
   onCloseDiff,
 }: BottomPaneProps): ReactNode {
   const [tab, setTab] = useState<BottomTab>('history')
-  /** Whether a panel is showing at all; the folded pane is just the strip. */
-  const [expanded, setExpanded] = useState(false)
+  /**
+   * Whether a panel is showing at all, and the height it was dragged to.
+   *
+   * Both come from storage, so a reload puts the dock back the way it was left:
+   * the default is open, and a user who folds it keeps it folded.
+   */
+  const [expanded, setExpanded] = useState(() => readBottomPane().expanded)
   /** `null` means "not dragged yet": the stylesheet's per-tab default applies. */
-  const [height, setHeight] = useState<number | null>(null)
+  const [height, setHeight] = useState<number | null>(() => readBottomPane().height)
+
+  useEffect(() => {
+    writeBottomPane({ expanded, height })
+  }, [expanded, height])
 
   // A row that was just clicked is what the user wants to look at, so the pane
   // opens on it — that is the whole interaction the change list promises.
@@ -115,6 +130,11 @@ export function BottomPane({
     setTab('history')
     setExpanded(false)
   }, [onCloseDiff])
+
+  /** Fold or unfold from the strip's chevron, which is the non-drag way in. */
+  const toggleExpanded = useCallback((): void => {
+    setExpanded((value) => !value)
+  }, [])
 
   const name = openFile === null ? '' : pathParts(openFile.path).name
 
@@ -189,7 +209,7 @@ export function BottomPane({
           title={expanded ? t('bottom.collapse') : t('bottom.expand')}
           aria-label={expanded ? t('bottom.collapse') : t('bottom.expand')}
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggleExpanded}
         >
           <CaretGlyph className={cls.bottomChevron} />
         </button>

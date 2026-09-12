@@ -175,11 +175,13 @@ export interface GroupBatch {
 /**
  * How far one tree level is indented, in CSS pixels.
  *
- * Small on purpose: the sidebar is narrow, and the directories that carry the
- * structure are usually compacted into one node (`core/change-tree.ts`), so a
- * deep-looking path still costs only one or two levels of indent.
+ * It is the disclosure caret's width (12) plus the gap that follows it (6), which
+ * is what makes a child's row start exactly under its parent's NAME rather than
+ * under its caret. Small on purpose, too: the sidebar is narrow, and a chain of
+ * single-child directories is compacted into one node (`core/change-tree.ts`), so
+ * a deep-looking path still costs only one or two levels of indent.
  */
-const INDENT_PX = 14
+const INDENT_PX = 18
 
 /**
  * One node of a group's tree: a directory's disclosure row, or a change row.
@@ -209,6 +211,9 @@ function TreeNodeView({
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
+  // Depth alone: the 12px that lines the tree up with the group header's caret
+  // belongs to the button and the row themselves (both carry it in the
+  // stylesheet), so there is one place — not two — that knows about it.
   const indent = { paddingLeft: `${depth * INDENT_PX}px` }
 
   if (node.kind === 'file') {

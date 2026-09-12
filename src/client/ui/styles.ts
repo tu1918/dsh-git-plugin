@@ -680,7 +680,12 @@ export const css = `
   min-width: 0;
   align-items: center;
   gap: 6px;
-  padding: 3px 12px 3px 0;
+  /* The leading 12px is the group header's own leading padding and the rows' own
+     leading padding: a root directory's caret therefore starts in the same column
+     as the group's caret above it, and its label in the same column as the
+     group's label. The per-depth indent is the wrapper's, so this stays a
+     constant. */
+  padding: 3px 12px;
   border: 0;
   background: transparent;
   color: inherit;
