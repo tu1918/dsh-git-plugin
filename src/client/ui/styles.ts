@@ -58,6 +58,7 @@ export const cls = {
   branchInput: `${P}-branch-input`,
   branchBaseLabel: `${P}-branch-base`,
   branchSelect: `${P}-branch-select`,
+  repoSelect: `${P}-repo-select`,
   branchFormActions: `${P}-branch-form-actions`,
   branchRemotes: `${P}-branch-remotes`,
   branchRemotesHead: `${P}-branch-remotes-head`,
@@ -468,6 +469,7 @@ export const css = `
 .${cls.branchInput},
 .${cls.stashInput},
 .${cls.credentialInput},
+.${cls.repoSelect},
 .${cls.branchSelect} {
   box-sizing: border-box;
   padding: 3px 6px;
@@ -499,6 +501,16 @@ export const css = `
   flex: auto;
   min-width: 0;
   font-family: var(--dsh-font-mono);
+}
+
+/* The repository picker in the rail (FR-8), present only when there is a choice.
+   It gives way before the branch does — the branch name is what the rail is
+   about — so it takes a share of the row rather than all of it. */
+.${cls.repoSelect} {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  font-size: 11px;
 }
 
 .${cls.branchFormActions} {

@@ -61,6 +61,7 @@ const { NOTICE_DURATION_MS } = await import('../src/client/ui/notice.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
 const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
 const { BOTTOM_PANE_KEY } = await import('../src/client/ui/bottom-view.ts')
+const { REPO_CHOICE_KEY } = await import('../src/client/ui/repo-choice.ts')
 const {
   CHANGE_MIN_HEIGHT,
   COLUMN_SEPARATORS,
@@ -91,6 +92,7 @@ import type {
   GeneratedMessage,
   OperationReport,
   RemoteBranchRef,
+  RepoListing,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -283,6 +285,10 @@ function stubGit(options: {
   fetch?: Result<OperationReport>
   /** What `saveCredential` answers, for its own refusal path. */
   saveCredential?: Result<void>
+  /** The repository listing (FR-8); one repository at /repo by default. */
+  repos?: RepoListing
+  /** What `selectRepo` answers, for its own refusal path. */
+  selectRepo?: Result<void>
   /** What `undoCommit` answers; a reset of the newest commit by default. */
   undoCommit?: Result<UndoResult>
   /** What the stash listing answers; one entry by default (FR-6.2). */
@@ -311,6 +317,19 @@ function stubGit(options: {
     status: () => Promise.resolve(options.status ?? { ok: true, value: statusFixture() }),
     branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
     remoteBranches: () => Promise.resolve({ ok: true, value: options.remoteBranches ?? [] }),
+    repos: () =>
+      Promise.resolve({
+        ok: true,
+        value: options.repos ?? {
+          container: '/repo',
+          repos: [{ root: '/repo', name: 'repo' }],
+          selected: '/repo',
+        },
+      }),
+    selectRepo: (_sessionId, root) => {
+      note(`selectRepo:${root}`)
+      return Promise.resolve(options.selectRepo ?? { ok: true, value: undefined })
+    },
     log: () =>
       Promise.resolve({ ok: true, value: { commits: options.log ?? [], total: null, hasMore: false } }),
     diff: (_sessionId, path, target, contextLines) => {
@@ -2614,6 +2633,77 @@ describe('the sync actions (FR-5.1)', () => {
     assert.match(box.textContent ?? '', /no remote to fetch from/)
     // A refused operation leaves the change list where it was (§4.3).
     assert.equal(container.querySelectorAll(`.${cls.badge}`).length, 4)
+  })
+})
+
+describe('several repositories in one workspace (FR-8)', () => {
+  /** A container holding two repositories, reading `beta`. */
+  const multi = (): RepoListing => ({
+    container: '/work',
+    repos: [
+      { root: '/work/alpha', name: 'alpha' },
+      { root: '/work/beta', name: 'beta' },
+    ],
+    selected: '/work/beta',
+  })
+
+  it('offers a picker only when there is a choice, and switching clears the old repository’s state', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, repos: multi() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const select = must<HTMLSelectElement>(container, `.${cls.repoSelect}`)
+    assert.deepEqual(
+      [...select.options].map((option) => option.textContent),
+      ['alpha', 'beta'],
+    )
+    assert.equal(select.value, '/work/beta')
+
+    // A draft and an open diff both describe the repository being left.
+    await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'draft about beta')
+    await click(must(container, `[data-group="staged"] .${cls.row}`))
+    await flush()
+    assert.notEqual(container.querySelector(`.${cls.diffView}`), null)
+
+    await selectOption(select, '/work/alpha')
+    await flush()
+
+    assert.deepEqual(calls.entries, ['selectRepo:/work/alpha'])
+    assert.equal(select.value, '/work/alpha')
+    assert.equal(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`).value, '')
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+  })
+
+  it('renders no picker when the directory is a single repository', async () => {
+    // The ordinary case must look exactly as it did before FR-8 existed.
+    const container = await render(h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }))
+    await settle()
+    assert.equal(container.querySelector(`.${cls.repoSelect}`), null)
+  })
+
+  it('adopts a remembered choice the host has not made yet', async () => {
+    // The user chose alpha in this container earlier; the host defaulted to beta.
+    window.localStorage.setItem(REPO_CHOICE_KEY, JSON.stringify({ '/work': '/work/alpha' }))
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, repos: multi() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    assert.deepEqual(calls.entries, ['selectRepo:/work/alpha'])
+    assert.equal(must<HTMLSelectElement>(container, `.${cls.repoSelect}`).value, '/work/alpha')
+  })
+
+  it('leaves the host’s choice alone when it already matches the remembered one', async () => {
+    window.localStorage.setItem(REPO_CHOICE_KEY, JSON.stringify({ '/work': '/work/beta' }))
+    const calls: ActionLog = { entries: [] }
+    await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, repos: multi() }), t, locale: 'en' }),
+    )
+    await settle()
+    assert.deepEqual(calls.entries, [], 'no pointless round trip')
   })
 })
 

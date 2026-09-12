@@ -14,6 +14,7 @@
  * @module dsh-git-panel/test/host-service
  */
 
+import { realpathSync, utimesSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +26,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { createGitRunner } from '../src/host/git-exec.ts'
 import { createGitService } from '../src/host/git-service.ts'
+import { resetDiscoveryCache } from '../src/host/repo-discovery.ts'
 import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
 import { createGitProbe } from '../src/host/git-probe.ts'
 import { createFileIconRegistry } from '../src/host/file-icons.ts'
@@ -170,6 +172,112 @@ describe('git service status', () => {
     assert.ok(result.ok)
     assert.equal(result.value.branch.head, 'unborn')
     assert.equal(result.value.changedCount, 0)
+  })
+})
+
+describe('several repositories in one directory (FR-8)', () => {
+  /** A container holding two repositories, one commit each. */
+  function twoRepos(prefix: string): { container: string; alpha: string; beta: string } {
+    const container = makePlainDir(prefix)
+    const alpha = join(container, 'alpha')
+    const beta = join(container, 'beta')
+    git(container, ['init', '-q', 'alpha'])
+    git(container, ['init', '-q', 'beta'])
+    write(alpha, 'a.txt', 'a\n')
+    stageAll(alpha)
+    commit(alpha, 'alpha first')
+    write(beta, 'b.txt', 'b\n')
+    stageAll(beta)
+    commit(beta, 'beta first')
+    return { container, alpha, beta }
+  }
+
+  it('reads the most recently used repository, then follows an explicit choice', async () => {
+    const { container, alpha, beta } = twoRepos('svc-multi')
+    // Make `beta` the recently used one; without the stamps the tie would fall
+    // back to name order, which is `alpha`.
+    const now = Date.now() / 1000
+    utimesSync(join(alpha, '.git', 'HEAD'), now - 90, now - 90)
+    utimesSync(join(beta, '.git', 'HEAD'), now - 5, now - 5)
+    resetDiscoveryCache()
+
+    const service = serviceFor({ s1: container })
+    const listing = await service.repos('s1')
+    assert.ok(listing.ok)
+    assert.equal(listing.value.container, realpathSync(container))
+    assert.deepEqual(
+      listing.value.repos.map((repo) => repo.name),
+      ['beta', 'alpha'],
+    )
+    assert.equal(listing.value.selected, realpathSync(beta))
+
+    // The default is what every read uses, with no explicit choice made.
+    const status = await service.status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.root, realpathSync(beta))
+
+    const moved = await service.selectRepo('s1', realpathSync(alpha))
+    assert.ok(moved.ok, moved.ok ? '' : JSON.stringify(moved.error))
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.root, realpathSync(alpha))
+    // The other reads follow the same choice: `a.txt` only exists in alpha.
+    const diff = await service.diff('s1', 'a.txt', { area: 'worktree' }, 3)
+    assert.ok(diff.ok, diff.ok ? '' : JSON.stringify(diff.error))
+  })
+
+  it('answers one entry when the directory is itself inside a repository', async () => {
+    const repo = makeRepo('svc-multi-single')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const listing = await serviceFor({ s1: repo }).repos('s1')
+    assert.ok(listing.ok)
+    assert.equal(listing.value.repos.length, 1)
+    assert.equal(listing.value.selected, realpathSync(repo))
+  })
+
+  it('refuses a root this session does not have, and audits the one it takes', async () => {
+    const { container, alpha } = twoRepos('svc-multi-refuse')
+    const logs: string[] = []
+    const ports: HostPorts = {
+      ...SILENT,
+      log: (_level, message) => {
+        logs.push(message)
+      },
+    }
+    const service = serviceWith(ports, { s1: container })
+
+    for (const bad of [join(container, 'notes'), '/etc', 'alpha', '']) {
+      const result = await service.selectRepo('s1', bad)
+      assert.equal(result.ok, false, bad)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+    // Absolute and real, but not one of THIS session's repositories.
+    const elsewhere = makeRepo('svc-multi-elsewhere')
+    const refused = await service.selectRepo('s1', elsewhere)
+    assert.equal(refused.ok, false)
+    assert.equal(refused.ok ? '' : refused.error.code, 'bad-request')
+
+    const accepted = await service.selectRepo('s1', realpathSync(alpha))
+    assert.ok(accepted.ok)
+    assert.ok(
+      logs.some((line) => line.includes(realpathSync(alpha))),
+      'the audit names the repository that was chosen',
+    )
+  })
+
+  it('answers an empty listing and not-a-repo for a directory that holds none', async () => {
+    const empty = makePlainDir('svc-multi-empty')
+    const service = serviceFor({ s1: empty })
+    const listing = await service.repos('s1')
+    assert.ok(listing.ok)
+    assert.deepEqual(listing.value.repos, [])
+    assert.equal(listing.value.selected, null)
+
+    const status = await service.status('s1')
+    assert.equal(status.ok, false)
+    assert.equal(status.ok ? '' : status.error.code, 'not-a-repo')
   })
 })
 
@@ -975,6 +1083,54 @@ describe('the mutation routes', () => {
 
       // A mutation reachable by GET would be reachable by an <img> tag.
       const viaGet = await fetch(`${harness.origin}/git-panel/fetch?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('lists repositories and switches between them over the wire (FR-8)', async () => {
+    const container = makePlainDir('routes-multi')
+    const alpha = join(container, 'alpha')
+    git(container, ['init', '-q', 'alpha'])
+    git(container, ['init', '-q', 'beta'])
+    write(alpha, 'a.txt', 'a\n')
+    stageAll(alpha)
+    commit(alpha, 'alpha first')
+    write(join(container, 'beta'), 'b.txt', 'b\n')
+    stageAll(join(container, 'beta'))
+    commit(join(container, 'beta'), 'beta first')
+    resetDiscoveryCache()
+
+    const harness = await startHarness({ s1: container })
+    try {
+      const listed = (await (
+        await fetch(`${harness.origin}/git-panel/repos?session=s1`)
+      ).json()) as { ok: boolean; value: { repos: { name: string }[]; selected: string | null } }
+      assert.equal(listed.ok, true)
+      assert.deepEqual(
+        listed.value.repos.map((repo) => repo.name).sort(),
+        ['alpha', 'beta'],
+      )
+
+      const moved = await post(harness, '/git-panel/selectRepo', {
+        session: 's1',
+        root: realpathSync(alpha),
+      })
+      assert.equal(moved.status, 200)
+      assert.equal(((await moved.json()) as { ok: boolean }).ok, true)
+
+      // The switch is what the next read answers with — the route reaches the
+      // service's own selection, not a copy in the browser.
+      const status = (await (
+        await fetch(`${harness.origin}/git-panel/status?session=s1`)
+      ).json()) as { ok: boolean; value: { root: string } }
+      assert.equal(status.ok, true)
+      assert.equal(status.value.root, realpathSync(alpha))
+
+      // Choosing a repository is a state change, so it is a POST: a link or an
+      // image tag must not be able to re-point the panel.
+      const viaGet = await fetch(`${harness.origin}/git-panel/selectRepo?session=s1`)
       assert.equal(viaGet.status, 405)
     } finally {
       await harness.close()

@@ -61,6 +61,7 @@ const ROUTE_PREFIX = '/git-panel'
 const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'status',
   'branches',
+  'repos',
   'remoteBranches',
   'log',
   'diff',
@@ -86,6 +87,11 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'fetch',
   'sync',
   'saveCredential',
+  // Not a repository mutation, but a state change all the same: it decides which
+  // repository the panel reads next. `POST` plus the same-origin check is the
+  // fence that keeps a cross-site `<img>` from silently re-pointing the panel,
+  // the same reasoning `generateCommitMessage` is here for.
+  'selectRepo',
   'checkout',
   'createBranch',
   'deleteBranch',
@@ -349,6 +355,13 @@ export function registerGitPanelRoutes(
         return await service.branches(sessionId)
       case 'remoteBranches':
         return await service.remoteBranches(sessionId)
+      case 'repos':
+        return await service.repos(sessionId)
+      case 'selectRepo': {
+        const root = stringOf(body, 'root')
+        if (!root.ok) return root
+        return await service.selectRepo(sessionId, root.value)
+      }
       case 'log':
         return await service.log(sessionId, intOf(url, 'offset', 0), intOf(url, 'limit', 30))
       case 'diff': {

@@ -720,6 +720,8 @@ describe('the full M2 flow', () => {
       service.fetch('missing'),
       service.sync('missing'),
       service.saveCredential('missing', 'https://host', 'user', 'password'),
+      service.repos('missing'),
+      service.selectRepo('missing', '/tmp'),
       service.undoCommit('missing', 'a'.repeat(40)),
     ])
     for (const result of results) {

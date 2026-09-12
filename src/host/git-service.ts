@@ -9,13 +9,14 @@
  * @module dsh-git-panel/host/git-service
  */
 
-import { stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { realpath, stat } from 'node:fs/promises'
+import { basename, isAbsolute, join } from 'node:path'
 
 import { buildCommitMessagePrompt, cleanCommitMessage, truncateDiff } from '../core/commit-message.ts'
 import { parseUnifiedDiff } from '../core/diff-parse.ts'
 import { originOf } from '../core/remote-origin.ts'
 import { buildAskpass } from './askpass.ts'
+import { discoverRepos, type RunCapture } from './repo-discovery.ts'
 import {
   changedPathCount,
   groupsOf,
@@ -51,6 +52,7 @@ import type {
   LogPage,
   OperationReport,
   RemoteBranchRef,
+  RepoListing,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -79,6 +81,14 @@ const LOG_FORMAT = '%H%x00%h%x00%s%x00%an%x00%aI%x00%cI%x00%P%x1e'
 
 /** The `stash list` format the stash parser expects; the two must agree. */
 const STASH_FORMAT = '%gd%x00%H%x00%h%x00%s%x00%cI%x1e'
+
+/**
+ * Most per-session repository choices kept (FR-8).
+ *
+ * One small string per session; the bound exists so a host that has seen
+ * thousands of sessions does not grow a map for none of them.
+ */
+const MAX_SELECTIONS = 128
 
 /** Default page size for the history list (FR-3.7). */
 const DEFAULT_LOG_LIMIT = 30
@@ -320,6 +330,27 @@ export function createGitService(
   const maxStdoutBytes = limits.maxStdoutBytes
 
   /**
+   * Which repository each session is reading (FR-8).
+   *
+   * This is the one piece of per-session state in an otherwise stateless
+   * service, and it is deliberate: see {@link repoRoot}. Entries are dropped when
+   * a session stops resolving and bounded by {@link MAX_SELECTIONS}, because a
+   * long-lived host sees sessions come and go.
+   */
+  const selections = new Map<string, string>()
+
+  /** Remember one session's repository, keeping the map bounded. */
+  function remember(sessionId: string, root: string): void {
+    selections.delete(sessionId)
+    selections.set(sessionId, root)
+    while (selections.size > MAX_SELECTIONS) {
+      const oldest = selections.keys().next()
+      if (oldest.done === true) break
+      selections.delete(oldest.value)
+    }
+  }
+
+  /**
    * Options for one call, omitting keys the host left at their defaults.
    * @param cwd - Directory to run in.
    * @param optionalLocks - Whether this call may take git's optional locks.
@@ -333,6 +364,17 @@ export function createGitService(
     optionalLocks,
     ...(askpass === undefined ? {} : { askpass }),
   })
+
+  /**
+   * Run a discovery command, answering stdout or `null`.
+   *
+   * Discovery is a read — `rev-parse` takes no lock — so it must not touch the
+   * index the probe watches.
+   */
+  const capture: RunCapture = async (args, cwd) => {
+    const outcome = await runner.run(args, options(cwd, false))
+    return outcome.code === 0 ? outcome.stdout : null
+  }
 
   /**
    * Run one git command and classify its outcome.
@@ -374,21 +416,99 @@ export function createGitService(
   }
 
   /**
-   * Resolve a session to its repository root.
+   * Resolve a session to its repository root (FR-8).
    *
-   * The root is discovered by git rather than guessed from the session's
-   * directory, so a session opened in a subdirectory still finds its repository,
-   * and a session outside any repository is refused by git itself rather than by
-   * a rule this plugin would have to keep in step with git's.
+   * The session's directory is either inside a repository (the common case —
+   * including a subdirectory of one, which is why git is asked rather than the
+   * path read) or a container holding several, in which case one of them has to
+   * be chosen. The choice is remembered **per session**: every entry point in
+   * this service takes a session id and nothing else, so a repository parameter
+   * would have had to be threaded through all of them, and the wire's whole
+   * security argument is that the browser names no path but a session.
+   *
+   * Until a choice is made, the default is the doc's FR-8.2: the repository whose
+   * git state moved most recently. A remembered root that no longer exists (or
+   * stopped being a repository) falls back to that default rather than failing,
+   * so deleting a repository does not wedge the panel.
    */
   async function repoRoot(sessionId: string): Promise<Result<string>> {
     const directory = await resolver.resolveDir(sessionId)
-    if (!directory.ok) return directory
-    const outcome = await run(['rev-parse', '--show-toplevel'], directory.value)
-    if (!outcome.ok) return outcome
-    const root = outcome.value.stdout.trim()
-    if (root === '') return fail('not-a-repo', 'git did not report a repository root')
+    if (!directory.ok) {
+      selections.delete(sessionId)
+      return directory
+    }
+    const roots = await discoverRepos(capture, directory.value, (message) =>
+      ports.log('warn', message),
+    )
+    if (roots.length === 0) {
+      selections.delete(sessionId)
+      return fail(
+        'not-a-repo',
+        'this directory is not inside a git repository, and holds none',
+      )
+    }
+    const chosen = selections.get(sessionId)
+    const root = chosen !== undefined && roots.includes(chosen) ? chosen : roots[0]
+    if (root === undefined) return fail('not-a-repo', 'git did not report a repository root')
+    remember(sessionId, root)
     return { ok: true, value: root }
+  }
+
+  /**
+   * The repositories this session's directory holds, and the one being read (FR-8).
+   * @param sessionId - Session to describe.
+   */
+  async function listRepos(sessionId: string): Promise<Result<RepoListing>> {
+    const directory = await resolver.resolveDir(sessionId)
+    if (!directory.ok) {
+      selections.delete(sessionId)
+      return directory
+    }
+    const container = directory.value
+    const roots = await discoverRepos(capture, container, (message) => ports.log('warn', message))
+    const chosen = selections.get(sessionId)
+    const selected = chosen !== undefined && roots.includes(chosen) ? chosen : (roots[0] ?? null)
+    if (selected !== null) remember(sessionId, selected)
+    return {
+      ok: true,
+      value: {
+        container,
+        repos: roots.map((root) => ({ root, name: basename(root) })),
+        selected,
+      },
+    }
+  }
+
+  /**
+   * Point this session's panel at one of the roots {@link listRepos} returned.
+   *
+   * The root is checked against a fresh discovery rather than trusted, and it
+   * must be one of the repositories the host itself found under this session's
+   * directory — so the browser can choose, but it cannot name a path of its own
+   * (§5.5's rule, kept intact).
+   * @param sessionId - Session whose panel is being pointed.
+   * @param root - A root from the listing.
+   */
+  async function selectRepo(sessionId: string, root: string): Promise<Result<void>> {
+    if (typeof root !== 'string' || root === '' || !isAbsolute(root)) {
+      return fail('bad-request', 'a repository root must be an absolute path')
+    }
+    const directory = await resolver.resolveDir(sessionId)
+    if (!directory.ok) {
+      selections.delete(sessionId)
+      return directory
+    }
+    const container = directory.value
+    const roots = await discoverRepos(capture, container, (message) =>
+      ports.log('warn', message),
+    )
+    const wanted = await realpath(root).catch(() => '')
+    if (wanted === '' || !roots.includes(wanted)) {
+      return fail('bad-request', 'that directory is not one of this session’s repositories')
+    }
+    remember(sessionId, wanted)
+    ports.log('info', `git-panel: session reads ${wanted} (container ${container})`)
+    return { ok: true, value: undefined }
   }
 
   /** Read the whole-repository status; shared by `/status` and `stagedPaths`. */
@@ -1505,6 +1625,9 @@ export function createGitService(
     stashSave,
     stashApply,
     stashDrop,
+
+    repos: listRepos,
+    selectRepo,
 
     async branches(sessionId: string): Promise<Result<readonly BranchRef[]>> {
       const root = await repoRoot(sessionId)

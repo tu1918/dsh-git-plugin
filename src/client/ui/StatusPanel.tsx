@@ -30,6 +30,8 @@ import type {
   BranchInfo,
   BranchRef,
   RemoteBranchRef,
+  RepoChoice,
+  RepoListing,
   ChangeArea,
   CommitInfo,
   DiffTarget,
@@ -63,6 +65,7 @@ import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './r
 import { canDiscard } from './row-actions.ts'
 import { writeClipboard } from './clipboard.ts'
 import { useArmedKey } from './armed.ts'
+import { readRepoChoices, writeRepoChoice } from './repo-choice.ts'
 import { cls } from './styles.ts'
 import { say, sentence, verbatim, type Sentence, type Translate } from './translate.ts'
 import { NOTICE_DURATION_MS, Notice } from './notice.tsx'
@@ -131,6 +134,7 @@ type ActionOp =
   | 'pull'
   | 'fetch'
   | 'sync'
+  | 'repo'
   | 'checkout'
   | 'createBranch'
   | 'deleteBranch'
@@ -271,6 +275,7 @@ export function diffAreaOf(area: ChangeArea): DiffTarget {
  */
 function useRepoSnapshot(
   sessionId: string,
+  repoEpoch: number,
   git: GitRemoteClient,
   tabSignal: AbortSignal | undefined,
   bus: RepoChangeBus,
@@ -284,12 +289,15 @@ function useRepoSnapshot(
   /** The signal every read of this mount shares; the effects own its lifetime. */
   const [controller] = useState(() => new AbortController())
 
-  // A new session is a new repository: nothing from the old one may survive as
-  // this one's "last reading".
+  // A new session — or a switch to another repository inside one (FR-8) — is a
+  // new repository: nothing from the old one may survive as this one's "last
+  // reading". The epoch is the switch's signal, and it also re-runs the opening
+  // read and re-subscribes the probe, because a stream's watched root is fixed
+  // when it is opened.
   useEffect(() => {
     published.current = null
     shown.current = false
-  }, [sessionId])
+  }, [sessionId, repoEpoch])
 
   useEffect(() => {
     const abort = (): void => controller.abort()
@@ -334,7 +342,10 @@ function useRepoSnapshot(
       // change somebody has to hear about.
       if (!first) bus.publish(kinds)
     },
-    [bus, controller, git, sessionId],
+    // `repoEpoch` is not read here: it is in the list so that switching
+    // repository rebuilds this callback, which is what re-runs the opening read
+    // and re-subscribes the probe below.
+    [bus, controller, git, repoEpoch, sessionId],
   )
 
   // The opening read.
@@ -359,7 +370,7 @@ function useRepoSnapshot(
       if (timer !== undefined) clearTimeout(timer)
       unsubscribe()
     }
-  }, [git, read, sessionId])
+  }, [git, read, sessionId, repoEpoch])
 
   const reload = useCallback(() => {
     setBusy(true)
@@ -438,8 +449,17 @@ function BranchRail({
   onToggleStash,
   mode,
   onToggleMode,
+  repos,
+  selectedRepo,
+  onSelectRepo,
 }: {
   readonly branch: BranchInfo
+  /** Repositories under this session's directory (FR-8); empty when there is none. */
+  readonly repos: readonly RepoChoice[]
+  /** The root being read, or `null` while the listing is unknown. */
+  readonly selectedRepo: string | null
+  /** Point the panel at another repository; only offered when there is a choice. */
+  readonly onSelectRepo: (root: string) => void
   /**
    * Whether the configured upstream no longer exists.
    *
@@ -509,6 +529,24 @@ function BranchRail({
 
   return (
     <div className={cls.head} ref={railRef}>
+      {/* Which repository this panel is reading (FR-8). Rendered ONLY when there
+          is a choice, so a workspace that is one repository — the ordinary case —
+          looks exactly as it did before this feature existed. */}
+      {repos.length > 1 && (
+        <select
+          className={cls.repoSelect}
+          value={selectedRepo ?? ''}
+          title={t('repo.pickTitle')}
+          aria-label={t('repo.pick')}
+          onChange={(event) => onSelectRepo(event.target.value)}
+        >
+          {repos.map((repo) => (
+            <option key={repo.root} value={repo.root}>
+              {repo.name}
+            </option>
+          ))}
+        </select>
+      )}
       {/* The branch name is the picker's handle (FR-4.1). It reads as a control
           rather than as a label because §1.3's third lesson is that a branch
           switcher nobody notices is a branch switcher nobody uses. */}
@@ -608,7 +646,31 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // generation number through the tree, and a second session's panel is a second
   // repository with its own changes.
   const bus = useMemo(createRepoChangeBus, [])
-  const { snapshot, reload, busy } = useRepoSnapshot(sessionId, git, signal, bus)
+  /**
+   * Which repository is being read, and which ones there are to choose from (FR-8).
+   *
+   * A container directory holds several; the host remembers the choice per
+   * session, and this is the panel's copy of that answer. `null` while the
+   * listing is unknown, or when there is no repository at all — in which case the
+   * ordinary "not a repo" path below reports it.
+   */
+  const [listing, setListing] = useState<RepoListing | null>(null)
+  /**
+   * Bumped when the user points the panel at another repository.
+   *
+   * The host's selection does the real work; this exists so the reads and the
+   * probe subscription are rebuilt — a stream's watched root is fixed when it
+   * opens, so following a switch means opening another one.
+   */
+  const [repoEpoch, setRepoEpoch] = useState(0)
+  const selectedRepo = listing?.selected ?? null
+  const { snapshot, reload, busy } = useRepoSnapshot(
+    sessionId,
+    repoEpoch,
+    git,
+    signal,
+    bus,
+  )
   // The deployment's own file-type icons, if it configured any (FR-1.2).
   const icons = useFileIcons(git, sessionId, signal)
   // The draft lives up here, not inside the box: a commit that fails must not
@@ -833,10 +895,65 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setCredential(null)
   }, [])
 
-  // A different session is a different repository, so neither the draft nor the
-  // last operation's result belongs to it — and neither do the open diffs, which
-  // describe files in the old repository. The dock itself stays where it was: a
-  // user who had the pane open keeps it open, on the history.
+  // Which repositories this session's directory holds, and which one is read
+  // (FR-8). The host owns the selection; this reads it, and — when the user's own
+  // earlier choice for this container was not the host's default — points the
+  // host at it before anything is read, so the panel opens on the repository it
+  // was last pointed at rather than flashing the default one.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const result = await git.repos(sessionId, signal)
+      if (cancelled) return
+      if (!result.ok) {
+        setListing(null)
+        return
+      }
+      const remembered = readRepoChoices()[result.value.container]
+      const applies =
+        remembered !== undefined &&
+        remembered !== result.value.selected &&
+        result.value.repos.some((repo) => repo.root === remembered)
+      if (!applies) {
+        setListing(result.value)
+        return
+      }
+      const moved = await git.selectRepo(sessionId, remembered, signal)
+      if (cancelled) return
+      setListing(moved.ok ? { ...result.value, selected: remembered } : result.value)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [git, sessionId, signal])
+
+  /**
+   * Point the panel at another repository of this container (FR-8).
+   *
+   * The choice is remembered against the container, not the session, so the next
+   * conversation in this directory opens on the same repository (FR-8.2).
+   * @param root - One of the roots the rail's picker offered.
+   */
+  const switchRepo = (root: string): void => {
+    const current = listing
+    if (current === null || root === current.selected) return
+    void (async () => {
+      const moved = await git.selectRepo(sessionId, root, signal)
+      if (!moved.ok) {
+        setAction({ kind: 'failed', op: 'repo', label: say('repo.pick'), error: moved.error })
+        return
+      }
+      writeRepoChoice(current.container, root)
+      setListing({ ...current, selected: root })
+      setRepoEpoch((value) => value + 1)
+    })()
+  }
+
+  // A different session — or another repository inside this one (FR-8) — is a
+  // different repository, so neither the draft nor the last operation's result
+  // belongs to it, and neither do the open diffs, which describe files in the old
+  // repository. The dock itself stays where it was: a user who had the pane open
+  // keeps it open, on the history. `selectedRepo` is the second trigger.
   useEffect(() => {
     setMessage('')
     setAction({ kind: 'idle' })
@@ -855,12 +972,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     // The checked rows die with the session too: they were a statement about the
     // old repository's list, and this one has never been read.
     setSelected(new Map())
+    // The repository listing is not cleared here: it describes the CONTAINER, and
+    // a switch inside that container does not change it — only `selected` moves.
     // Neither the mode nor the folded directories are reset here: both are
     // preferences about how a list is drawn, exactly like the group folds above,
     // and a fold keyed by path is meaningful in the next repository too
     // (`node_modules` is folded wherever it appears).
     disarm()
-  }, [sessionId, disarm])
+  }, [disarm, selectedRepo, sessionId])
 
   // A file committed or discarded while its diff is open no longer has a row to
   // return to, so that tab is dropped rather than left showing a diff of
@@ -1704,6 +1823,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           onPush={push}
           onFetch={fetchRemotes}
           onSync={sync}
+          repos={listing?.repos ?? []}
+          selectedRepo={selectedRepo}
+          onSelectRepo={switchRepo}
           pickerOpen={pickerOpen}
           onTogglePicker={() => {
             // The rail has two layers and one row to hang them from: opening one

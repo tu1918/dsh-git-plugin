@@ -10,12 +10,10 @@ foundation, a read-only panel, the commit loop (stage → commit → push), the 
 view, branch management with the merge state, an AI-written commit message, a
 commit detail — then M5a's discard / undo / stash and M5b's commit-file
 drill-down, copy entries, and the commit graph, alongside fetch, a read-only
-remote-branch list, and HTTPS credentials. What remains: rewriting a commit
-(drop / squash / reset) and the v1.0 release pass. **Multi-repository scanning
-(FR-8) is deliberately deferred** — the requirements document marks it P2, the
-workaround is to point the workspace at the repository you want, and doing it
-properly would mean letting the browser name which repository, which is the one
-kind of input this plugin's whole security posture avoids (`docs/plan.md` D46).
+remote-branch list, HTTPS credentials, and multi-repository workspaces. What
+remains: rewriting a commit (drop / squash / reset) and the v1.0 release pass.
+With those, every item of the requirements document's own M5 list — discard,
+stash, the commit graph, undo, multi-repository — has shipped.
 
 ## Docs
 
@@ -40,6 +38,7 @@ kind of input this plugin's whole security posture avoids (`docs/plan.md` D46).
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
 | Fetch every remote — a dashed ↓ beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
+| Multi-repository workspaces (FR-8): when the session's directory is a **container** rather than a repository, one level below it is scanned for repositories (skipping dot-directories, `node_modules`, `dist`, `build`) and the rail grows a picker — only when there is a choice, so a single-repository workspace looks exactly as before. The default is the repository whose git state moved most recently, and the choice is remembered per container. The browser may only choose among roots the host itself found there, so naming a path of its own gets a refusal | ✅ |
 | HTTPS credentials. A remote that wants one and has none is named as such (`auth-required`, with the origin git itself printed), and the same failure notice grows a username / password form. "Save and retry" stores the pair through the harness's own credential seam — `ctx.credentials`, so the provider owns where the value lives, and this profile's local provider writes its own 0600 document rather than us inventing a store — and then retries the very operation that failed. Every later push/pull/fetch/sync resolves the stored credential and hands it to git through `GIT_ASKPASS`, with `GIT_TERMINAL_PROMPT=0` unchanged so nothing can ever hang on a prompt. The value never reaches a log line | ✅ |
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
 | A pull whose tracked upstream was deleted on the remote says so and names the way out (`git branch --unset-upstream`, or repointing it) — instead of forwarding git's "no such ref was fetched", which never says the branch is gone | ✅ |
@@ -99,7 +98,8 @@ src/core/      pure TypeScript: types, ports, git parsers, argument validation,
                id), and the AI commit message's prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, git state probe (filesystem events with a
-               polling fallback), git directory lookup, askpass helper
+               polling fallback), git directory lookup, repository discovery,
+               askpass helper
   adapter/     the only place the host names DSH (webServer, sessions, logger,
                the credential seam, and the model services
                `llm` + `agentDefaultModel`)
@@ -128,7 +128,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 495 tests && build
+npm run check      # tsc --noEmit && 510 tests && build
 ```
 
 ## Install

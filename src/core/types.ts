@@ -166,6 +166,31 @@ export interface RemoteBranchRef {
   readonly subject: string
 }
 
+/** One repository the panel may point at, when the session's directory holds several (FR-8). */
+export interface RepoChoice {
+  /** Absolute work tree root, as discovered under the session's directory. */
+  readonly root: string
+  /** Display name: the root's own directory name. */
+  readonly name: string
+}
+
+/**
+ * Which repositories this session has, and which one the panel is reading (FR-8).
+ *
+ * `container` is the session's own directory — the thing the user opened — and it
+ * is what the client remembers a choice against: a session is transient, a
+ * directory is not. When the directory is itself a repository, `repos` holds
+ * exactly that one and the panel shows no picker at all.
+ */
+export interface RepoListing {
+  /** The session's directory: what a remembered choice is keyed by. */
+  readonly container: string
+  /** Repositories found at or one level below the container, most active first. */
+  readonly repos: readonly RepoChoice[]
+  /** The root the panel is currently reading, or `null` when there is none. */
+  readonly selected: string | null
+}
+
 /** One commit row in the history list (FR-3.6). */
 export interface CommitInfo {
   /** Full commit object id. */

@@ -22,6 +22,7 @@ import type {
   LogPage,
   OperationReport,
   RemoteBranchRef,
+  RepoListing,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -296,6 +297,26 @@ export interface WorkspaceGitService {
    * @param sessionId - Opaque session identity from the browser.
    */
   branches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly BranchRef[]>>
+  /**
+   * List the repositories this session's directory holds, and which one is read (FR-8).
+   *
+   * A directory that is itself a repository answers one entry; a directory that
+   * is only a container answers its child repositories, and the panel then lets
+   * the user choose. An empty list is the ordinary "not a repository anywhere
+   * here" answer, not an error.
+   * @param sessionId - Opaque session identity from the browser.
+   */
+  repos(sessionId: string, signal?: AbortSignal): Promise<Result<RepoListing>>
+  /**
+   * Point this session's panel at one of the repositories {@link repos} listed.
+   *
+   * The root is re-checked against a fresh discovery before it is accepted, so a
+   * browser can only choose among roots the host itself found under the
+   * session's directory — never name a path of its own (§5.5).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param root - One of the roots the listing returned.
+   */
+  selectRepo(sessionId: string, root: string): Promise<Result<void>>
   /**
    * List remote-tracking branches (`refs/remotes`) for reading.
    *
@@ -637,6 +658,19 @@ export interface GitRemoteClient {
    * @param signal - Cancels the request when the tab goes away.
    */
   branches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly BranchRef[]>>
+  /**
+   * List the repositories this session's directory holds, and which one is read (FR-8).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  repos(sessionId: string, signal?: AbortSignal): Promise<Result<RepoListing>>
+  /**
+   * Point this session's panel at one of the repositories {@link repos} listed.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param root - One of the roots the listing returned.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  selectRepo(sessionId: string, root: string, signal?: AbortSignal): Promise<Result<void>>
   /**
    * List remote-tracking branches for reading (no checkout is offered).
    * @param sessionId - Opaque session identity, supplied by the slot.
