@@ -2676,6 +2676,30 @@ describe('several repositories in one workspace (FR-8)', () => {
     assert.equal(container.querySelector(`.${cls.diffView}`), null)
   })
 
+  it('re-reads the history for the repository just switched to', async () => {
+    const calls: ActionLog = { entries: [] }
+    let logReads = 0
+    const git: GitRemoteClient = {
+      ...stubGit({ calls, repos: multi() }),
+      log: () => {
+        logReads += 1
+        return Promise.resolve({ ok: true, value: { commits: [], total: null, hasMore: false } })
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    const before = logReads
+    assert.ok(before >= 1, 'the opening read happened')
+
+    await selectOption(must<HTMLSelectElement>(container, `.${cls.repoSelect}`), '/work/alpha')
+    await flush()
+
+    // The history panel holds its own list and only re-reads on a ref change,
+    // which a switch is not — so it has to be re-mounted, or it keeps showing the
+    // old repository's commits until something else refreshes it.
+    assert.ok(logReads > before, `the history re-read for the new repository (${logReads} reads)`)
+  })
+
   it('renders no picker when the directory is a single repository', async () => {
     // The ordinary case must look exactly as it did before FR-8 existed.
     const container = await render(h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }))

@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（56 个源文件）、`test/`（20 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 510 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 511 项测试 + 两个打包产物
 
 ---
 
@@ -725,9 +725,9 @@ disabled`。`GIT_TERMINAL_PROMPT=0` 是防挂死的硬要求，但这样一来 g
 | `host/git-service.ts` | 闭包内 `selections: Map<sessionId, root>`（上限 128，会话解析失败即删）。`repoRoot` 改为：容器 → 记住的根（仍有效则用）→ 否则发现的默认（最近活动）并记住 → 无根 `not-a-repo`。`listRepos` 回 `{container, repos, selected}`；`selectRepo` 要求绝对路径、`realpath` 后必须**属于刚扫出来的根**，审计只记容器与选中的根 |
 | `host/adapter/routes.ts` + `client/adapter/git-client.ts` | `repos` 进 `READ_OPERATIONS`（GET）；`selectRepo` 进 `WRITE_OPERATIONS`（POST + 同源），注释说明它不改仓库、改的是面板读哪个仓库（与 `generateCommitMessage` 同类） |
 | `ui/repo-choice.ts`（新） | 按**容器路径**记进 `dsh-git-panel/repo`；读取做形状校验（照 `bottom-view.ts`） |
-| `ui/StatusPanel.tsx` | 挂载/换会话读一次 listing；若「记忆的根」在列表里且与 host 的 `selected` 不同，先 `selectRepo` 再继续（避免闪一下默认仓库）。分支行加 `<select>`，**仅当 `repos.length > 1`**（单仓库工作区零变化）。切换后：写记忆、`repoEpoch++`（重建读取 + **重开 SSE**，流的监听根在订阅时定死）、并按既有范式清空按仓库存在的界面状态（草稿/勾选/diff/菜单/凭据表单/暂存层）——重置 effect 的依赖从 `sessionId` 扩成 `sessionId + selectedRepo` |
+| `ui/StatusPanel.tsx` | 挂载/换会话读一次 listing；若「记忆的根」在列表里且与 host 的 `selected` 不同，先 `selectRepo` 再继续（避免闪一下默认仓库）。分支行加 `<select>`，**仅当 `repos.length > 1`**（单仓库工作区零变化）。切换后：写记忆、`repoEpoch++`（重建读取 + **重开 SSE**，流的监听根在订阅时定死）、并按既有范式清空按仓库存在的界面状态（草稿/勾选/diff/菜单/凭据表单/暂存层）——重置 effect 的依赖从 `sessionId` 扩成 `sessionId + selectedRepo`。另外**给底部 dock 传 `key={selectedRepo}`**：历史面板自己持有提交列表、只在 `refs` 事件时重读，而切换仓库不是 `refs` 事件——不重挂就会一直显示切走那个仓库的提交（产品方实测报来，已补测试；dock 的偏好本来就在 localStorage，重挂不丢 tab/折叠/高度） |
 | `locales.ts` + `styles.ts` | `repo.pick` / `repo.pickTitle`（中英）；`repoSelect` 复用输入框样式，宽度上限 45% 让位给分支名 |
-| 测试 | +15 项（510 总计）：发现 6 项（cwd 自己是仓库、容器列子仓库且跳过四类目录、最近活动排序与并列按名字、无仓库为空、缓存命中返回同一数组、`recencyOf` 有状态/无状态）；服务层 4 项真仓库（默认读最近活动、`selectRepo` 后 status 与 diff 都跟着换、单仓库只回一条、拒绝非本会话的根并审计、空目录回空 listing + `not-a-repo`）；路由 1 项（GET 列表 → POST 选中 → status 真的换了根 → GET 405）；客户端 4 项（有选择才渲染、切换调 `selectRepo` 并清掉草稿与 diff、单仓库不渲染、采用记忆的选择且不重复往返）；两张拒绝表各补一行 |
+| 测试 | +16 项（511 总计）：发现 6 项（cwd 自己是仓库、容器列子仓库且跳过四类目录、最近活动排序与并列按名字、无仓库为空、缓存命中返回同一数组、`recencyOf` 有状态/无状态）；服务层 4 项真仓库（默认读最近活动、`selectRepo` 后 status 与 diff 都跟着换、单仓库只回一条、拒绝非本会话的根并审计、空目录回空 listing + `not-a-repo`）；路由 1 项（GET 列表 → POST 选中 → status 真的换了根 → GET 405）；客户端 5 项（有选择才渲染、切换调 `selectRepo` 并清掉草稿与 diff、单仓库不渲染、采用记忆的选择且不重复往返、**切换后历史重新读取**）；两张拒绝表各补一行 |
 
 **与 better-sidebar 的三处不同（照文档）**：跳 `dist`/`build`（它只跳点开头与 `node_modules`）、
 默认按「最近活动」（它取排序第一个）、按容器记忆选择（它每次挂载回到默认）。

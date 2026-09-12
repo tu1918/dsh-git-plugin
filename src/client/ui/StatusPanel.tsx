@@ -2162,6 +2162,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             keeps the list and the editor apart; this panel has no editor area, so
             they take turns in the same box). */}
         <BottomPane
+          // Keyed by the repository, so switching one REMOUNTS the dock. The
+          // history panel owns its commit list and only re-reads on a `refs`
+          // event; a switch is not such an event, so without this the list keeps
+          // showing the repository the panel just left until something else
+          // refreshes it (reported from the running panel). The dock's own
+          // preferences live in `localStorage`, so the tab, its fold and its
+          // height survive the remount.
+          key={selectedRepo ?? 'no-repo'}
           sessionId={sessionId}
           git={git}
           t={t}

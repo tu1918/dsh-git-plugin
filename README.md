@@ -128,7 +128,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 510 tests && build
+npm run check      # tsc --noEmit && 511 tests && build
 ```
 
 ## Install
