@@ -5,6 +5,12 @@
  * confirmation rule, and separating them would put the arming state in the panel
  * — where it would have to be threaded back down as props anyway.
  *
+ * It is the content of a floating layer (`ui/popover.tsx`), not a block in the
+ * panel's column: the list is opened over the changes, so opening it never moves
+ * the file list the user was reading. Dismissal (outside press, Escape) belongs
+ * to the layer, so it is not repeated here — this module only says what the layer
+ * contains.
+ *
  * Two behaviours are worth stating, because both are the doc's rather than a
  * convenience:
  *
@@ -54,7 +60,7 @@ export interface BranchPickerProps {
   readonly onDelete: (name: string, force: boolean) => void
   /** The last refused delete, or `null`. */
   readonly refusal: BranchRefusal | null
-  /** Fold the picker away. */
+  /** Close the picker's layer. */
   readonly onClose: () => void
 }
 
@@ -86,15 +92,6 @@ export function BranchPicker({
     arm(refusal.name, true)
     // `arm` and `reset` are stable; the refusal is the input that matters.
   }, [refusal, arm])
-
-  // Esc closes, as §4.3 says for a dropdown.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const submitCreate = (): void => {
     const trimmed = name.trim()

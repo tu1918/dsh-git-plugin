@@ -42,6 +42,7 @@ message, and a commit detail.
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
 | Branch picker: switch, create (from HEAD or a chosen branch), delete — with the unmerged case asking for a second, forced click | ✅ |
+| That picker as a real dropdown: it floats over the panel (measured from the rail, capped at the room left) instead of pushing the staged drawer, the commit box and the change list down; an outside press or Escape closes it | ✅ |
 | A blocked switch shows git's own multi-line refusal, verbatim | ✅ |
 | Merge state: a bar with "continue" (git's own `MERGE_MSG`) and "abort" (two clicks), driven by `MERGE_HEAD` rather than by the conflict list | ✅ |
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
@@ -98,7 +99,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 282 tests && build
+npm run check      # tsc --noEmit && 285 tests && build
 ```
 
 ## Install
@@ -157,7 +158,9 @@ npm test
   memory, binary placeholder, the list→box→diff DOM order, and the dock's height
   default and drag clamp), the branch picker (listing, switching, creating from
   HEAD or a base, the two-click delete, the forced second ask for an unmerged
-  branch, Escape), the merge bar (continue held while conflicts remain, abort
+  branch, Escape), the branch dropdown's floating layer (absolute, measured from
+  the rail, dismissed by a press outside but not by one inside it or on the
+  trigger that owns the toggle), the merge bar (continue held while conflicts remain, abort
   armed), the sparkle (offered only with a staged diff, the message landing in the
   box, the truncation note, `no-llm`), the conflict row's label, the commit detail
   (files, churn, binary, remembered across folds), the file tree (nesting,

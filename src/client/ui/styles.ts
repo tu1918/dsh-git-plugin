@@ -46,6 +46,7 @@ export const cls = {
   branchSelect: `${P}-branch-select`,
   branchFormActions: `${P}-branch-form-actions`,
   branchFooter: `${P}-branch-footer`,
+  popover: `${P}-popover`,
   danger: `${P}-danger`,
   mergeBox: `${P}-merge-box`,
   mergeLabel: `${P}-merge-label`,
@@ -153,6 +154,7 @@ export const cls = {
  */
 export const css = `
 .${cls.root} {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -160,6 +162,28 @@ export const css = `
   color: var(--dsw-alias-label-primary);
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: 1.5;
+}
+
+/* ── floating layer ─────────────────────────────────────────────────────── */
+
+/* A dropdown hangs over the panel's content instead of taking a row in its
+   column (see ui/popover.tsx). Its top edge and height ceiling are measured
+   from the panel and the anchor that opened it, so what is written here is the
+   chrome: full panel width, above the sticky group headers (z-index 1) and the
+   bottom pane's tab strip (2). The shadow is the theme's own drop mask rather
+   than a literal black — the same token the GUI uses for its own floating
+   layers, so a skin changes it too. */
+.${cls.popover} {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 6px 16px var(--dsw-alias-bg-mask-2);
 }
 
 /* ── state rail ─────────────────────────────────────────────────────────── */
@@ -211,19 +235,15 @@ export const css = `
 
 /* ── branch picker (FR-4.1–4.3) ─────────────────────────────────────────── */
 
-/* Inline under the rail rather than a floating overlay: the panel lives in a
-   resizable sidebar, and a list that re-flows the column is easier to use there
-   than one that covers the changes it sits above. */
+/* The picker's content, inside its floating layer: the layer owns the border,
+   the background, the scroll box, and the position, and this owns the padding
+   and the two rows of a dropdown — the list, then "new branch…". */
 .${cls.branchPicker} {
   display: flex;
   flex: none;
   flex-direction: column;
   gap: 1px;
-  max-height: 40vh;
-  overflow: auto;
   padding: 6px 8px 8px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-bg-layer-2);
 }
 
 .${cls.branchRow} {

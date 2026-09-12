@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | ⬜ 未开始（**下一步**） |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | ⬜ 未开始（**下一步**；浮层通用件已随分支下拉落地，见 §9） |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -266,6 +266,7 @@ discard 与 undoCommit 在 M5a。
 | **修：空索引上点「全部取消暂存」报错**（用户实测报来）。已暂存抽屉是唯一常驻的分组，计数 0 时批量按钮照样在，点了就发 `paths: []`——host 按契约拒掉（`validatePaths`：至少一个路径），面板把这条渲染成「请求不完整，请重新打开这个面板」，可面板本身没毛病，这句提示帮不上任何忙。三层修：① 分组批量按钮在**没有行时禁用**（仍常显、不回到 hover-only，`title` 用该分组自己的空态文案补完一句话，如「全部取消暂存 · 无暂存更改」）；② 客户端的 `stage`/`unstage` 对空数组直接 no-op，不发请求（host 侧契约不动：空列表就该被拒）；③ `perform` 把「git 客户端抛异常」也变成一次普通失败——此前 `await operation()` 抛出会让操作永远停在 `running`（转圈 + 按钮永久禁用，且不报错） | `ChangeGroup` 的批量按钮 + `StatusPanel` 的 `stage`/`unstage` 与 `perform`；样式 `.dgp-ghost:disabled` |
 | 边界测试补齐：客户端「空分组不发请求 / 禁用按钮带解释 / 同组有行时照常工作」；`perform` 对抛异常客户端的失败呈现（原因保留、不误报成功）；host 侧 wire 级「`paths: []` 返回 `bad-request`、`paths` 不是字符串数组同样被拒、且仓库状态未被 no-op 改动」，并据此钉住本适配器的**状态码约定**：*操作*失败走 200 + `ok:false` 信封，只有「请求根本没成为一次操作」（缺 session、body 读不出、body 不是对象）才 4xx | `test/client-panel.test.ts` + `test/host-mount.test.ts` |
 | **修：行内 `+`/`−` 太靠边、被挡**（用户实测报来）。原因是几何而非配色：`.dgp-row` 同时有 `width: 100%` 和左右内边距（12px + 8px），而全表没有全局 `box-sizing: border-box`（只有 `.dgp-head` 与提交框 textarea 各自声明过），于是行的边框盒比裁剪它的抽屉还宽 20px，贴在行右内边距上的 30px 按钮正好落进被裁掉的那条。改：行声明 `box-sizing: border-box`；行与分组表头的右内边距统一到 12px（两者本来就该是同一列控件，且行右缘就是按钮，行的内边距决定它看着是否贴墙）；再把「按钮离边缘的余量」放到真正拥有行的滚动容器上——`.dgp-change-body` 加 10px 右内边距（`.dgp-body` 那份原样保留，它是为 body 自己的兜底滚动条留的）。现在按钮右边到抽屉边缘：行内 12px + 滚动容器 10px = 22px（滚动条出现时，它自己那一列再占 10px） | `.dgp-row` 的 `box-sizing`/右内边距 + `.dgp-group-head` 的右内边距 + `.dgp-change-body` 的 `padding-right`；回归测试读 `getComputedStyle` 断言这几项 |
+| **分支下拉改成独立浮层**（产品方要求：「改成独立的下拉，不要用现在的点击 → 在暂存区上方增加一个分支操作区」）。原来 `pickerOpen` 把 `BranchPicker` 插在 rail 与已暂存抽屉**之间**，于是打开分支列表会把暂存抽屉、提交框、变更分组一起往下推——指针正要点的文件行会跑掉。现在抽出可复用的 `ui/popover.tsx`（M5a 的行级菜单要用的同一个件，见 §10.1）：`position: absolute` 挂在 rail 之下，**top 与高度上限都是从 rail 和面板量出来的**（所以列表再长也在面板内自己滚，不会跑出侧栏，也不受祖先 `overflow`/`transform` 摆布）；`z-index: 3` 盖住分组表头（1）与底部 tab 条（2）；阴影用主题自己的 `--dsw-alias-bg-mask-2`，不是写死的黑。关闭归**层**管：点外部（`pointerdown` 捕获相）关、Esc 关，而触发按钮不算外部——它自己管开关，否则第二次点击会「关掉又打开」。**绝对定位而非 fixed/portal**：面板自己的盒子就是边界，且 Tab 顺序保持「rail → 它打开的东西」 | 新模块 `ui/popover.tsx`（`Popover`：度量 + 两种关闭 + `role="dialog"`）；`BranchPicker` 去掉自己的 Esc 监听，只负责层内容；`StatusPanel` 用 `railRef` + `useId()` 接上 `aria-haspopup="dialog"` 与 `aria-controls`；`styles.ts` 的 `.dgp-root` 加 `position: relative`、新增 `.dgp-popover`、`.dgp-branch-picker` 让出 border/background/max-height/overflow。测试 3 项：层是 `absolute` 且打开只在根下多一个元素（列的 DOM 顺序不变）、量出的 `top: 42px` / `maxHeight: 554px`（把 38px 的 rail 与 600px 的面板喂成假矩形，jsdom 没有布局）、点外部关而点层内与触发按钮都不关 |
 
 ---
 
@@ -376,7 +377,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |
 |---|---|---|---|---|
-| 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘导航），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 3 与 §9 的②③都复用它 | S–M |
+| 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 3 与 §9 的②③都复用它。**状态**：浮层这件通用件已随分支下拉落地（`ui/popover.tsx`，见 §9 的界面调整表）——定位/度量/两种关闭都在了；剩下的是**菜单内容**那一层（锚在行上、条目模型 + 分隔线 + 上下键选择），比浮层多的是条目与键盘选择，不是定位 | S–M |
 | 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | M |
 | 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | S–M |
 | 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | M |

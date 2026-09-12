@@ -384,6 +384,36 @@ async function click(node: Element): Promise<void> {
   await flush()
 }
 
+/**
+ * Press an element — a `pointerdown`, which is what a floating layer dismisses
+ * itself on.
+ *
+ * Not a `click`: a layer closes when the press starts outside it, whatever the
+ * pointer does afterwards, and a test that dispatched `click` would be checking
+ * the wrong event.
+ */
+async function press(node: Element): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }))
+  })
+  await settle()
+}
+
+/** A rectangle for stubbing layout, since jsdom has none. */
+function rect(top: number, height: number): DOMRect {
+  return {
+    top,
+    bottom: top + height,
+    height,
+    left: 0,
+    right: 320,
+    width: 320,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect
+}
+
 /** Set a textarea's value the way React's controlled inputs expect. */
 async function typeInto(node: HTMLTextAreaElement, value: string): Promise<void> {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
@@ -1984,6 +2014,87 @@ describe('the branch picker (FR-4.1–4.3)', () => {
     })
     await settle()
     assert.equal(container.querySelector('[data-branch-picker]'), null)
+  })
+})
+
+describe('the branch picker as a dropdown (§4.3, FR-4.1)', () => {
+  it('floats over the panel instead of taking a row in its column', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+    const panel = must(container, `.${cls.root}`)
+    const before = [...panel.children]
+
+    const picker = await openPicker(container)
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+
+    // The whole point of the change: the list is positioned out of the column's
+    // flow, so opening it cannot push the staged drawer, the commit box, or the
+    // change groups down — the file list stays where the pointer left it.
+    assert.equal(window.getComputedStyle(layer).position, 'absolute')
+    assert.ok(layer.contains(picker), 'the picker renders inside the layer')
+    // Opening adds exactly one element, and it is the layer.
+    assert.deepEqual(
+      [...panel.children].filter((child) => !before.includes(child)),
+      [layer],
+    )
+    // Its top edge is measured from the rail, which is why the rail is a ref.
+    assert.equal(layer.previousElementSibling, must(container, `.${cls.head}`))
+    // And the control that opened it says so, to a screen reader as well.
+    const trigger = must(container, `.${cls.branch}`)
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+    assert.equal(trigger.getAttribute('aria-haspopup'), 'dialog')
+    assert.equal(trigger.getAttribute('aria-controls'), layer.id)
+    assert.equal(layer.getAttribute('role'), 'dialog')
+  })
+
+  it('hangs under the rail, capped at the room the panel has left', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+    // jsdom has no layout, so the two rectangles a browser would compute are
+    // stated here: a 38px rail at the top of a 600px panel.
+    const panel = must(container, `.${cls.root}`)
+    const rail = must(container, `.${cls.head}`)
+    panel.getBoundingClientRect = () => rect(100, 600)
+    rail.getBoundingClientRect = () => rect(100, 38)
+
+    await openPicker(container)
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+
+    // 38 of rail + the 4px gap, in the panel's own coordinates; and the list can
+    // only be as tall as the panel below it, so it scrolls instead of running
+    // out of the bottom of a narrow sidebar.
+    assert.equal(layer.style.top, '42px')
+    assert.equal(layer.style.maxHeight, '554px')
+  })
+
+  it('closes on a press outside it, and keeps its state for a press inside', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    let picker = await openPicker(container)
+    // Inside: the armed-delete flow and the create form live here, and a press
+    // that dismisses the list mid-edit would make both unusable.
+    await press(must(picker, `.${cls.branchRow}`))
+    assert.ok(container.querySelector('[data-branch-picker]'), 'a press inside must not close it')
+
+    // The trigger is not "outside" either: it owns the toggle, and closing on its
+    // press as well would make the next click close-and-reopen in one go.
+    await press(must(container, `.${cls.branch}`))
+    assert.ok(container.querySelector('[data-branch-picker]'), 'the anchor owns its own toggle')
+
+    // Anywhere else in the panel — the change list, the commit box — dismisses.
+    await press(must(container, `.${cls.commitBox}`))
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
+
+    // Reopening after a dismissal still works, and the layer is back.
+    picker = await openPicker(container)
+    assert.ok(picker.isConnected)
   })
 })
 

@@ -19,8 +19,8 @@
  * @module dsh-git-panel/client/ui/StatusPanel
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { ReactNode, Ref } from 'react'
 
 import { commitScopeOf } from '../../core/commit-scope.ts'
 import { lineCount } from '../../core/format.ts'
@@ -38,6 +38,7 @@ import type {
 import { ChangeGroupPane } from './ChangeGroupPane.tsx'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
+import { Popover } from './popover.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
 import { BottomPane, type OpenFile } from './BottomPane.tsx'
@@ -256,6 +257,8 @@ function BranchRail({
   onSync,
   pickerOpen,
   onTogglePicker,
+  railRef,
+  pickerId,
   mode,
   onToggleMode,
 }: {
@@ -284,6 +287,15 @@ function BranchRail({
   readonly pickerOpen: boolean
   /** Fold or unfold the branch picker (FR-4.1). */
   readonly onTogglePicker: () => void
+  /**
+   * The rail itself, which the picker's layer is measured from.
+   *
+   * A ref rather than a class lookup: the layer hangs under the control that
+   * opened it, and the rail is that control's row.
+   */
+  readonly railRef: Ref<HTMLDivElement>
+  /** Id of the picker's layer, which the branch button points at. */
+  readonly pickerId: string
   /** FR-1.3: which shape the change list is drawn in. */
   readonly mode: ViewMode
   /** Switch between the flat list and the file tree. */
@@ -307,7 +319,7 @@ function BranchRail({
       : (branch.name ?? t('branch.detached'))
 
   return (
-    <div className={cls.head}>
+    <div className={cls.head} ref={railRef}>
       {/* The branch name is the picker's handle (FR-4.1). It reads as a control
           rather than as a label because §1.3's third lesson is that a branch
           switcher nobody notices is a branch switcher nobody uses. */}
@@ -316,6 +328,8 @@ function BranchRail({
         className={cls.branch}
         title={`${name} — ${track}`}
         aria-expanded={pickerOpen}
+        aria-haspopup="dialog"
+        aria-controls={pickerOpen ? pickerId : undefined}
         aria-label={t('branch.picker', { name })}
         onClick={onTogglePicker}
       >
@@ -395,6 +409,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
   /** Whether the branch picker is unfolded (FR-4.1). */
   const [pickerOpen, setPickerOpen] = useState(false)
+  /** The rail the picker's layer is measured from, and the id that names it. */
+  const railRef = useRef<HTMLDivElement | null>(null)
+  const pickerId = useId()
   /** The last refused branch deletion, so an unmerged branch can arm its force click. */
   const [branchRefusal, setBranchRefusal] = useState<BranchRefusal | null>(null)
   /** True while a commit message is being generated (FR-3.5). */
@@ -728,20 +745,32 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         onSync={sync}
         pickerOpen={pickerOpen}
         onTogglePicker={() => setPickerOpen((open) => !open)}
+        railRef={railRef}
+        pickerId={pickerId}
         mode={mode}
         onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
       />
+      {/* The branch list floats over the panel instead of taking a row in its
+          column: it is opened from the rail, used, and dismissed, and the file
+          list underneath must not move while that happens (FR-4.1's dropdown). */}
       {pickerOpen && (
-        <BranchPicker
-          branches={branches}
-          t={t}
-          busy={busy || pending}
-          onCheckout={checkout}
-          onCreate={createBranch}
-          onDelete={deleteBranch}
-          refusal={branchRefusal}
+        <Popover
+          anchor={railRef.current}
+          id={pickerId}
+          label={t('branch.pickerLabel')}
           onClose={() => setPickerOpen(false)}
-        />
+        >
+          <BranchPicker
+            branches={branches}
+            t={t}
+            busy={busy || pending}
+            onCheckout={checkout}
+            onCreate={createBranch}
+            onDelete={deleteBranch}
+            refusal={branchRefusal}
+            onClose={() => setPickerOpen(false)}
+          />
+        </Popover>
       )}
       {/* FR-9.3's two ways out of a merge. The bar exists because the state is
           otherwise invisible: with every conflict resolved, this panel looks
