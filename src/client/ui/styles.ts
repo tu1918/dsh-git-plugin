@@ -63,8 +63,7 @@ export const cls = {
   treeNode: `${P}-tree-node`,
   dirToggle: `${P}-dir-toggle`,
   dirName: `${P}-dir-name`,
-  changeDrawer: `${P}-change-drawer`,
-  changeBody: `${P}-change-body`,
+  stagedPane: `${P}-staged-pane`,
   groupActions: `${P}-group-actions`,
   groupToggle: `${P}-group-toggle`,
   groupCaret: `${P}-group-caret`,
@@ -484,63 +483,36 @@ export const css = `
   background: transparent;
 }
 
-/* ── a change drawer (ChangeGroupPane) ──────────────────────────────────── */
+/* ── the staged list, and the change list below it ──────────────────────── */
 
-/* One shape for every resident group: the staged drawer above the commit box and
-   the working-tree drawers below it. Each takes its content's height up to a cap
-   and scrolls inside itself past it, so a twenty-file group never pushes the
-   others off screen; each grip takes height back from the drawers below it, the
-   way every other pane does. The cap is a percentage so it survives a window
-   resize; a dragged height replaces it with pixels (the inline max-height:none).
-   No min-height: 'auto' keeps a drawer no shorter than its own header plus one
-   row, which is also the floor the grip clamps to. */
-.${cls.changeDrawer} {
+/* The staged list is the one group drawn OUTSIDE the scrolling change body, and
+   the rule under it is what separates "what this message commits" from the
+   message itself. It is capped rather than draggable — the panel has exactly one
+   grip, on the dock — so a long staged list scrolls inside its share instead of
+   pushing the commit box off screen. */
+.${cls.stagedPane} {
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
-  max-height: 40%;
-  overflow: hidden;
-}
-
-.${cls.changeBody} {
-  flex: 1 1 auto;
   min-height: 0;
+  max-height: 40%;
   overflow: auto;
-  /* The clearance the old single list had now lives here, on the scroller that
-     actually owns the rows: '+'/'−' are the last thing before the edge, and the
-     engines that draw an overlay scrollbar put it exactly there. The row keeps its
-     own 12px, so the button ends 22px before the scrollbar and 32px from the
-     visual edge — inside the list, rather than against its wall. */
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   padding-right: 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+  scrollbar-gutter: stable;
 }
 
-.${cls.changeBody}::-webkit-scrollbar { width: 10px; height: 10px; }
-.${cls.changeBody}::-webkit-scrollbar-thumb {
-  border-radius: 5px;
-  background: var(--dsw-alias-scrollbar-bg-l1);
-}
-.${cls.changeBody}::-webkit-scrollbar-track { background: transparent; }
-
-/* The staged drawer is the one drawn above the commit box, and the rule under it
-   is what separates "what this message commits" from the message itself. */
-.${cls.changeDrawer}[data-drawer='staged'] {
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+.${cls.stagedPane} > .${cls.group} {
+  flex: none;
 }
 
-/* The working-tree drawers sit one under another in the change body: hairline
-   between them, and none above the first, which follows the commit box. */
-.${cls.body} .${cls.changeDrawer} + .${cls.changeDrawer} {
-  border-top: 0.5px solid var(--dsw-alias-border-l3);
-}
-
-/* ── change list ────────────────────────────────────────────────────────── */
-
-/* The column the change panes share: the working-tree drawers, the conflict
-   group and the clean state. The drawers size themselves and scroll their own
-   rows, so this is a column rather than a scroller — the overflow stays as the
-   backstop for a panel too short to honour every floor at once. */
+/* The column the change panes share: the working-tree groups and the conflict
+   group, all of them flowing into ONE scroller. That is the whole point of the
+   shape — a single list that scrolls as one is what the comparable sidebar draws,
+   and it is why the panel needs only one grip (the dock's) instead of one per
+   group. */
 .${cls.body} {
   /* 'flex: auto' with a floor: the body yields space to a dragged diff dock,
      but never so much that the change list it holds stops being usable. */
@@ -562,11 +534,16 @@ export const css = `
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
-/* The conflict group is not a drawer: it comes and goes with the merge, and a
-   grip on a group that exists for one afternoon is not height anyone wants to
-   take back from the list. */
+/* A group is a section of that list, not a pane of its own: it takes its natural
+   height and the body scrolls. */
 .${cls.body} > .${cls.group} {
   flex: none;
+}
+
+/* Hairline between two groups in the list, and none above the first, which
+   follows the commit box. */
+.${cls.body} > .${cls.group} + .${cls.group} {
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 .${cls.groupHead} {

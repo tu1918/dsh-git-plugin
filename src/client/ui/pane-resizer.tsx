@@ -1,29 +1,23 @@
 /**
- * The draggable edge of one sizable pane.
+ * The draggable edge of the one sizable pane.
  *
- * The panel is a column of panes, and one of them — the change list — takes
- * whatever is left over. So "make this pane taller" is really "take the height
- * from the rest of the column", and one grip per sizable pane is enough to make
- * every part adjustable without a general split-pane system.
+ * The panel has exactly one: the diff/history dock at the bottom. Everything
+ * above it — the rail, the staged list, the commit box, the change list — is a
+ * column of content that scrolls, and the change list takes whatever height the
+ * dock leaves. An earlier version gave every change group its own grip, which put
+ * two of them back to back wherever a group was empty and read as a strip of dead
+ * bars down the panel; the groups now flow into one scroller instead.
  *
  * ## Which edge the grip goes on
  *
- * The edge is not a style choice: it is the edge the pane is NOT anchored to.
+ * The edge is not a style choice: it is the edge the pane is NOT anchored to. The
+ * dock is **bottom-anchored** — its bottom edge is pinned to the panel's — so it
+ * grows by moving its TOP edge up, and its grip belongs at the top.
  *
- * - A pane that is **top-anchored** — the change drawers, which sit in a stack
- *   and whose content flows from their top — grows by moving its BOTTOM edge
- *   down. Its grip therefore belongs at the bottom, and dragging down makes it
- *   taller.
- * - A pane that is **bottom-anchored** — the diff/history dock, whose bottom edge
- *   is pinned to the panel's bottom — grows by moving its TOP edge up. Its grip
- *   belongs at the top, and dragging up makes it taller.
- *
- * Getting this backwards looks like a bug in the panel rather than in the grip:
- * a handle on the top edge of a top-anchored box invites a pull upward, but
- * nothing above it can shrink, so the box grows downward instead and the gesture
- * has lied about what it does. That is what {@link PaneResizerProps.edge} exists
- * to prevent, and why it has no default: the caller has to say which way its pane
- * grows.
+ * Getting that backwards looks like a bug in the panel rather than in the grip: a
+ * handle on the bottom edge of a bottom-anchored box invites a pull downward,
+ * but nothing below it can shrink, so the box would grow upward instead and the
+ * gesture would have lied about what it does.
  *
  * ## Three more details that are load-bearing
  *
@@ -46,23 +40,10 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 
 import { cls } from './styles.ts'
 
-/** Which edge of its pane a grip sits on, and therefore which way a drag grows. */
-export type PaneEdge = 'top' | 'bottom'
-
 /** What one grip needs to know. */
 export interface PaneResizerProps {
   /** Accessible name, from the panel's dictionary. */
   readonly label: string
-  /**
-   * The edge this grip is drawn on.
-   *
-   * `'top'` for a bottom-anchored pane (drag up to grow), `'bottom'` for a
-   * top-anchored one (drag down to grow). Render the grip as the pane's first
-   * child when it is `'top'`, and as its last child when it is `'bottom'` — the
-   * drag reads the grip's parent box for its starting height, so the grip has to
-   * be inside the pane it sizes.
-   */
-  readonly edge: PaneEdge
   /** Smallest height this pane may be dragged to. */
   readonly minHeight: number
   /**
@@ -79,13 +60,7 @@ export interface PaneResizerProps {
  * One grip.
  * @param props - Label, edge, limits, and where the height goes.
  */
-export function PaneResizer({
-  label,
-  edge,
-  minHeight,
-  reserved,
-  onResize,
-}: PaneResizerProps): ReactNode {
+export function PaneResizer({ label, minHeight, reserved, onResize }: PaneResizerProps): ReactNode {
   const [dragging, setDragging] = useState(false)
 
   const startResize = useCallback(
@@ -102,10 +77,9 @@ export function PaneResizer({
         const panel = measured > 0 ? measured : window.innerHeight
         const ceiling = Math.max(minHeight, panel - reserved)
         const travel = move.clientY - startY
-        // Down grows a bottom grip, up grows a top one: the pointer moves the
-        // pane's free edge, which is the grip's edge.
-        const wanted = edge === 'bottom' ? startHeight + travel : startHeight - travel
-        onResize(Math.min(ceiling, Math.max(minHeight, wanted)))
+        // The grip is on the pane's free (top) edge, so a pointer that rises
+        // moves that edge up and makes the pane taller.
+        onResize(Math.min(ceiling, Math.max(minHeight, startHeight - travel)))
       }
       const onRelease = (): void => {
         setDragging(false)
@@ -117,7 +91,7 @@ export function PaneResizer({
       window.addEventListener('pointerup', onRelease)
       window.addEventListener('pointercancel', onRelease)
     },
-    [edge, minHeight, onResize, reserved],
+    [minHeight, onResize, reserved],
   )
 
   return (

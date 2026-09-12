@@ -149,10 +149,11 @@ export function BottomPane({
       }
     >
       {/* The dock is bottom-anchored: its bottom edge is pinned to the panel's,
-          so its free edge is the top one and a drag upward grows it. */}
+          so its free edge is the top one and a drag upward grows it. It is the
+          panel's only grip — the change groups above flow into one scroller
+          instead of carrying one each. */}
       <PaneResizer
         label={t('bottom.resize')}
-        edge="top"
         minHeight={MIN_PANE_HEIGHT}
         reserved={PANE_RESERVED_HEIGHT}
         onResize={(next) => {

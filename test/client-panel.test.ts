@@ -433,15 +433,6 @@ function must<T extends Element>(container: ParentNode, selector: string): T {
 }
 
 /**
- * The height a drawer's scrolling body was dragged to, or `''` while it is still
- * on the stylesheet's default.
- * @param drawer - The drawer element, as `[data-drawer]` finds it.
- */
-function drawerHeight(drawer: Element): string {
-  return (must(drawer, `.${cls.changeBody}`) as HTMLElement).style.height
-}
-
-/**
  * Drag a pane's grip the way a pointer does: press on the grip, move, release.
  *
  * The release is not decoration. The grip listens on `window` so a pointer that
@@ -553,7 +544,7 @@ describe('the panel stylesheet', () => {
     // And the scroller that owns the rows keeps the gutter the old single list had,
     // because `+`/`−` are the last thing before the edge: `overflow: auto` is what
     // the overlay-scrollbar engines draw on top of.
-    const body = must(container, `[data-drawer="unstaged"] .${cls.changeBody}`)
+    const body = must(container, `.${cls.body}`)
     assert.equal(window.getComputedStyle(body).paddingRight, '10px')
     assert.equal(window.getComputedStyle(body).overflow, 'auto')
   })
@@ -651,76 +642,52 @@ describe('StatusPanel rendering', () => {
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
   })
 
-  it('gives every resident group the same drawer, and sizes each from its own grip', async () => {
+  it('gives the panel one scroller and one grip, not a grip per group', async () => {
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
     )
     await settle()
 
-    // The three resident groups are one structure, drawn three times: a grip, a
-    // scrolling body, and the group inside it. Same shape and same order as the
-    // panel draws them.
-    const drawers = [...container.querySelectorAll<HTMLElement>(`.${cls.changeDrawer}`)]
-    assert.deepEqual(
-      drawers.map((drawer) => drawer.getAttribute('data-drawer')),
-      ['staged', 'unstaged', 'untracked'],
+    // Every group is a section of one list, in the order the panel draws them:
+    // the staged list above the commit box, then the working-tree groups inside
+    // the scrolling body.
+    const stagedPane = must(container, `[data-pane="staged"]`)
+    assert.equal(
+      must(stagedPane, `.${cls.group}`).getAttribute('data-group'),
+      'staged',
+      'the staged list is the group drawn outside the body',
     )
-    for (const drawer of drawers) {
-      assert.equal(drawer.querySelectorAll(`:scope > .${cls.paneGrip}`).length, 1, 'one grip each')
-      assert.equal(drawer.querySelectorAll(`:scope > .${cls.changeBody}`).length, 1)
-      assert.equal(drawer.querySelectorAll(`.${cls.group}`).length, 1, 'the drawer hosts its group')
-      assert.equal((drawer.querySelector(`.${cls.changeBody}`) as HTMLElement).style.height, '')
-      // The drawer is top-anchored, so its free edge is the BOTTOM one: the grip
-      // comes after the body it sizes. On the top edge the handle would invite a
-      // pull upward that the layout cannot honour.
-      assert.equal(
-        drawer.lastElementChild?.className,
-        cls.paneGrip,
-        'a top-anchored drawer takes its grip on the bottom edge',
-      )
-    }
-
-    // The conflict group is the one group that is NOT a drawer: it comes and goes
-    // with the merge, and a grip on it would take height from the list for good.
-    const conflicted = must(container, `[data-group="conflicted"]`)
-    assert.equal(conflicted.closest(`.${cls.changeDrawer}`), null)
-    assert.equal(conflicted.parentElement?.className, cls.body)
-
-    // Each grip names its own group, so a drag is never ambiguous.
     assert.deepEqual(
-      drawers.map((drawer) => must(drawer, `.${cls.paneGrip}`).getAttribute('aria-label')),
-      [
-        'Drag to resize the staged changes',
-        'Drag to resize the changes',
-        'Drag to resize the untracked files',
-      ],
+      [...container.querySelectorAll(`.${cls.body} > .${cls.group}`)].map((group) =>
+        group.getAttribute('data-group'),
+      ),
+      ['conflicted', 'unstaged', 'untracked'],
+      'the rest flow into the one scroller',
     )
 
-    const staged = must<HTMLElement>(container, `[data-drawer="staged"]`)
-    const unstaged = must<HTMLElement>(container, `[data-drawer="unstaged"]`)
-    const untracked = must<HTMLElement>(container, `[data-drawer="untracked"]`)
+    // The staged list is capped rather than draggable: a long index scrolls in
+    // its own share instead of pushing the commit box away.
+    const stagedStyle = window.getComputedStyle(stagedPane)
+    assert.equal(stagedStyle.maxHeight, '40%')
+    assert.equal(stagedStyle.overflow, 'auto')
 
-    // Downward grows a bottom grip. jsdom has no layout, so the drawer measures
-    // as zero and the travel is the whole height.
-    await dragGrip(must(staged, `.${cls.paneGrip}`), 100, 200)
-    assert.equal(drawerHeight(staged), '100px')
+    // And the single scroller is the body.
+    const body = must(container, `.${cls.body}`)
+    assert.equal(window.getComputedStyle(body).overflow, 'auto')
 
-    // The heights are the drawers' own: dragging one leaves the others at their
-    // stylesheet default, which is what "every partition resizes itself" means.
-    await dragGrip(must(unstaged, `.${cls.paneGrip}`), 40, 200)
-    assert.equal(drawerHeight(staged), '100px', 'a released grip must stop resizing')
-    assert.equal(drawerHeight(unstaged), '160px')
-    assert.equal(drawerHeight(untracked), '')
-
-    // Upward shrinks it — and the floor is what stops it there.
-    await dragGrip(must(untracked, `.${cls.paneGrip}`), 160, 100)
-    assert.equal(drawerHeight(unstaged), '160px')
-    assert.equal(drawerHeight(untracked), '44px')
-
-    // A drawer is clamped at its own ceiling too, whatever the pointer does: 768
-    // (the window, since the column measures zero) minus the 180 reserved.
-    await dragGrip(must(untracked, `.${cls.paneGrip}`), 0, 1000)
-    assert.equal(drawerHeight(untracked), '588px')
+    // Exactly ONE grip in the whole panel, and it is the dock's. This is the
+    // regression the shape exists to prevent: one grip per group put two of them
+    // back to back wherever a group was empty (the changes drawer's bottom edge
+    // and the dock's top edge), which read as a stack of dead bars.
+    const grips = [...container.querySelectorAll(`.${cls.paneGrip}`)]
+    assert.equal(grips.length, 1, `expected one grip, found ${String(grips.length)}`)
+    assert.ok(
+      must(container, `.${cls.bottom}`).contains(grips[0] as Element),
+      'the grip that remains is the dock’s',
+    )
+    // No group carries a grip, and no group is a resizable box of its own.
+    assert.equal(stagedPane.querySelector(`.${cls.paneGrip}`), null)
+    assert.equal(body.querySelector(`:scope > .${cls.group} .${cls.paneGrip}`), null)
   })
 
   it('keeps the staged drawer on screen when only the index is empty', async () => {
@@ -867,11 +834,15 @@ describe('StatusPanel rendering', () => {
     )
 
     // jsdom reports a zero-height box, so the drag reads as "the pointer rose
-    // 300px" — and the drawer above is asserted to be left exactly where it was.
-    const stagedDrawer = must(container, `[data-drawer="staged"]`)
+    // 300px" — and nothing above it gets an inline height, because nothing above
+    // it is draggable: it is the panel's only grip.
     await dragGrip(grip, 300, 0)
     assert.equal(pane.style.height, '300px')
-    assert.equal(drawerHeight(stagedDrawer), '')
+    assert.equal(
+      container.querySelectorAll(`.${cls.paneGrip}`).length,
+      1,
+      'the dock holds the panel’s only grip',
+    )
 
     // The same grip, dragged past the top of the panel: the clamp is what this
     // reads, since the pointer itself can go anywhere.
@@ -1240,8 +1211,8 @@ describe('staging from the change list', () => {
     )
     await settle()
 
-    const drawer = must(container, `[data-drawer="staged"]`)
-    assert.equal(must(drawer, `.${cls.count}`).textContent, '0', 'the drawer is still resident')
+    const drawer = must(container, `[data-pane="staged"]`)
+    assert.equal(must(drawer, `.${cls.count}`).textContent, '0', 'the staged list is still resident')
     const button = must<HTMLButtonElement>(drawer, `.${cls.groupActions} button`)
     assert.equal(button.textContent, 'Unstage all', 'the control stays findable, not hover-only')
     assert.equal(button.disabled, true, 'a group with no rows has nothing to move')

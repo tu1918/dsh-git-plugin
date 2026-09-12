@@ -36,7 +36,6 @@ import type {
   OperationReport,
   RepoStatus,
 } from '../../core/types.ts'
-import { ChangeGroupPane } from './ChangeGroupPane.tsx'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { Popover } from './popover.tsx'
@@ -902,30 +901,35 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             plugin registers only a right-sidebar tab, so the diff shares the bottom
             pane with the history as its second tab (`BottomPane`). FR-2.1 still
             holds in both cases: embedded, never a modal. */}
-        {/* The staged drawer sits directly above the commit box, because it is what
+        {/* The staged list sits directly above the commit box, because it is what
             that box commits: the association is the closest one in the panel, and it
             is worth breaking VS Code's own order (message box first, staged list
             below it) to make it read — these files, this message, commit. The cost
             is that staging a row moves it across the box, which is the same jump
-            VS Code makes between its two groups. It is also the one drawer that
+            VS Code makes between its two groups. It is also the one group that
             stays on screen when it is empty: it is the box's anchor, and its count
-            of zero is the answer to "what will this commit?". */}
-        <ChangeGroupPane
-          area="staged"
-          label={t('group.staged')}
-          resizeLabel={t('staged.resize')}
-          entries={staged}
-          t={t}
-          busy={busy || pending}
-          batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-          emptyNote={t('group.stagedEmpty')}
-          collapsed={collapsedGroups.has('staged')}
-          view={view}
-          onToggle={() => toggleGroup('staged')}
-          onStage={stage}
-          onUnstage={unstage}
-          onOpen={openDiff}
-        />
+            of zero is the answer to "what will this commit?".
+
+            It is capped, not draggable: the panel has exactly one grip, on the dock
+            below, so a long staged list scrolls inside its own share rather than
+            pushing the box away. */}
+        <div className={cls.stagedPane} data-pane="staged">
+          <Group
+            label={t('group.staged')}
+            area="staged"
+            entries={staged}
+            t={t}
+            busy={busy || pending}
+            batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+            emptyNote={t('group.stagedEmpty')}
+            collapsed={collapsedGroups.has('staged')}
+            view={view}
+            onToggle={() => toggleGroup('staged')}
+            onStage={stage}
+            onUnstage={unstage}
+            onOpen={openDiff}
+          />
+        </div>
         <CommitBox
           message={message}
           onMessage={setMessage}
@@ -971,16 +975,15 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onUnstage={unstage}
                 onOpen={openDiff}
               />
-              {/* The working tree as two drawers with the same shape as the staged
-                  one — each with its own grip, its own cap, and its own scroller, so
-                  "make this group taller" works on any of them and a long group can
-                  never push another out of the panel. They are not resident: a group
-                  with no rows is not a pane worth keeping an empty note in, which is
-                  exactly what the staged drawer above is for. */}
-              <ChangeGroupPane
-                area="unstaged"
+              {/* The working tree as two more sections of this one list. They do not
+                  size themselves: the body scrolls, and its groups flow into it —
+                  which is what the comparable sidebar's source-control view does, and
+                  the reason the panel needs no grip per group. They are not resident:
+                  a group with no rows is not a section worth keeping an empty note in,
+                  which is exactly what the staged list above is for. */}
+              <Group
                 label={t('group.unstaged')}
-                resizeLabel={t('unstaged.resize')}
+                area="unstaged"
                 entries={unstaged}
                 t={t}
                 busy={busy || pending}
@@ -992,10 +995,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onUnstage={unstage}
                 onOpen={openDiff}
               />
-              <ChangeGroupPane
-                area="untracked"
+              <Group
                 label={t('group.untracked')}
-                resizeLabel={t('untracked.resize')}
+                area="untracked"
                 entries={untracked}
                 t={t}
                 busy={busy || pending}
