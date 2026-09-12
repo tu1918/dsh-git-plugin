@@ -94,6 +94,25 @@ export function ArrowDownGlyph({ size = 12, className }: GlyphProps): ReactNode 
 }
 
 /**
+ * A dashed arrow pointing down: fetch, which receives refs without merging them.
+ *
+ * Dashed rather than plain so it reads as a different action from Pull beside it
+ * (the two are both "something comes down"); what it brings down is knowledge of
+ * the remote, not changes to the working tree.
+ * @param props - Size and class.
+ */
+export function FetchGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M8 3.4v8.8" strokeDasharray="2.4 2.4" />
+      <path d="M4.7 8.7 8 12l3.3-3.3" strokeDasharray="2.4 2.4" />
+    </>,
+  )
+}
+
+/**
  * A caret pointing right; rotated by CSS when a section opens.
  * @param props - Size and class.
  */

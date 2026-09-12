@@ -317,6 +317,18 @@ export interface WorkspaceGitService {
    */
   pull(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
   /**
+   * Fetch every remote, updating the remote-tracking branches.
+   *
+   * The doc's FR-5.1 lists pull / push / sync and no standalone fetch, so this
+   * is an addition. Unlike `pull` it changes nothing local — not the working
+   * tree, not the index, not the current branch — which is exactly why it is
+   * worth having: it is how the ↑/↓ counts and the ○/● markers learn what the
+   * remote holds without a merge ever being a possibility.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  fetch(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
    * Pull, then push: the doc's `⇅` in one action (FR-5.1).
    * @param sessionId - Opaque session identity from the browser.
    * @param signal - Cancels the request when the tab goes away.
@@ -599,6 +611,15 @@ export interface GitRemoteClient {
    * @param signal - Cancels the request when the tab goes away.
    */
   pull(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Fetch every remote, updating the remote-tracking branches.
+   *
+   * Leaves the working tree, the index and the current branch untouched — it
+   * only teaches the panel what the remote has.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  fetch(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
   /**
    * Pull, then push (FR-5.1).
    * @param sessionId - Opaque session identity, supplied by the slot.

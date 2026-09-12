@@ -652,6 +652,36 @@ export function createGitService(
   }
 
   /**
+   * Fetch every remote, updating the remote-tracking branches.
+   *
+   * `--all` rather than the default remote: the panel's rail describes one
+   * branch, but its ↑/↓ counts, the ○/● markers and the next checkout all read
+   * `refs/remotes`, and a repository can track more than one remote. Nothing
+   * local is touched, so unlike pull this cannot leave a merge behind.
+   *
+   * No `--prune`: pruning deletes remote-tracking refs that no longer exist on
+   * the remote, which is a change the user did not ask for by pressing fetch.
+   * A stale `origin/gone` line is a smaller surprise than a deleted ref.
+   * @param sessionId - Session whose repository to act on.
+   */
+  async function fetchRemotes(sessionId: string): Promise<Result<OperationReport>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    // `git fetch --all` with no remotes configured exits 0 and prints nothing,
+    // so the panel would announce a fetch that never happened. Asking first
+    // turns that into the sentence the user needs instead.
+    const remotes = await run(['remote'], root.value)
+    if (!remotes.ok) return remotes
+    if (remotes.value.stdout.trim() === '') {
+      return fail('bad-request', 'this repository has no remote to fetch from')
+    }
+    const outcome = await run(['fetch', '--all'], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: fetched every remote in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
    * Pull, then push: the doc's `⇅` in one action (FR-5.1).
    * @param sessionId - Session whose repository to act on.
    */
@@ -1295,6 +1325,7 @@ export function createGitService(
     commitAll,
     push: pushRepo,
     pull: pullRepo,
+    fetch: fetchRemotes,
     sync: syncRepo,
     checkout,
     createBranch,

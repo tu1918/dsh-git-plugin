@@ -894,6 +894,33 @@ describe('the mutation routes', () => {
     }
   })
 
+  it('fetches over POST, and refuses the same operation over GET', async () => {
+    const repo = makeRepo('routes-fetch')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const branch = git(repo, ['symbolic-ref', '--short', 'HEAD']).trim()
+    const remote = makeBareRemote('routes-fetch-remote')
+    git(repo, ['remote', 'add', 'origin', remote])
+    git(repo, ['push', '-q', '-u', 'origin', branch])
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await post(harness, '/git-panel/fetch', { session: 's1' })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean }
+      assert.equal(body.ok, true)
+      // The route reaches git, not a stub: the remote-tracking ref is there.
+      assert.equal(gitTry(repo, ['show-ref', '--verify', `refs/remotes/origin/${branch}`]).code, 0)
+
+      // A mutation reachable by GET would be reachable by an <img> tag.
+      const viaGet = await fetch(`${harness.origin}/git-panel/fetch?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('runs the widening commit only when the body asks for it', async () => {
     const repo = repoWithChange('routes-commit')
     const harness = await startHarness({ s1: repo })

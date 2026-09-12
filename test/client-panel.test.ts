@@ -276,6 +276,8 @@ function stubGit(options: {
   deleteBranch?: Result<OperationReport>
   /** What `discard` answers, for the refusal path. */
   discard?: Result<OperationReport>
+  /** What `fetch` answers, for the no-remote refusal path. */
+  fetch?: Result<OperationReport>
   /** What `undoCommit` answers; a reset of the newest commit by default. */
   undoCommit?: Result<UndoResult>
   /** What the stash listing answers; one entry by default (FR-6.2). */
@@ -340,6 +342,10 @@ function stubGit(options: {
     pull: () => {
       note('pull')
       return Promise.resolve(report)
+    },
+    fetch: () => {
+      note('fetch')
+      return Promise.resolve(options.fetch ?? report)
     },
     sync: () => {
       note('sync')
@@ -573,9 +579,10 @@ async function dragGrip(grip: Element, fromY: number, toY: number): Promise<void
 }
 
 /** The three sync buttons of the state rail, in render order. */
-function syncButtons(container: HTMLElement): HTMLButtonElement[] {
+function railActions(container: HTMLElement): HTMLButtonElement[] {
   const rail = must(container, `.${cls.head}`)
-  return [...rail.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].slice(0, 3)
+  // The transport actions, in rail order: sync, fetch, pull, push.
+  return [...rail.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].slice(0, 4)
 }
 
 /** The layout key the pane persists under; read here so the tests name it once. */
@@ -2504,11 +2511,13 @@ describe('the sync actions (FR-5.1)', () => {
     )
     await settle()
 
-    const buttons = syncButtons(container)
-    assert.equal(buttons.length, 3)
+    const buttons = railActions(container)
+    // Sync, fetch, pull, push. Fetch has no precondition, so it is the one
+    // transport action that is never disabled here.
+    assert.equal(buttons.length, 4)
     assert.equal(buttons.some((button) => button.disabled), false)
 
-    await click(buttons[1] as HTMLButtonElement)
+    await click(buttons[2] as HTMLButtonElement)
     assert.deepEqual(calls.entries, ['pull'])
   })
 
@@ -2528,10 +2537,11 @@ describe('the sync actions (FR-5.1)', () => {
     )
     await settle()
 
-    const [sync, pull, push] = syncButtons(container)
+    const [sync, fetch, pull, push] = railActions(container)
     assert.equal(sync?.disabled, true, 'there is nothing to pull from')
     assert.equal(pull?.disabled, true)
     assert.equal(push?.disabled, false, 'the first push is the one that sets the upstream')
+    assert.equal(fetch?.disabled, false, 'fetch needs no upstream to be worth doing')
 
     await click(push as HTMLButtonElement)
     assert.deepEqual(calls.entries, ['push'])
@@ -2550,12 +2560,50 @@ describe('the sync actions (FR-5.1)', () => {
       }),
     )
     await settle()
-    const [sync, pull, push] = syncButtons(container)
+    const [sync, fetch, pull, push] = railActions(container)
     // There is nothing to send and nothing to reconcile — but asking the remote
     // whether it has moved is always a reasonable thing to do.
     assert.equal(sync?.disabled, true)
     assert.equal(push?.disabled, true)
     assert.equal(pull?.disabled, false)
+    assert.equal(fetch?.disabled, false)
+  })
+
+  it('fetches every remote from its own button', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const [, fetch] = railActions(container)
+    assert.equal(fetch?.getAttribute('aria-label'), 'Fetch all remotes')
+    await click(fetch as HTMLButtonElement)
+    assert.deepEqual(calls.entries, ['fetch'])
+    assert.match(must(container, '[data-action-done="fetch"]').textContent ?? '', /Fetch all remotes/)
+  })
+
+  it('states a repository with no remote instead of a silent success', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          fetch: {
+            ok: false,
+            error: { code: 'bad-request', message: 'this repository has no remote to fetch from' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    await click(railActions(container)[1] as HTMLButtonElement)
+    const box = must(container, '[data-action-error="fetch"]')
+    assert.match(box.textContent ?? '', /no remote to fetch from/)
+    // A refused operation leaves the change list where it was (§4.3).
+    assert.equal(container.querySelectorAll(`.${cls.badge}`).length, 4)
   })
 })
 
@@ -2580,7 +2628,7 @@ describe('operation failures (§4.3)', () => {
     )
     await settle()
 
-    await click(syncButtons(container)[1] as HTMLButtonElement)
+    await click(railActions(container)[2] as HTMLButtonElement)
 
     const box = must(container, '[data-action-error="pull"]')
     assert.match(box.textContent ?? '', /remote has commits this branch does not/)
@@ -2604,7 +2652,7 @@ describe('operation failures (§4.3)', () => {
       }),
     )
     await settle()
-    await click(syncButtons(container)[0] as HTMLButtonElement)
+    await click(railActions(container)[0] as HTMLButtonElement)
     assert.equal(container.querySelector('[data-action-error]') !== null, true)
 
     const box = must(container, '[data-action-error]')

@@ -562,6 +562,76 @@ describe('sync', () => {
   })
 })
 
+describe('fetch (added; the doc lists no standalone fetch)', () => {
+  it('updates the remote-tracking ref without touching the branch or the worktree', async () => {
+    const { repo, remote, branch } = repoWithRemote('mut-fetch')
+    const other = makePlainDir('mut-fetch-other')
+    git(other, ['clone', '-q', remote, '.'])
+    write(other, 'theirs.txt', 'theirs\n')
+    stageAll(other)
+    commit(other, 'theirs')
+    git(other, ['push', '-q'])
+    const theirs = git(other, ['rev-parse', 'HEAD']).trim()
+
+    const before = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await serviceFor({ s1: repo }).fetch('s1')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // The remote-tracking ref moved...
+    assert.equal(git(repo, ['rev-parse', `refs/remotes/origin/${branch}`]).trim(), theirs)
+    // ...while HEAD, the index and the working tree did not. That absence of a
+    // merge is the whole difference between fetch and pull.
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), before)
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.branch.behind, 1)
+    assert.equal(status.value.changedCount, 0)
+  })
+
+  it('fetches every remote, not only the one the branch tracks', async () => {
+    const { repo, remote, branch } = repoWithRemote('mut-fetch-all')
+    const mirror = makeBareRemote('mut-fetch-all-mirror')
+    git(repo, ['remote', 'add', 'mirror', mirror])
+    git(repo, ['push', '-q', 'mirror', branch])
+
+    // Advance both remotes from outside this repository.
+    const onOrigin = makePlainDir('mut-fetch-all-origin')
+    git(onOrigin, ['clone', '-q', remote, '.'])
+    write(onOrigin, 'origin.txt', 'x\n')
+    stageAll(onOrigin)
+    commit(onOrigin, 'origin moves')
+    git(onOrigin, ['push', '-q'])
+    const originTip = git(onOrigin, ['rev-parse', 'HEAD']).trim()
+
+    const onMirror = makePlainDir('mut-fetch-all-mirror-clone')
+    git(onMirror, ['clone', '-q', mirror, '.'])
+    write(onMirror, 'mirror.txt', 'y\n')
+    stageAll(onMirror)
+    commit(onMirror, 'mirror moves')
+    git(onMirror, ['push', '-q'])
+    const mirrorTip = git(onMirror, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).fetch('s1')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['rev-parse', `refs/remotes/origin/${branch}`]).trim(), originTip)
+    assert.equal(git(repo, ['rev-parse', `refs/remotes/mirror/${branch}`]).trim(), mirrorTip)
+  })
+
+  it('refuses a repository with no remote rather than reporting a silent success', async () => {
+    // `git fetch --all` with no remotes exits 0 and prints nothing, so the check
+    // is what keeps the panel from announcing a fetch that never happened.
+    const repo = makeRepo('mut-fetch-noremote')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const result = await serviceFor({ s1: repo }).fetch('s1')
+    assert.equal(result.ok, false)
+    if (result.ok) return
+    assert.equal(result.error.code, 'bad-request')
+    assert.match(result.error.message, /no remote/u)
+  })
+})
+
 describe('the full M2 flow', () => {
   it('takes a change to the remote without a terminal', async () => {
     // The doc's M2 acceptance criterion, end to end: 改 → 暂存 → 提交 → 推送.
@@ -621,6 +691,7 @@ describe('the full M2 flow', () => {
       service.commitAll('missing', 'message'),
       service.push('missing'),
       service.pull('missing'),
+      service.fetch('missing'),
       service.sync('missing'),
       service.undoCommit('missing', 'a'.repeat(40)),
     ])
@@ -637,6 +708,7 @@ describe('the full M2 flow', () => {
       service.stage('s1', ['a.txt']),
       service.commit('s1', 'message'),
       service.push('s1'),
+      service.fetch('s1'),
       service.undoCommit('s1', 'a'.repeat(40)),
     ])
     for (const result of results) {

@@ -34,6 +34,7 @@ pass.
 | Stage / unstage, one file or a whole group | ✅ |
 | Commit box with an explicit scope: index only, or the announced `add -u` | ✅ |
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
+| Fetch every remote — a dashed ↓ beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
 | UI in zh + en | ✅ |
 | Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
@@ -115,7 +116,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 456 tests && build
+npm run check      # tsc --noEmit && 462 tests && build
 ```
 
 ## Install

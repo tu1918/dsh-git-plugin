@@ -70,6 +70,7 @@ import {
   ArrowUpGlyph,
   BranchGlyph,
   CaretGlyph,
+  FetchGlyph,
   ListGlyph,
   PlusGlyph,
   RefreshGlyph,
@@ -126,6 +127,7 @@ type ActionOp =
   | 'commit'
   | 'push'
   | 'pull'
+  | 'fetch'
   | 'sync'
   | 'checkout'
   | 'createBranch'
@@ -408,6 +410,7 @@ function BranchRail({
   canSync,
   onPull,
   onPush,
+  onFetch,
   onSync,
   pickerOpen,
   onTogglePicker,
@@ -438,6 +441,14 @@ function BranchRail({
   readonly canSync: boolean
   readonly onPull: () => void
   readonly onPush: () => void
+  /**
+   * Fetch every remote.
+   *
+   * Always pressable: unlike pull and push it has no precondition to fail — it
+   * works on a detached HEAD, an unborn branch, and a branch with no upstream.
+   * A repository with no remote at all is refused by the host with a sentence.
+   */
+  readonly onFetch: () => void
   readonly onSync: () => void
   /** Whether the branch picker is unfolded. */
   readonly pickerOpen: boolean
@@ -520,6 +531,12 @@ function BranchRail({
       <span className={cls.spacer} />
       <ToolButton label={t('action.sync')} disabled={!canSync || busy} onClick={onSync}>
         <SyncGlyph />
+      </ToolButton>
+      {/* Fetch sits beside Pull because both bring something down, and the dashed
+          arrow is how they are told apart: this one only updates what the panel
+          knows about the remote, and never touches the working tree. */}
+      <ToolButton label={t('action.fetch')} disabled={busy} onClick={onFetch}>
+        <FetchGlyph />
       </ToolButton>
       <ToolButton label={t('action.pull')} disabled={!canPull || busy} onClick={onPull}>
         <ArrowDownGlyph size={13} />
@@ -1089,6 +1106,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const sync = (): void => {
     void perform('sync', say('action.sync'), async () => reportOf(await git.sync(sessionId, signal)))
   }
+  const fetchRemotes = (): void => {
+    void perform('fetch', say('action.fetch'), async () =>
+      reportOf(await git.fetch(sessionId, signal)),
+    )
+  }
 
   /**
    * Stash the working tree (FR-6.2).
@@ -1585,6 +1607,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           canSync={canSync}
           onPull={pull}
           onPush={push}
+          onFetch={fetchRemotes}
           onSync={sync}
           pickerOpen={pickerOpen}
           onTogglePicker={() => {

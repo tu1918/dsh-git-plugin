@@ -82,6 +82,7 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'commit',
   'push',
   'pull',
+  'fetch',
   'sync',
   'checkout',
   'createBranch',
@@ -395,6 +396,8 @@ export function registerGitPanelRoutes(
         return await service.push(sessionId)
       case 'pull':
         return await service.pull(sessionId)
+      case 'fetch':
+        return await service.fetch(sessionId)
       case 'sync':
         return await service.sync(sessionId)
       case 'showCommit': {

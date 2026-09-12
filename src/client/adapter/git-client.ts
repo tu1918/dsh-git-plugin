@@ -178,6 +178,7 @@ export function createGitRemoteClient(): GitRemoteClient {
       mutate<CommitInfo>('/commit', { session: sessionId, message, all: true }, signal),
     push: (sessionId, signal) => mutate<OperationReport>('/push', { session: sessionId }, signal),
     pull: (sessionId, signal) => mutate<OperationReport>('/pull', { session: sessionId }, signal),
+    fetch: (sessionId, signal) => mutate<OperationReport>('/fetch', { session: sessionId }, signal),
     sync: (sessionId, signal) => mutate<OperationReport>('/sync', { session: sessionId }, signal),
 
     checkout: (sessionId, name, signal) =>
