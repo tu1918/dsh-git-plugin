@@ -55,6 +55,16 @@ describe('relativeTimeParts', () => {
     // A bogus age is a visible lie about the repository; zero is merely useless.
     assert.deepEqual(relativeTimeParts('not a date', now), { value: 0, unit: 'second' })
   })
+
+  it('clamps a timestamp from the future, which is skew rather than news', () => {
+    // The regression: the history measured against a reference captured when the
+    // pane mounted, so a commit made while the panel was open was NEWER than that
+    // reference and its row read "in 1 minute". A commit cannot be from the
+    // future, and "now" is the closest true thing to say about one.
+    assert.deepEqual(relativeTimeParts('2026-09-11T12:01:30Z', now), { value: 0, unit: 'second' })
+    assert.deepEqual(relativeTimeParts('2026-09-11T13:00:00Z', now), { value: 0, unit: 'second' })
+    assert.deepEqual(relativeTimeParts('2026-09-11T12:00:00Z', now), { value: 0, unit: 'second' })
+  })
 })
 
 describe('lineCount', () => {

@@ -101,7 +101,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 300 tests && build
+npm run check      # tsc --noEmit && 303 tests && build
 ```
 
 ## Install

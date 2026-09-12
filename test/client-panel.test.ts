@@ -15,7 +15,7 @@
  */
 
 import { JSDOM } from 'jsdom'
-import { after, before, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test'
 import assert from 'node:assert/strict'
 
 // A document must exist before any component is rendered. jsdom is installed on
@@ -348,6 +348,7 @@ async function render(element: ReturnType<typeof h>): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  rendered.push(root)
   await act(async () => {
     root.render(element)
   })
@@ -473,10 +474,28 @@ before(() => {
   installStyles(document)
 })
 
+/**
+ * Every root this file has rendered, so a test's effects are torn down.
+ *
+ * A mounted panel keeps a clock (the history's relative times) and, while a
+ * change is arriving, a debounce. A file that never unmounts leaves those timers
+ * pending, and the test process then has nothing to do but wait for them: it
+ * hangs instead of reporting.
+ */
+const rendered: { unmount: () => void }[] = []
+
 // The layout choice is persisted (FR-2.4), so one test's choice would otherwise
 // decide how the next one renders.
 beforeEach(() => {
   dom.window.localStorage.clear()
+})
+
+afterEach(async () => {
+  const pending = rendered.splice(0)
+  await act(async () => {
+    for (const root of pending) root.unmount()
+  })
+  document.body.textContent = ''
 })
 
 after(() => {
@@ -1022,6 +1041,43 @@ describe('StatusPanel rendering', () => {
     }
     await announce(['worktree'])
     assert.equal(logCalls, 2, 'a worktree change must not spend a git log')
+  })
+
+  it('never dates a commit in the future, even when the pane opened before it', async () => {
+    // The regression: the rows measured against a reference captured when this
+    // pane mounted, so a commit made WHILE it was open was newer than that
+    // reference and its row read "in 1 minute" instead of "just now".
+    const fresh = { ...commitFixture(), committedAt: new Date(Date.now() + 90_000).toISOString() }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [fresh] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const meta = must(container, '[data-commit-meta="true"]').textContent ?? ''
+    assert.doesNotMatch(meta, /\bin \d/u, `a commit must never read as future-dated, got: ${meta}`)
+    assert.match(meta, /now/u)
+  })
+
+  it('ages its rows as the clock moves', async () => {
+    // A reference captured once also means "30 seconds ago" stays that forever.
+    // The pane keeps its own clock: this is a label, not a git call.
+    mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-09-11T12:00:00Z') })
+    try {
+      const commit = { ...commitFixture(), committedAt: '2026-09-11T11:59:30Z' }
+      const container = await render(
+        h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [commit] }), t, locale: 'en' }),
+      )
+      await settle()
+      const meta = (): string => must(container, '[data-commit-meta="true"]').textContent ?? ''
+      assert.match(meta(), /30 seconds ago/u)
+
+      await act(async () => {
+        mock.timers.tick(60_000)
+      })
+      assert.match(meta(), /1 minute ago/u)
+    } finally {
+      mock.timers.reset()
+    }
   })
 })
 

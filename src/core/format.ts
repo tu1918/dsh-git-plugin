@@ -57,8 +57,8 @@ const RELATIVE_UNITS: readonly (readonly [RelativeTimeParts['unit'], number])[] 
  * the plugin would have to maintain in every language.
  * @param iso - Timestamp, ISO-8601 as git reports it.
  * @param now - Current epoch milliseconds.
- * @returns The signed age and its unit; `second` for anything under a minute,
- *   including future timestamps within the same window.
+ * @returns The signed age and its unit; `second` for anything under a minute.
+ *   A timestamp in the future is clamped to zero — see below.
  */
 export function relativeTimeParts(iso: string, now: number): RelativeTimeParts {
   const at = Date.parse(iso)
@@ -67,7 +67,12 @@ export function relativeTimeParts(iso: string, now: number): RelativeTimeParts {
   // visible lie about the repository.
   if (Number.isNaN(at)) return { value: 0, unit: 'second' }
 
-  const seconds = (at - now) / 1000
+  // A commit cannot be from the future. The timestamp is git's and the clock is
+  // the panel's, and they are not the same clock: with a reference captured
+  // before the commit existed, a fresh commit computed minutes ahead and
+  // rendered as "in 1 minute" — a sentence no reader can act on. Zero localises
+  // to "now", which is the closest true thing anyone can say about it.
+  const seconds = Math.min((at - now) / 1000, 0)
   const magnitude = Math.abs(seconds)
   for (const [unit, size] of RELATIVE_UNITS) {
     if (magnitude >= size) {

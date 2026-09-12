@@ -41,6 +41,16 @@ const LOG_PAGE_SIZE = 30
 const MAX_LOG_ROWS = 500
 
 /**
+ * How often the relative times are recomputed while the history is showing.
+ *
+ * The column's smallest unit is a minute, so half a minute is enough for "just
+ * now" to become "1 minute ago" without a user noticing the moment it changed.
+ * This is a clock, not a read: it costs no git process, which is the whole
+ * difference between it and the polling the panel refuses to do.
+ */
+const CLOCK_TICK_MS = 30_000
+
+/**
  * One file inside a commit (FR-3.6).
  *
  * The counts are `null` for a binary file rather than zero — git declined to
@@ -255,7 +265,15 @@ export function HistoryPanel({
   const [hasMore, setHasMore] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
-  const [now] = useState(() => Date.now())
+  /**
+   * The clock the rows' relative times are measured against.
+   *
+   * It has to move. It was captured once when this pane mounted, which made
+   * every commit newer than the pane's own age look like it came from the
+   * future — a commit made while the panel was open rendered as "in 1 minute" —
+   * and froze every other row's age for as long as the pane stayed open.
+   */
+  const [now, setNow] = useState(() => Date.now())
   /** The selected commit, by object id: the one the detail column is about. */
   const [openOid, setOpenOid] = useState<string | null>(null)
   /** Details already read, by object id, so reselecting costs no process. */
@@ -285,6 +303,9 @@ export function HistoryPanel({
       const page = await git.log(sessionId, offset, LOG_PAGE_SIZE, signal)
       setBusy(false)
       if (!page.ok) return
+      // A row read just now must say "now", not whatever the clock said when the
+      // pane mounted.
+      setNow(Date.now())
       setCommits((current) => {
         const next = offset === 0 ? page.value.commits : [...current, ...page.value.commits]
         held.current = next.length
@@ -303,6 +324,7 @@ export function HistoryPanel({
     const page = await git.log(sessionId, 0, limit, signal)
     setBusy(false)
     if (!page.ok) return
+    setNow(Date.now())
     setCommits(page.value.commits)
     held.current = page.value.commits.length
     setHasMore(page.value.hasMore)
@@ -319,6 +341,15 @@ export function HistoryPanel({
     setReadAt(refsChanged)
     void (loaded ? refresh() : append(0))
   }, [active, loaded, readAt, refsChanged, append, refresh])
+
+  // The clock behind those ages: reset on becoming visible, then tick while the
+  // tab is on screen. A folded pane does not need to know what time it is.
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS)
+    return () => clearInterval(timer)
+  }, [active])
 
   const select = useCallback(
     (oid: string) => {
