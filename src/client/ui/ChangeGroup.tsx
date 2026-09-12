@@ -11,6 +11,13 @@
  * here rather than by the containers, for the same reason: both modes exist in
  * both containers, and a second copy of this markup is how the two would drift.
  *
+ * A row also carries FR-6.1's discard button, and arms it itself (`useArmedKey`,
+ * the same two-click pattern the branch picker uses). Its own arming state rather
+ * than the panel's is deliberate: the panel's shared key belongs to the controls
+ * in its own chrome, and a row that is re-rendered away takes its arm with it —
+ * which is the safer half of the trade, since a discarded file has no row left to
+ * re-aim at.
+ *
  * @module dsh-git-panel/client/ui/ChangeGroup
  */
 
@@ -22,8 +29,10 @@ import { badgeFor } from '../../core/git-parse.ts'
 import type { ChangeArea, FileChange } from '../../core/types.ts'
 import type { Translate } from './translate.ts'
 import { cls } from './styles.ts'
+import { useArmedKey } from './armed.ts'
 import { dirKey, type ChangeView } from './change-view.ts'
-import { CaretGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
+import { canDiscard } from './row-actions.ts'
+import { CaretGlyph, DiscardGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
 
 /** One glyph button with a tooltip and an accessible name. */
 export function ToolButton({
@@ -76,6 +85,10 @@ export function ToolButton({
  * the row has focus. The row is the anchor — the layer is measured from it — and
  * it is `event.currentTarget`, read here because a synthetic event's
  * `currentTarget` is only valid while the handler is running.
+ *
+ * And it carries FR-6.1's discard: on the working-tree rows (see
+ * `ui/row-actions.ts` for which those are) the strip gains a third button which,
+ * like every irreversible control here, arms instead of firing (§4.3).
  */
 export function ChangeRow({
   entry,
@@ -87,6 +100,7 @@ export function ChangeRow({
   onUnstage,
   onOpen,
   onMenu,
+  onDiscard,
 }: {
   readonly entry: FileChange
   readonly area: ChangeArea
@@ -110,6 +124,8 @@ export function ChangeRow({
    * it, and only the row knows which element it is.
    */
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  /** Discard this row's working-tree change, once the row is armed (FR-6.1). */
+  readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
@@ -121,6 +137,11 @@ export function ChangeRow({
   // also how a merge is marked resolved — the same command git would be given
   // (FR-9.2) — so it is labelled as what it does there rather than as "stage".
   const canUnstage = area === 'staged'
+  // Which rows may discard at all is one rule, shared with the row menu
+  // (`ui/row-actions.ts`): the menu must not offer what this row has no button for.
+  const discardable = canDiscard(area)
+  const { armed, arm, reset } = useArmedKey()
+  const discardArmed = armed === entry.path
   const stageLabel =
     area === 'conflicted' ? t('action.markResolved', { path: entry.path }) : t('action.stage')
 
@@ -186,6 +207,34 @@ export function ChangeRow({
             <MinusGlyph size={16} />
           </ToolButton>
         )}
+        {discardable && !discardArmed && (
+          <ToolButton
+            label={t('action.discardPath', { path: entry.path })}
+            disabled={busy}
+            onClick={() => arm(entry.path)}
+          >
+            <DiscardGlyph size={15} />
+          </ToolButton>
+        )}
+        {discardArmed && (
+          // The armed state is words, not a tooltip: §4.3's pattern only works if
+          // the second click is visibly a different click. While armed the strip
+          // holds this button instead of the icon, and the pointer is on the row
+          // (the arm came from this very button), so it is on screen.
+          <button
+            type="button"
+            className={cls.danger}
+            data-armed="true"
+            disabled={busy}
+            title={t('action.discardConfirm', { path: entry.path })}
+            onClick={() => {
+              reset()
+              onDiscard(entry, area)
+            }}
+          >
+            {t('action.discardArmed')}
+          </button>
+        )}
       </span>
     </div>
   )
@@ -228,6 +277,7 @@ function TreeNodeView({
   onUnstage,
   onOpen,
   onMenu,
+  onDiscard,
 }: {
   readonly node: ChangeTreeNode
   readonly area: ChangeArea
@@ -239,6 +289,7 @@ function TreeNodeView({
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   // Depth alone: the 12px that lines the tree up with the group header's caret
   // belongs to the button and the row themselves (both carry it in the
@@ -258,6 +309,7 @@ function TreeNodeView({
           onUnstage={onUnstage}
           onOpen={onOpen}
           onMenu={onMenu}
+          onDiscard={onDiscard}
         />
       </div>
     )
@@ -298,6 +350,7 @@ function TreeNodeView({
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
+            onDiscard={onDiscard}
           />
         ))}
     </>
@@ -334,6 +387,7 @@ export function Group({
   onUnstage,
   onOpen,
   onMenu,
+  onDiscard,
 }: {
   readonly label: string
   readonly area: ChangeArea
@@ -358,6 +412,7 @@ export function Group({
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   if (entries.length === 0 && emptyNote === undefined) return null
   // Built once per render, and only when it will be drawn: the flat list is a
@@ -419,6 +474,7 @@ export function Group({
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
+            onDiscard={onDiscard}
           />
         ))}
       {!collapsed &&
@@ -435,6 +491,7 @@ export function Group({
             onUnstage={onUnstage}
             onOpen={onOpen}
             onMenu={onMenu}
+            onDiscard={onDiscard}
           />
         ))}
     </section>

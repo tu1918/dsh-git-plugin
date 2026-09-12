@@ -47,6 +47,10 @@ export const zh = {
   'action.checkout': '切换分支',
   'action.createBranch': '新建分支',
   'action.deleteBranch': '删除分支',
+  'action.discard': '放弃更改',
+  'action.discardPath': '放弃「{path}」的更改',
+  'action.discardArmed': '再点一次：不可恢复',
+  'action.discardConfirm': '将丢弃「{path}」的更改，不可恢复',
 
   'menu.fileRow': '{path} 的操作',
 
@@ -61,6 +65,7 @@ export const zh = {
   'commit.hintConflicted': '还有 {count} 个冲突文件，解决后再提交。',
   'commit.hintClean': '没有可提交的更改。',
   'commit.done': '已提交 {hash}：{subject}',
+  'discard.done': '已放弃「{path}」的更改',
   'commit.ai': '用 AI 生成提交信息',
   'commit.aiNeedsStaged': '先暂存要提交的更改，再生成提交信息',
   'commit.aiTruncated': '暂存差异过大，已截断后再生成；请确认信息覆盖了全部改动。',
@@ -191,6 +196,10 @@ export const en: Record<GitPanelKey, string> = {
   'action.checkout': 'Switch branch',
   'action.createBranch': 'Create branch',
   'action.deleteBranch': 'Delete branch',
+  'action.discard': 'Discard changes',
+  'action.discardPath': 'Discard the changes to {path}',
+  'action.discardArmed': 'Click again: cannot be undone',
+  'action.discardConfirm': 'Discards the changes to {path}; this cannot be undone',
 
   'menu.fileRow': 'Actions for {path}',
 
@@ -206,6 +215,7 @@ export const en: Record<GitPanelKey, string> = {
   'commit.hintConflicted': '{count} file(s) still in conflict: resolve them before committing.',
   'commit.hintClean': 'There is nothing to commit.',
   'commit.done': 'Committed {hash}: {subject}',
+  'discard.done': 'Discarded the changes to {path}',
   'commit.ai': 'Write the message with AI',
   'commit.aiNeedsStaged': 'Stage the changes you want described first',
   'commit.aiTruncated':

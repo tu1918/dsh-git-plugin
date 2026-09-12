@@ -112,6 +112,28 @@ function firstLine(stderr: string): string {
   return 'git failed'
 }
 
+/**
+ * How many paths one audit line names before it says "and more".
+ *
+ * §7 asks the discard audit to say WHICH paths were thrown away, and one request
+ * may legitimately carry a whole group. The line is a log record rather than a
+ * manifest, so it stays bounded: a body may hold up to a megabyte of paths, and
+ * a single log line that size would be a worse record than a counted one.
+ */
+const MAX_AUDIT_PATHS = 20
+
+/**
+ * Name the paths an audit line carries.
+ * @param paths - Every path the operation acted on.
+ * @returns Up to {@link MAX_AUDIT_PATHS} paths, and the count of the rest.
+ */
+function auditPaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, MAX_AUDIT_PATHS).join(', ')
+  return paths.length <= MAX_AUDIT_PATHS
+    ? shown
+    : `${shown} … (+${paths.length - MAX_AUDIT_PATHS} more)`
+}
+
 /** A failure the panel recognises, and the code it earns. */
 interface FailurePattern {
   /** Tested against both streams' text. */
@@ -432,6 +454,73 @@ export function createGitService(
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: unstaged ${accepted.value.length} path(s) in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Discard the working-tree state of paths (FR-6.1).
+   *
+   * "Discard" is two commands, and the INDEX decides which path gets which —
+   * never the browser's word for it, and never the panel's last read:
+   *
+   * - **Tracked**: `git restore -- <path>`, which copies the index's version back
+   *   over the working tree. Deliberately *not* `--source=HEAD`: an unborn branch
+   *   has no HEAD to restore from (probed: `fatal: could not resolve HEAD`), the
+   *   same trap §6 documents for `unstage`.
+   * - **Untracked**: the index knows nothing about it, so `restore` refuses it
+   *   (probed: `pathspec … did not match any file(s) known to git`) and the file
+   *   itself is what has to go: `git clean -f -- <path>`. `clean` rather than
+   *   `fs.rm`, for the two things it refuses — a path that is in fact tracked
+   *   (probed: exit 0, file untouched) and an ignored one (same). A stale request
+   *   therefore cannot delete a file the index is still holding on to.
+   *
+   * A conflicted path is neither case: it is unmerged in the index, and both
+   * commands refuse it (`path 'x' is unmerged`) rather than guessing which side
+   * the user meant. The panel does not offer discard on a conflicted row —
+   * abandoning a conflict is FR-9's decision — so that refusal is the belt to its
+   * braces.
+   * @param sessionId - Session whose repository to act on.
+   * @param paths - Repo-relative paths from the browser.
+   * @returns git's report, or the refusal that kept git from running.
+   */
+  async function discard(
+    sessionId: string,
+    paths: readonly string[],
+  ): Promise<Result<OperationReport>> {
+    const accepted = validatePaths(paths)
+    if (!accepted.ok) return accepted
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    // One read of the index answers "which of these does git know?", which is the
+    // question the two commands split on. `-z` because a path may hold anything
+    // but NUL, and a Set because an unmerged path is listed once per stage.
+    const listed = await run(['ls-files', '-z', '--', ...accepted.value], root.value)
+    if (!listed.ok) return listed
+    const tracked = new Set(listed.value.stdout.split('\0').filter((path) => path !== ''))
+    const restore = accepted.value.filter((path) => tracked.has(path))
+    const remove = accepted.value.filter((path) => !tracked.has(path))
+
+    const detail: string[] = []
+    const lines: string[] = []
+    for (const args of [
+      restore.length === 0 ? null : ['restore', '--', ...restore],
+      remove.length === 0 ? null : ['clean', '-f', '--', ...remove],
+    ]) {
+      if (args === null) continue
+      const outcome = await run(args, root.value, true)
+      if (!outcome.ok) return outcome
+      detail.push(fullOutput(outcome.value))
+      lines.push(...outcome.value.stdout.split('\n'), ...outcome.value.stderr.split('\n'))
+    }
+
+    // §7's M5a line: unlike staging, this operation needs an audit that names what
+    // was thrown away — the file is gone afterwards, so the log is the only record.
+    ports.log(
+      'info',
+      `git-panel: discarded ${accepted.value.length} path(s) in ${root.value}: ${auditPaths(accepted.value)}`,
+    )
+    const summary = lines.map((line) => line.trim()).find((line) => line !== '') ?? ''
+    return { ok: true, value: { summary, detail: detail.join('') } }
   }
 
   /**
@@ -891,6 +980,7 @@ export function createGitService(
     diff: diffPath,
     stage,
     unstage,
+    discard,
     commit,
     commitAll,
     push: pushRepo,

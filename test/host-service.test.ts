@@ -719,6 +719,25 @@ describe('the mutation routes', () => {
     }
   })
 
+  it('discards over POST, and refuses the same operation over GET', async () => {
+    const repo = repoWithChange('routes-discard')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await post(harness, '/git-panel/discard', { session: 's1', paths: ['a.txt'] })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean }
+      assert.equal(body.ok, true)
+      // The worktree really was put back: the route reaches git, not a stub.
+      assert.equal(git(repo, ['diff', '--name-only']).trim(), '')
+
+      // A mutation reachable by GET would be reachable by an <img> tag.
+      const viaGet = await fetch(`${harness.origin}/git-panel/discard?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('runs the widening commit only when the body asks for it', async () => {
     const repo = repoWithChange('routes-commit')
     const harness = await startHarness({ s1: repo })

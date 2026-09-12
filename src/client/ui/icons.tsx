@@ -205,6 +205,26 @@ export function TrashGlyph({ size = 13, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * An arrow curving backwards: discard the change (FR-6.1).
+ *
+ * The mirror of {@link RefreshGlyph} — the same motion read the other way — rather
+ * than the bin {@link TrashGlyph} draws: this button reverts a tracked file's edits,
+ * where nothing is deleted at all, and only an untracked file is actually removed.
+ * A bin would be true for half of its clicks.
+ * @param props - Size and class.
+ */
+export function DiscardGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M3 8a5 5 0 1 0 1.6-3.7" />
+      <path d="M3 2.6V5.4h2.8" />
+    </>,
+  )
+}
+
+/**
  * A four-pointed star: generate the message with the model (FR-3.5).
  *
  * The doc draws this control as `✨`, and the shape is what makes it read as

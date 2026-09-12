@@ -159,6 +159,8 @@ export function createGitRemoteClient(): GitRemoteClient {
       mutate<OperationReport>('/stage', { session: sessionId, paths }, signal),
     unstage: (sessionId, paths, signal) =>
       mutate<OperationReport>('/unstage', { session: sessionId, paths }, signal),
+    discard: (sessionId, paths, signal) =>
+      mutate<OperationReport>('/discard', { session: sessionId, paths }, signal),
     commit: (sessionId, message, signal) =>
       mutate<CommitInfo>('/commit', { session: sessionId, message }, signal),
     // The one argument that separates FR-3.4's two commits, named as the flag the

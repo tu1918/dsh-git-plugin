@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（45 个源文件）、`test/`（15 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 321 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 335 项测试 + 两个打包产物
 
 ---
 
@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）已交付**（`ui/menu.tsx` + 文件行的右键菜单，见 §10.1）；剩 discard / undoCommit / stash |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）与顺序 2（discard）已交付**（见 §10.1）；剩 undoCommit / stash |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -123,6 +123,7 @@ discard 与 undoCommit 在 M5a。
 | **D23** | §5.2 的意图是「DSH 名字只在 adapter 里，且最好是类型」 | `host/adapter/llm.ts` 引入了 `@deepseek-ai/dsh-llm` 的**运行时值**（`BlockAssembler`、`createUserMessage`），并把它声明为 peerDependency | 手写一份流式装配会复刻 harness 的块合并规则（工具调用截断、未知块、delta-only 协议都已在那层处理过），手写 message 形状则要跟住它的不可变创建契约。用宿主自己的装配器是唯一不会随宿主漂移的选择。**代价**：host bundle 首次带一个 `@deepseek-ai/*` 的运行时 import（此前只有 Node 内建 + `vscode-diff`），安装时必须能解析到宿主提供的 `dsh-llm`——`link:` 安装由本仓 devDependencies 提供，npm 安装由 peer 自动补齐 |
 | **D24** | §7 的 M5 是**一个**里程碑：discard、stash、提交图、撤销、多仓库 → 发布 v1.0 | 拆成 **M5a**（行级菜单机制 + FR-6.1 discard + FR-3.8 撤销 + FR-6.2 stash）与 **M5b**（FR-7.1 提交图 + FR-7.2 下钻 diff + FR-8 多仓库 + 提交改写 drop/squash/reset），M5b 收尾即文档 §7 的 v1.0 | M5 的实际体量大于 M4：文档 §3.1 的 5 个功能跨 P1/P2，另加 M4 明确留下的两件（下钻 diff、提交改写）。拆点选在「破坏性写操作」这一侧——**discard 与 undoCommit 正是 §7 的 M5 待办点名的两个**，它们与已交付的 deleteBranch 共用同一套武装确认（`ui/armed.ts`）与审计通道，一起做才不重复实现；提交图与多仓库是纯新增表面，不改变任何写操作的安全性。产品方 2026-09-12 确认按此拆分并先开工 M5a，工作包与排序见 §10 |
 | **D25** | FR-1.4 把「mtime 监听 + 定时轮询」当作刷新机制；D4 进一步把它收成「只轮询 `.git` 状态文件」 | 抽出**独立的 git 状态探测模块** `src/host/git-probe.ts`：主策略是文件系统事件（工作区递归 + git 目录各一个 `fs.watch`），轮询降级为**回退策略**；探测只产出中性事件 `GitChange`（`refs` / `index` / `worktree`），对 transport（SSE）与 UI 一无所知，客户端一侧再由 `ui/repo-change.tsx` 的事件总线分发给各面板 | 三条实测理由：① **工作区里发生的事不动 `.git`**——agent 新建/编辑文件时 `index`、`HEAD`、`logs/HEAD` 的 mtime 全不变，只盯 `.git` 的轮询永远看不见新文件（这正是产品方报的「写文件时丢更新」）；② **只盯 `index`/`HEAD` 会漏掉空提交与远端变化**——实测 `git commit --allow-empty` 只动 `logs/HEAD`，`git fetch` 只动 `FETCH_HEAD` 与 `refs/remotes`，两者都不动 index/HEAD；③ **客户端轮询太重**——同 profile 的 `dsh-better-sidebar` 用的是可见时 2s 轮询（`client/use-polling.ts`，Git lens 2s、变更列表 2.5s），而我们的 `/status` 一次要 2–3 个 git 进程，可见期间约每小时 5400 次 spawn，大仓库上 `git status` 是 100ms–1s 级。**代价**：`fs.watch` 在同步盘/网络盘上不可靠（D4 的老问题）——所以 `pollStrategy` 完整保留为回退（建立失败自动降级；那一路在 1s 状态 tick 之外每 10s 补报一次 `worktree`，文档 FR-1.4 自己的数字） |
+| **D26** | FR-6.1「**文件行**提供放弃更改按钮」（未说哪些行） | discard **只在工作区侧的行**提供：`未跟踪`（删文件）与`更改`（用索引盖回工作区）；**已暂存**行只给「取消暂存」，**冲突**行只给「标记已解决」 | 面板从 M2 起就是「一行一态」：已暂存行展示的是索引里的那份改动，在那里点「放弃更改」会把该行**没在展示**的工作区改动一起丢掉——破坏性按钮最不该制造这种意外；要丢工作区那半，同一个文件在「更改」组里有一行，那里写着它丢的是什么。冲突行的索引是未合并态（实测：`git restore` 报 `path 'x' is unmerged`），`restore` 不猜用户要哪一边，而放弃一个冲突属于 FR-9 的「中止合并」而不是某个文件的按钮。这条规则是**一个纯函数** `ui/row-actions.ts`，行内按钮与行菜单都问它，避免两处各写一份而漂移 |
 
 ---
 
@@ -147,7 +148,10 @@ discard 与 undoCommit 在 M5a。
    `git restore --staged` 是从 HEAD 恢复，而空仓库没有 HEAD（实测：
    `fatal: could not resolve HEAD`）。`unstage` 先探一次 `rev-parse --verify --quiet
    HEAD`，没有 HEAD 时改用 `git rm --cached -r --quiet`。删掉这个分支会让「第一次
-   提交前取消暂存」直接报错。
+   提交前取消暂存」直接报错。**同一个陷阱在 discard 上只差一个 flag**：
+   `git restore --source=HEAD -- <path>` 同样报 `could not resolve HEAD`（实测），
+   而 discard 要的本来就是「用索引里的版本盖回工作区」，默认源就是索引，所以
+   `git restore -- <path>` 在未出生分支上照常工作（有测试钉住）。
 
 4. **`optionalLocks` 的默认值写在 `run` 的形参上，不写在 `options` 里。**
    调用点必须**显式**说「我要写」，读代码的人才能一眼看出哪些调用会动 index。
@@ -203,7 +207,9 @@ discard 与 undoCommit 在 M5a。
 - **M5a 待办**：discard / deleteBranch / undoCommit 这三个**破坏性**操作落地时，
   需要各自的「点击武装→3s 内再点」确认（§4.3）与更明确的审计（删了哪个分支、
   丢弃了哪些路径）。deleteBranch 已在 M4 交付（`not-merged` → 同一行武装成强制删除），
-  剩 **discard 与 undoCommit** 排在 M5a（见 D24 与 §10）。若将来要支持 LAN 访问，
+  **discard 已在 M5a 顺序 2 交付**（行内按钮与菜单条目各自武装，审计逐条记路径，
+  `auditPaths` 只保留前 20 条 + 计数），剩 **undoCommit** 排在 M5a（见 D24 与 §10）。
+  若将来要支持 LAN 访问，
   再补「可信 authority / 配对设备 cookie」的逃生口。
 
 ---
@@ -391,7 +397,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 |---|---|
 | **① 点击提交行在底部 pane 预览该提交的差异** | 这正是 FR-3.6 的「可下钻看该提交的 diff」/ FR-7.2，也是它替代行内展开的做法（`onPreview(commitRefOf(entry))` → 共享底部 `DiffPane`）。需要：`DiffArea` 增加「按提交取 diff」的形态（如 `{kind:'commit', hash}`）、host 侧 `git show --no-color --no-ext-diff --no-textconv --unified=N <hash>`（**合并提交仍用 `-m --first-parent`**，与 `showCommit` 同口径）、以及多文件 patch 的渲染（它的 `git.commit-diff` 直接回整条 patch；我们要么让 `core/diff-parse.ts` 把一条 patch 切成多个文件段、要么按文件下钻 `git show <hash> -- <path>`）。做完这一项，行内的详情块可以退化成「文件清单 + 点击文件下钻」 |
 | **② 提交行的右键操作菜单** | 它的条目：查看提交差异 / 复制短哈希 / 复制完整哈希 / 复制提交信息 / 分隔线 / **还原此提交**（danger + 确认：「将在当前分支创建一个反转「{subject}」的新提交。」）/ **捡取此提交**（danger + 确认：「将「{subject}」的更改应用到当前分支。」）。复制类三项是纯客户端 clipboard，随时可做；还原/捡取属**改写历史**，与 FR-3.8 的撤销（M5a）、drop/squash/reset（M5b）同一批，需要 host 新路由 + §4.3 的确认（本插件的确认机制是 `ui/armed.ts`，不是原生 `confirm`） |
-| **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 M5a 的 discard 一起做（§10.1 顺序 2）；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航）。**2026-09-12 已定并落地**：手搓 —— `ui/popover.tsx`（层）+ `ui/menu.tsx`（条目与键盘），见 §10.1 顺序 1；这张菜单本身现在只有该行自己的暂存动作，「放弃更改」到顺序 2、「复制相对/绝对路径」到顺序 6 |
+| **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 M5a 的 discard 一起做（§10.1 顺序 2）；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航）。**2026-09-12 已定并落地**：手搓 —— `ui/popover.tsx`（层）+ `ui/menu.tsx`（条目与键盘），见 §10.1 顺序 1；这张菜单现有该行自己的暂存动作 + 分隔线 + 「放弃更改」（顺序 2 已交付，且按 D26 只在工作区侧的行出现），「复制相对/绝对路径」到顺序 6 |
 
 **这三项在 §10 里的排期**：① = M5b 顺序 5（它的复制类条目 = 顺序 6）；②③ 的**菜单载体**
 就是 M5a 顺序 1——顺序 1 不落地，这两张菜单各自都无从写起；其中「放弃更改」= M5a 顺序 2、
@@ -415,7 +421,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |
 |---|---|---|---|---|
 | 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 2/3 与 §9 的②③都复用它。**✅ 已交付（2026-09-12）**：浮层通用件随分支下拉落地（`ui/popover.tsx`），菜单内容那一层是新模块 `ui/menu.tsx`（条目模型 + 分隔线 + 上下键选择），并接上第一个真实调用方——**文件行的右键菜单**（右键 / Shift+F10 / 菜单键打开），条目是今天就能用的该行暂存动作。细节见下方「顺序 1 交付」 | S–M |
-| 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | M |
+| 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | **✅ 已交付（2026-09-12）**：见下方「顺序 2 交付」 |
 | 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | S–M |
 | 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | M |
 
@@ -434,6 +440,19 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 「放弃更改」是顺序 2（要 host 新路由与武装确认）、「复制相对/绝对路径」是顺序 6、
 「在编辑器中打开」受 D21 阻塞。机制与条目模型先落地，是为了让那三处各自只加一条条目，
 而不是各自再造一个弹层。
+
+### 顺序 2 交付：放弃更改 discard（2026-09-12，已完成）
+
+| 落点 | 内容 |
+|---|---|
+| `host/git-service.ts` | `discard(sessionId, paths)`：先 `git ls-files -z -- <paths>` 问一次索引，**由索引而不是客户端**决定每条路径走哪条命令——已跟踪 `git restore --`（默认源就是索引，所以未出生分支也成立）、索引完全不认识的 `git clean -f --`。用 `clean` 而不是 `fs.rm` 是因为它会**拒绝**两件不该发生的事（实测两者都是 exit 0 且文件不动）：路径其实已被跟踪、路径被 `.gitignore` 忽略——过期的请求因此删不掉索引还记着的文件。冲突路径两条命令都会拒绝（`path 'x' is unmerged`），这正是「不替用户选边」的答案 |
+| 审计（§7 的 M5a 待办） | 每次 discard 记一行，**逐条列出被丢弃的路径**（`auditPaths`：最多 20 条 + `… (+N more)`，因为请求体上限是 1 MiB，一行日志不该等于一个清单）。stage/unstage 只记条数，这一条需要更明确——文件已经没了，日志是唯一的记录 |
+| `core/ports.ts` + `host/adapter/routes.ts` + `client/adapter/git-client.ts` | 服务端口 `discard` 双向各一个方法；`POST /git-panel/discard` 进 `WRITE_OPERATIONS`（GET 405、跨源 403、同源校验照旧） |
+| `ui/row-actions.ts`（新） | 一条纯规则 `canDiscard(area)`：只有 `unstaged` / `untracked` 两种行提供放弃更改（**D26**）。行内按钮与行菜单都问它，所以两边不会一边有、一边没有 |
+| `ui/ChangeGroup.tsx` | 行内第三个按钮（`DiscardGlyph`，hover 显形），自己一套 `useArmedKey`（键 = 路径）：第一击武装成 danger 文字按钮「再点一次：不可恢复」，第二击执行。行自带武装状态而不是用面板的共享键，理由与 `BranchPicker` 相同——这一行的武装随这一行消亡，而 panel 那份键属于它自己 chrome 里的控件 |
+| `ui/menu.tsx` + `ui/StatusPanel.tsx` | 菜单条目新增 `stayOpen`：**这是 §4.3 的第一击**，条目武装而不是执行，菜单必须留着才能有第二击。菜单条目用面板的 `useArmedKey`（键 `discard:{area}:{path}`），`data-danger` + 武装后自己变成那行确认文字；第二击执行并关菜单。行菜单的形状因此变成 §9 的样子：暂存动作 → 分隔线 → 危险的放弃更改 |
+| 与已有的两条规则对齐 | 打开菜单时收起分支下拉、行开 diff 时收起菜单、文件从列表消失时收起菜单——都沿用顺序 1 的三条；一次成功的 discard 之后面板自己的通知说「已放弃「{path}」的更改」，因为 `git restore` 什么都不打印，而用户需要听到自己刚放弃了哪个文件 |
+| 测试 | 14 项（335 总计）：服务层 8 项真仓库（索引那一半保住、"three" 回到 "two"、未出生分支、删未跟踪文件、一次请求两半都走对、已暂存-only 是 no-op 且不动索引、删除的文件被恢复、冲突被拒绝且文件原样、四种非法路径 refusals 不发 git）、路由 1 项（POST 走通 + GET 405）、客户端 4 项（行内按钮先武装后执行且文案含「不可恢复」、已暂存/冲突行没有这个按钮而菜单也没有该条目与分隔线、菜单条目武装后菜单不关且第二击执行并关闭、被拒的 discard 落回列表旁）、菜单机制 1 项（`stayOpen` 的条目不关菜单，普通条目照旧先关后执行） |
 
 ### 10.2 M5b（M5a 验收之后）
 
@@ -508,7 +527,8 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | **推送 / 拉取 / 同步** | ✅ | ❌ |
 | 提交图谱 | ⬜ M5b（FR-7.1，§10.2 顺序 7） | ✅ `/git/graph` |
 | 切换 / 新建 / 删除分支 | ✅ M4（FR-4；含未合并分支的强制删除） | ✅ `/git/switch`、`/git/create-branch` |
-| 放弃更改 / 贮藏 / 撤销提交 | ⬜ M5a（FR-6.1、FR-6.2、FR-3.8） | ❌ 无对应路由 |
+| 放弃更改 | ✅ M5a（FR-6.1，顺序 2 已交付） | ❌ 无对应路由 |
+| 贮藏 / 撤销提交 | ⬜ M5a（FR-6.2、FR-3.8，顺序 4 与 3） | ❌ 无对应路由 |
 | 工作树隔离、设置卡 | ⬜ 非目标 | ✅ `/git/worktree-*` |
 | 输入框分支胶囊（空白会话） | ⬜ 非目标 | ✅ |
 | diff 视图 | ✅ M3（FR-2，inline/左右 + 逐词高亮） | ❌（其 README 未声明） |
@@ -517,7 +537,8 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 结论：不是「谁是谁的子集」，而是**文档 §1.2 指出的那个缺口仍然成立**——它给了
 分支/图谱/工作树，但没有「常驻侧边栏 + 可写提交」这条闭环；本插件的 M2 正是补这条。
 反过来它的图谱对应本插件的 M5b，属于**尚未做的里程碑**，不是设计放弃；分支管理那半
-已由 M4 补齐（见上表），而放弃更改 / 贮藏 / 撤销提交这一组两边都没有，是 M5a 的地盘。
+已由 M4 补齐（见上表），而放弃更改 / 贮藏 / 撤销提交这一组两边都没有，是 M5a 的地盘——
+其中放弃更改已在顺序 2 交付（两边都没有的那一半，本插件先有了）。
 
 命名上如果要更清楚，可把本插件 tab 从「Git」改成更具体的名字（`type.label`），
 但它出现在右侧栏、以「Git 变更」为引导条目名，与它那个输入框胶囊不在一处，

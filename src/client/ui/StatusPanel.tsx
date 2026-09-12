@@ -54,6 +54,7 @@ import {
 } from './change-view.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './repo-change.tsx'
+import { canDiscard } from './row-actions.ts'
 import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -114,6 +115,7 @@ type Snapshot =
 type ActionOp =
   | 'stage'
   | 'unstage'
+  | 'discard'
   | 'commit'
   | 'push'
   | 'pull'
@@ -708,6 +710,27 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       reportOf(await git.unstage(sessionId, paths, signal)),
     )
   }
+  /**
+   * Discard one row's working-tree change (FR-6.1).
+   *
+   * The report is the panel's own sentence rather than git's: `git restore` prints
+   * nothing at all, and what the user needs to hear is which file they just gave up
+   * on — the row leaves the list a moment later, so this notice is the only place
+   * that says what happened.
+   * @param entry - The row whose change is discarded.
+   */
+  const discard = (entry: FileChange): void => {
+    // The armed state was this click's whole reason to exist; disarm so a later
+    // click on another row cannot inherit it. (The row's own inline button keeps
+    // its own arming; see `ChangeRow`.)
+    disarm()
+    void perform('discard', t('action.discard'), async () => {
+      const result = await git.discard(sessionId, [entry.path], signal)
+      if (!result.ok) return result
+      return { ok: true, value: t('discard.done', { path: entry.path }) }
+    })
+  }
+
   const commitNow = (): void => {
     const widening = scope.kind === 'all-tracked'
     const label = widening ? t('commit.allTracked') : t('commit.button')
@@ -834,36 +857,70 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
 
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
 
+  /** The arming key of one row's discard entry, so the entry and its confirm agree. */
+  const discardKey = (entry: FileChange, area: ChangeArea): string =>
+    `discard:${area}:${entry.path}`
+
   /**
-   * What the open row menu offers.
+   * The entries of one row's menu (§9's file menu).
    *
-   * One entry today: the row's own staging action — the one thing this row can do
-   * that the panel can already run (`git add` for a conflict is FR-9.2's "mark
-   * resolved", the same command with the name that says so). It is the shape §9's
-   * file menu fills in rather than a finished menu: 「放弃更改」 arrives with M5a's
-   * discard (§10.1 order 2), the copying entries with §10.2 order 6.
+   * The row's own staging action comes first — `git add` under the name that fits
+   * the row (`mark resolved` for a conflict, FR-9.2) — and the destructive entry
+   * last, after a hairline, which is the shape §9's registered menus already have.
+   * The copying entries §9 also lists arrive with §10.2 order 6.
+   *
+   * Discard appears exactly where `ui/row-actions.ts` says the row has a button for
+   * it: the working-tree rows. It is an armed entry (`stayOpen`), so the first click
+   * arms it and the menu stays up for the second — §4.3's two-click confirmation,
+   * with the entry itself becoming the confirmation.
    */
+  const rowMenuEntries = (row: RowMenu): readonly MenuEntry[] => {
+    const staging: MenuEntry =
+      row.area === 'staged'
+        ? {
+            kind: 'item',
+            id: 'unstage',
+            label: t('action.unstage'),
+            disabled: pending,
+            onSelect: () => unstage([row.entry.path]),
+          }
+        : {
+            kind: 'item',
+            id: 'stage',
+            label: row.area === 'conflicted' ? t('action.resolve') : t('action.stage'),
+            disabled: pending,
+            onSelect: () => stage([row.entry.path]),
+          }
+    if (!canDiscard(row.area)) return [staging]
+    const key = discardKey(row.entry, row.area)
+    const armedHere = armedKey === key
+    return [
+      staging,
+      { kind: 'separator' },
+      {
+        kind: 'item',
+        id: 'discard',
+        label: armedHere ? t('action.discardArmed') : t('action.discard'),
+        danger: true,
+        stayOpen: true,
+        disabled: pending,
+        onSelect: () => {
+          if (!armedHere) {
+            // §4.3's first click: arm, and leave the menu up for the second one.
+            armKey(key)
+            return
+          }
+          // The second click runs it, and the confirmation is done being useful:
+          // the menu goes the way every other entry takes it.
+          setMenu(null)
+          discard(row.entry)
+        },
+      },
+    ]
+  }
+
   const menuLabel = menu === null ? '' : t('menu.fileRow', { path: menu.entry.path })
-  const menuEntries: readonly MenuEntry[] =
-    menu === null
-      ? []
-      : [
-          menu.area === 'staged'
-            ? {
-                kind: 'item',
-                id: 'unstage',
-                label: t('action.unstage'),
-                disabled: pending,
-                onSelect: () => unstage([menu.entry.path]),
-              }
-            : {
-                kind: 'item',
-                id: 'stage',
-                label: menu.area === 'conflicted' ? t('action.resolve') : t('action.stage'),
-                disabled: pending,
-                onSelect: () => stage([menu.entry.path]),
-              },
-        ]
+  const menuEntries: readonly MenuEntry[] = menu === null ? [] : rowMenuEntries(menu)
 
   return (
     // The provider renders nothing; it is how a pane below hears that the
@@ -1019,6 +1076,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             onUnstage={unstage}
             onOpen={openDiff}
             onMenu={openMenu}
+            onDiscard={discard}
           />
         </div>
         <CommitBox
@@ -1066,6 +1124,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onUnstage={unstage}
                 onOpen={openDiff}
                 onMenu={openMenu}
+                onDiscard={discard}
               />
               {/* The working tree as two more sections of this one list. They do not
                   size themselves: the body scrolls, and its groups flow into it —
@@ -1087,6 +1146,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onUnstage={unstage}
                 onOpen={openDiff}
                 onMenu={openMenu}
+                onDiscard={discard}
               />
               <Group
                 label={t('group.untracked')}
@@ -1102,6 +1162,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onUnstage={unstage}
                 onOpen={openDiff}
                 onMenu={openMenu}
+                onDiscard={discard}
               />
               {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
             </>

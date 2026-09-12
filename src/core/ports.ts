@@ -249,6 +249,22 @@ export interface WorkspaceGitService {
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>
   /**
+   * Discard the working-tree state of paths: what FR-6.1's "放弃更改" does.
+   *
+   * The index decides which of the two commands a path gets, never the browser's
+   * word for it: a tracked path is restored from the index, and a path the index
+   * does not know at all is removed. The host does not offer it for a staged-only
+   * or conflicted path — see `ui/row-actions.ts` for the panel's half of that rule.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param paths - Repo-relative paths, validated before any git call (§5.5).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  discard(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
    * Commit the index, and only the index (FR-3.4's default scope).
    * @param sessionId - Opaque session identity from the browser.
    * @param message - Commit message; validated for emptiness before any git call.
@@ -439,6 +455,17 @@ export interface GitRemoteClient {
    * @param signal - Cancels the request when the tab goes away.
    */
   unstage(
+    sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Discard the working-tree state of paths (FR-6.1).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param paths - Repo-relative paths.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  discard(
     sessionId: string,
     paths: readonly string[],
     signal?: AbortSignal,

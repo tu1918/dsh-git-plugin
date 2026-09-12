@@ -50,7 +50,8 @@ message, and a commit detail.
 | Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
 | A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — and selecting it splits the pane: the entries stay on the left, that commit's information opens on the right (metadata, then its file list with per-file churn and git's own binary answer) | ✅ |
 | A change row's menu: right-click it (or Shift+F10 / the menu key on the focused row) for that row's own action — stage, unstage, or mark a conflict resolved. It opens in the same floating layer as the branch list, flipping above the row when the panel has no room below | ✅ |
-| Discard / stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
+| Discard a change (FR-6.1): a working-tree row gains a third button — and its menu a third entry — that takes two clicks and says "cannot be undone" between them. It restores a tracked file from the index (never from HEAD, so it also works before the first commit) and deletes a file the index has never seen; a staged or conflicted row offers it nowhere | ✅ |
+| Stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -102,7 +103,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 321 tests && build
+npm run check      # tsc --noEmit && 335 tests && build
 ```
 
 ## Install

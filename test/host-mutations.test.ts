@@ -11,7 +11,7 @@
  * @module dsh-git-panel/test/host-mutations
  */
 
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -166,6 +166,146 @@ describe('staging and unstaging', () => {
     const result = await serviceFor({ s1: repo }).stage('s1', ['a.txt'])
     assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
     assert.deepEqual(stagedPaths(repo), ['a.txt'])
+  })
+})
+
+describe('discarding (FR-6.1)', () => {
+  it('restores a tracked file from the index, and keeps the staged half', async () => {
+    const repo = makeRepo('mut-discard-tracked')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    // Both halves at once: the index holds "two", the worktree "three". Discard is
+    // about the working tree, so "two" is what comes back.
+    write(repo, 'a.txt', 'two\n')
+    git(repo, ['add', 'a.txt'])
+    write(repo, 'a.txt', 'three\n')
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['a.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    assert.equal(git(repo, ['show', ':a.txt']), 'two\n', 'the index is not what discard restores')
+    const read = gitTry(repo, ['diff', '--quiet'])
+    assert.equal(read.code, 0, 'the worktree matches the index again')
+    assert.deepEqual(stagedPaths(repo), ['a.txt'], 'the staged change survives')
+  })
+
+  it('works on an unborn branch, where `restore --source=HEAD` could not', async () => {
+    // The trap §6 documents for `unstage`, one command over: the default source of
+    // `git restore` is the INDEX, and that is what makes this work before the first
+    // commit exists (probed: `--source=HEAD` says "could not resolve HEAD").
+    const repo = makeRepo('mut-discard-unborn')
+    write(repo, 'a.txt', 'one\n')
+    git(repo, ['add', 'a.txt'])
+    write(repo, 'a.txt', 'two\n')
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['a.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(gitTry(repo, ['diff', '--quiet']).code, 0)
+    assert.deepEqual(stagedPaths(repo), ['a.txt'], 'the file is still staged as new')
+  })
+
+  it('deletes an untracked file, because the index knows nothing to restore', async () => {
+    const repo = makeRepo('mut-discard-untracked')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'new.txt', 'scratch\n')
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['new.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // Gone from disk and from the status: an untracked path has no other state to
+    // restore, so the file itself is what "discard" removes.
+    assert.equal(existsSync(join(repo, 'new.txt')), false)
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.deepEqual(status.value.groups.untracked, [])
+  })
+
+  it('takes both halves of that split in one request', async () => {
+    const repo = makeRepo('mut-discard-both')
+    write(repo, 'a.txt', 'one\n')
+    write(repo, 'b.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    write(repo, 'new.txt', 'scratch\n')
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['a.txt', 'new.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['show', ':a.txt']), 'one\n')
+    assert.throws(() => git(repo, ['ls-files', '--error-unmatch', '--', 'new.txt']))
+  })
+
+  it('leaves a staged-only change alone: the index is not discard’s business', async () => {
+    const repo = makeRepo('mut-discard-staged-only')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    git(repo, ['add', 'a.txt'])
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['a.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // Nothing to restore — the worktree already matches the index — and the staged
+    // change is still there. (The panel does not offer discard on such a row; this
+    // is what the host does if something asks anyway.)
+    assert.deepEqual(stagedPaths(repo), ['a.txt'])
+    assert.equal(git(repo, ['show', ':a.txt']), 'two\n')
+  })
+
+  it('restores a file deleted from the worktree, which is the other way to discard', async () => {
+    const repo = makeRepo('mut-discard-deletion')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    rmSync(join(repo, 'a.txt'))
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['a.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['show', ':a.txt']), 'one\n')
+  })
+
+  it('refuses a conflicted path rather than choosing a side for the user', async () => {
+    // Both commands refuse an unmerged path (probed: `path 'c.txt' is unmerged`),
+    // which is the right answer: abandoning a conflict is FR-9's decision, and the
+    // panel does not offer this row a discard at all.
+    const repo = makeRepo('mut-discard-conflict')
+    write(repo, 'c.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'other'])
+    write(repo, 'c.txt', 'theirs\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'theirs'])
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'c.txt', 'ours\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'ours'])
+    const merge = gitTry(repo, ['merge', 'other'])
+    assert.notEqual(merge.code, 0, 'the merge must conflict for this test to mean anything')
+
+    const result = await serviceFor({ s1: repo }).discard('s1', ['c.txt'])
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'git-failed')
+    assert.match(result.ok ? '' : (result.error.detail ?? ''), /unmerged/u)
+    // The conflicted file is exactly as git left it.
+    assert.match(git(repo, ['show', ':1:c.txt']), /base/u)
+  })
+
+  it('refuses an absolute path, a traversal, and a path inside .git', async () => {
+    const repo = makeRepo('mut-discard-validate')
+    write(repo, 'a.txt', 'one\n')
+    const service = serviceFor({ s1: repo })
+
+    for (const paths of [['/etc/passwd'], ['../../etc/passwd'], ['.git/config'], [''], []]) {
+      const result = await service.discard('s1', paths)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(paths)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+    // The refusals ran no git command at all: the file is untouched.
+    assert.equal(git(repo, ['status', '--porcelain=v2']).includes('a.txt'), true)
   })
 })
 

@@ -53,6 +53,16 @@ export interface MenuItem {
   readonly disabled?: boolean
   /** Whether the entry destroys something, and so takes the danger colour (§4.3). */
   readonly danger?: boolean
+  /**
+   * Whether activating this entry leaves the menu open.
+   *
+   * It is §4.3's first click: the entry arms rather than acts, and the menu has to
+   * stay up for the second click to be possible. The entry says so in its own
+   * label between the two clicks (the caller rebuilds it from the armed state),
+   * which is what makes the second click visibly a different one. Without this
+   * flag the menu closes on the arm and the confirmation has nowhere to happen.
+   */
+  readonly stayOpen?: boolean
 }
 
 /** One row of a menu. */
@@ -136,8 +146,9 @@ export function Menu({ entries, label, onClose }: MenuProps): ReactNode {
     if (!usable(entry)) return
     // Close first, then act, like the branch picker: the layer is gone before the
     // operation's own state arrives, so nothing renders into a menu that is
-    // already leaving.
-    onClose()
+    // already leaving. An entry that stays open is the exception, and it is the
+    // two-click confirmation: the menu IS the control both clicks belong to.
+    if (entry.stayOpen !== true) onClose()
     entry.onSelect()
   }
 

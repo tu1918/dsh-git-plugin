@@ -877,6 +877,19 @@ export const css = `
   opacity: 1;
 }
 
+/* The armed discard button replaces the row's third icon, so it is a word where
+   the others are glyphs. The row is the ceiling (M3's lesson: a box that mixes a
+   percentage width with padding has to say which box the percentage means), and
+   the label ellipsises rather than pushing the path out of the panel — its tooltip
+   carries the whole sentence either way. */
+.${cls.rowActions} .${cls.danger} {
+  max-width: 100%;
+  overflow: hidden;
+  margin-left: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── commit box ─────────────────────────────────────────────────────────── */
 
 .${cls.commitBox} {

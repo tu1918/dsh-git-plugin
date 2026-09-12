@@ -229,6 +229,8 @@ function stubGit(options: {
   generated?: Result<GeneratedMessage>
   /** What `deleteBranch` answers, for the unmerged-refusal path. */
   deleteBranch?: Result<OperationReport>
+  /** What `discard` answers, for the refusal path. */
+  discard?: Result<OperationReport>
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -254,6 +256,10 @@ function stubGit(options: {
     unstage: (_sessionId, paths) => {
       note(`unstage:${paths.join(',')}`)
       return Promise.resolve(report)
+    },
+    discard: (_sessionId, paths) => {
+      note(`discard:${paths.join(',')}`)
+      return Promise.resolve(options.discard ?? report)
     },
     commit: (_sessionId, message) => {
       note(`commit:${message}`)
@@ -2409,7 +2415,10 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
     // A menu, named for the row it belongs to.
     assert.equal(menu.getAttribute('role'), 'menu')
     assert.match(menu.getAttribute('aria-label') ?? '', /deep\/nested\/dir\/changed\.ts/)
-    assert.deepEqual(menuLabels(menu), ['Stage'])
+    // The working-tree row offers its own staging action and the destructive one,
+    // with a hairline between them (§9's menu shape).
+    assert.deepEqual(menuLabels(menu), ['Stage', 'Discard changes'])
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
   })
 
   it('runs the action on the file the row stands for, and closes', async () => {
@@ -2438,7 +2447,7 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
     await click(must(staged, '[role="menuitem"]'))
 
     const untracked = await openRowMenu(container, 'untracked')
-    assert.deepEqual(menuLabels(untracked), ['Stage'])
+    assert.deepEqual(menuLabels(untracked), ['Stage', 'Discard changes'])
     await click(must(untracked, '[role="menuitem"]'))
 
     assert.deepEqual(calls.entries, ['unstage:src/staged.ts', 'stage:notes.md'])
@@ -2522,6 +2531,105 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
   })
 })
 
+describe('discarding a change from its row (FR-6.1, §4.3)', () => {
+  it('arms the row’s own button first, and only the second click discards', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must<HTMLElement>(container, `[data-group="unstaged"] .${cls.row}`)
+    // The third button in the strip is the discard: `+`/`-` first, then this one.
+    const buttons = [...row.querySelectorAll<HTMLButtonElement>(`.${cls.rowActions} button`)]
+    assert.equal(buttons.length, 2)
+    const discard = buttons[1]
+    if (discard === undefined) throw new Error('expected a discard button')
+    assert.match(discard.getAttribute('aria-label') ?? '', /Discard the changes to/)
+
+    await click(discard)
+    // §4.3: the first click arms and says so in words, and nothing was thrown away.
+    assert.deepEqual(calls.entries, [])
+    const armed = must<HTMLElement>(row, '[data-armed="true"]')
+    assert.match(armed.textContent ?? '', /cannot be undone/u)
+    assert.match(armed.getAttribute('title') ?? '', /cannot be undone/u)
+
+    await click(armed)
+    assert.deepEqual(calls.entries, ['discard:deep/nested/dir/changed.ts'])
+    const done = must(container, '[data-action-done="discard"]')
+    assert.match(done.textContent ?? '', /deep\/nested\/dir\/changed\.ts/)
+  })
+
+  it('does not offer discard where there is no working-tree change to throw away', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // A staged row's action is unstage, and a conflicted row's is "mark resolved":
+    // discarding from either would throw away state that row is not showing (the
+    // rule is one function, `ui/row-actions.ts`).
+    for (const area of ['staged', 'conflicted']) {
+      const row = must<HTMLElement>(container, `[data-group="${area}"] .${cls.row}`)
+      const buttons = [...row.querySelectorAll(`.${cls.rowActions} button`)]
+      assert.equal(buttons.length, 1, `${area} has one button, not two`)
+    }
+    // ...and the menu agrees with the row: no entry, no hairline.
+    const stagedMenu = await openRowMenu(container, 'staged')
+    assert.deepEqual(menuLabels(stagedMenu), ['Unstage'])
+    assert.equal(stagedMenu.querySelectorAll('[role="separator"]').length, 0)
+  })
+
+  it('arms inside the row menu, which stays up for the second click', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    let menu = await openRowMenu(container, 'untracked')
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
+
+    // The first click is §4.3's arming, so the entry must not take the menu down
+    // with it — and it is the entry itself that now reads as the confirmation.
+    assert.deepEqual(calls.entries, [])
+    menu = must<HTMLElement>(container, '[data-menu="true"]')
+    assert.equal(must(container, '[data-popover="true"]'), layer, 'the menu never closed')
+    const armed = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    assert.match(armed.textContent ?? '', /cannot be undone/u)
+
+    await click(armed)
+    assert.deepEqual(calls.entries, ['discard:notes.md'])
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+  })
+
+  it('lands a refused discard beside the list, and keeps the row (FR-1.4)', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          discard: {
+            ok: false,
+            error: { code: 'git-failed', message: 'could not restore', detail: 'error: nope' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const row = must<HTMLElement>(container, `[data-group="unstaged"] .${cls.row}`)
+    await click(must(row, `.${cls.rowActions} button:last-child`))
+    await click(must<HTMLElement>(row, '[data-armed="true"]'))
+
+    const box = must(container, '[data-action-error="discard"]')
+    assert.match(box.textContent ?? '', /nope/u)
+    assert.ok(container.querySelector(`[data-group="unstaged"] .${cls.row}`), 'the list survives')
+  })
+})
+
 describe('the menu’s own entries and keyboard (M5a’s row-menu mechanism)', () => {
   /** A menu of four entries, one of them a separator and one of them disabled. */
   function renderMenu(chosen: string[]): Promise<HTMLElement> {
@@ -2574,6 +2682,31 @@ describe('the menu’s own entries and keyboard (M5a’s row-menu mechanism)', (
     // The dismissal comes first, the way the branch picker does it: the layer is
     // gone before the operation's own state arrives.
     assert.deepEqual(chosen, ['close', 'last'])
+  })
+
+  it('keeps the menu up for an entry that arms instead of acting', async () => {
+    const chosen: string[] = []
+    const container = await render(
+      h(Menu, {
+        entries: [
+          { kind: 'item', id: 'arm', label: 'Discard', stayOpen: true, onSelect: () => chosen.push('arm') },
+          { kind: 'item', id: 'plain', label: 'Copy', onSelect: () => chosen.push('plain') },
+        ] satisfies MenuEntry[],
+        label: 'Actions',
+        onClose: () => chosen.push('close'),
+      }),
+    )
+    const menu = must<HTMLElement>(container, '[role="menu"]')
+
+    await keyDown(menu, { key: 'Enter' })
+    // §4.3's first click: the entry ran (it armed) and the menu is still there for
+    // the second one, which is the whole point of the flag.
+    assert.deepEqual(chosen, ['arm'])
+
+    await keyDown(menu, { key: 'ArrowDown' })
+    await keyDown(menu, { key: 'Enter' })
+    // An ordinary entry still closes the menu before it acts.
+    assert.deepEqual(chosen, ['arm', 'close', 'plain'])
   })
 
   it('closes on Escape and on Tab, which are the two ways out', async () => {

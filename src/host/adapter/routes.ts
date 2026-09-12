@@ -75,6 +75,7 @@ const READ_OPERATIONS: ReadonlySet<string> = new Set([
 const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'stage',
   'unstage',
+  'discard',
   'commit',
   'push',
   'pull',
@@ -344,12 +345,13 @@ export function registerGitPanelRoutes(
         return await service.diff(sessionId, path, area, intOf(url, 'context', 3))
       }
       case 'stage':
-      case 'unstage': {
+      case 'unstage':
+      case 'discard': {
         const paths = stringArrayOf(body, 'paths')
         if (!paths.ok) return paths
-        return operation === 'stage'
-          ? await service.stage(sessionId, paths.value)
-          : await service.unstage(sessionId, paths.value)
+        if (operation === 'stage') return await service.stage(sessionId, paths.value)
+        if (operation === 'unstage') return await service.unstage(sessionId, paths.value)
+        return await service.discard(sessionId, paths.value)
       }
       case 'commit': {
         const message = body['message']
