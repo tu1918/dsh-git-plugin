@@ -235,6 +235,8 @@ export const zh = {
   'error.noLlm': '这个部署没有配置可用的语言模型，因此无法生成提交信息。',
   'error.clipboard': '浏览器拒绝写入剪贴板。',
   'error.authRequired': '远端需要用户名与密码，面板不弹终端，所以 git 无法询问。在下面填入即可重试。',
+  'error.upstreamGone':
+    '这条分支跟踪的上游在远端已不存在（被删除或改名），所以没有东西可拉取。可以在终端里 `git branch --unset-upstream` 停止跟踪，或 `git branch -u origin/<新分支>` 改指向新的上游，然后再拉取。',
   'credential.title': '{remote} 需要凭据',
   'credential.username': '用户名',
   'credential.password': '密码或访问令牌',
@@ -461,6 +463,8 @@ export const en: Record<GitPanelKey, string> = {
   'error.clipboard': 'The browser refused to write to the clipboard.',
   'error.authRequired':
     'The remote wants a username and password, and this panel has no terminal to prompt on. Fill them in below and retry.',
+  'error.upstreamGone':
+    'The upstream this branch tracks no longer exists on the remote (deleted or renamed), so there is nothing to pull. In a terminal, `git branch --unset-upstream` stops tracking it, or `git branch -u origin/<new>` points it at the replacement — then pull again.',
   'credential.title': '{remote} needs a credential',
   'credential.username': 'Username',
   'credential.password': 'Password or access token',

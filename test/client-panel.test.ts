@@ -2753,6 +2753,35 @@ describe('operation failures (§4.3)', () => {
     assert.equal(must(container, `.${cls.root}`).getAttribute('data-git-panel'), 'ready')
   })
 
+  it('names a deleted upstream with the way out, not git’s riddle', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          report: {
+            ok: false,
+            error: {
+              code: 'upstream-gone',
+              message: 'the upstream branch this branch tracks no longer exists on the remote',
+              detail:
+                "Your configuration specifies to merge with the ref 'refs/heads/feat_AiSchema_master'\nfrom the remote, but no such ref was fetched.",
+            },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(railActions(container)[2] as HTMLButtonElement)
+
+    const box = must(container, '[data-action-error="pull"]')
+    assert.match(box.textContent ?? '', /no longer exists on the remote/u)
+    assert.match(box.textContent ?? '', /--unset-upstream/u, 'the way out is named')
+    // git's own words survive as the detail, so the branch it named is still there.
+    assert.match(box.textContent ?? '', /feat_AiSchema_master/u)
+  })
+
   it('closes the failure when it is dismissed', async () => {
     const container = await render(
       h(StatusPanel, {

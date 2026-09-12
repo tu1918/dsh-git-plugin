@@ -84,6 +84,16 @@ export type GitErrorCode =
   | 'auth-required'
   /** This composition has no credential provider, so a credential cannot be saved. */
   | 'credentials-unavailable'
+  /**
+   * The branch is configured to merge with an upstream ref the fetch did not get.
+   *
+   * git's own words are "Your configuration specifies to merge with the ref
+   * 'refs/heads/x' from the remote, but no such ref was fetched" — true, but it
+   * never says the branch was deleted on the remote nor what to do about the
+   * local config that still points at it. A code of its own is what lets the
+   * panel say both.
+   */
+  | 'upstream-gone'
   /** The operation left the repository mid-merge with unmerged paths (FR-5.3). */
   | 'conflict'
   /**

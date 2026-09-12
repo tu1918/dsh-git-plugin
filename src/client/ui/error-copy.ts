@@ -77,6 +77,11 @@ export function errorCopy(
       // Nothing to add to the host's own sentence: the deployment is missing a
       // capability, and no retry of the user's will change that.
       return { title: error.message, detail: undefined }
+    case 'upstream-gone':
+      // git's own words name the ref it could not merge with; the title says what
+      // that means and how to get out of it, because the panel has no button for
+      // this one — the fix is a change to the branch's configuration.
+      return { title: t('error.upstreamGone'), detail: error.detail }
     case 'no-llm':
       // FR-3.5 cannot run here, and the reason is the deployment's, not the
       // user's — so it says which fact is missing rather than "try again".

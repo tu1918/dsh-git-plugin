@@ -222,6 +222,16 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'the branch has commits that are not merged anywhere else',
   },
   {
+    // A pull whose configured upstream was not in the fetch: the branch that
+    // `branch.<name>.merge` names no longer exists on the remote (deleted or
+    // renamed), so there is nothing to merge with. git's sentence says what it
+    // could not do and stops there; the panel adds the way out (see
+    // `error.upstreamGone`), which is why this is a code rather than prose.
+    pattern: /no such ref was fetched|specifies to merge with the ref/iu,
+    code: 'upstream-gone',
+    message: 'the upstream branch this branch tracks no longer exists on the remote',
+  },
+  {
     // LAST, because its pattern is the loosest thing git prints: a failed
     // `stash apply`/`pop` prints its own status block to stdout, and that block
     // ends with "no changes added to commit" even when the real reason is a

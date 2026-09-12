@@ -532,6 +532,32 @@ describe('pushing and pulling', () => {
     assert.equal(result.ok, false)
     assert.equal(result.ok ? '' : result.error.code, 'bad-request')
   })
+
+  it('names an upstream the remote deleted, instead of forwarding git’s riddle', async () => {
+    // The reported case: the branch tracks `feat-gone`, somebody deletes that
+    // branch on the remote, and pull fails with "Your configuration specifies to
+    // merge with the ref … but no such ref was fetched". Because this plugin's
+    // fetch never prunes, the stale remote-tracking ref is still there, so the
+    // branch looks healthy until the pull is attempted — which is exactly why
+    // the refusal needs a code of its own rather than git's prose.
+    const { repo, remote } = repoWithRemote('mut-gone')
+    git(repo, ['checkout', '-q', '-b', 'feat-gone'])
+    write(repo, 'gone.txt', 'gone\n')
+    stageAll(repo)
+    commit(repo, 'about to be deleted')
+    git(repo, ['push', '-q', '-u', 'origin', 'feat-gone'])
+
+    const other = makePlainDir('mut-gone-other')
+    git(other, ['clone', '-q', remote, '.'])
+    git(other, ['push', '-q', 'origin', '--delete', 'feat-gone'])
+
+    const result = await serviceFor({ s1: repo }).pull('s1')
+    assert.equal(result.ok, false)
+    if (result.ok) return
+    assert.equal(result.error.code, 'upstream-gone')
+    // git's own words survive as the detail, so the ref it named is still visible.
+    assert.match(result.error.detail ?? '', /feat-gone/u)
+  })
 })
 
 describe('sync', () => {

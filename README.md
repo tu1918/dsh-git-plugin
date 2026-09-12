@@ -39,6 +39,7 @@ pass.
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
 | HTTPS credentials. A remote that wants one and has none is named as such (`auth-required`, with the origin git itself printed), and the same failure notice grows a username / password form. "Save and retry" stores the pair through the harness's own credential seam — `ctx.credentials`, so the provider owns where the value lives, and this profile's local provider writes its own 0600 document rather than us inventing a store — and then retries the very operation that failed. Every later push/pull/fetch/sync resolves the stored credential and hands it to git through `GIT_ASKPASS`, with `GIT_TERMINAL_PROMPT=0` unchanged so nothing can ever hang on a prompt. The value never reaches a log line | ✅ |
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
+| A pull whose tracked upstream was deleted on the remote says so and names the way out (`git branch --unset-upstream`, or repointing it) — instead of forwarding git's "no such ref was fetched", which never says the branch is gone | ✅ |
 | UI in zh + en | ✅ |
 | Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
 | A resident staged drawer directly above the commit box: it is what that box commits, and its empty state says so | ✅ |
@@ -124,7 +125,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 493 tests && build
+npm run check      # tsc --noEmit && 495 tests && build
 ```
 
 ## Install
