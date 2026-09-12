@@ -25,7 +25,8 @@ message, and a commit detail.
 | That list as a **file tree** — directories fold, single-child chains compact into one row, each directory carries its subtree's file count — or as a flat list; the choice is remembered per user | ✅ |
 | Branch rail: name, detached / unborn / upstream-gone, ↑ahead ↓behind | ✅ |
 | Recent commits: paged by look-ahead, pushed/unpushed marker, read only while its tab is showing | ✅ |
-| Auto-refresh from `.git/index` + `.git/HEAD` change, pushed over SSE | ✅ |
+| Auto-refresh from filesystem events — one recursive watch on the work tree, one on the git directory — pushed over SSE with *what* moved (`refs` / `index` / `worktree`); a file an agent writes shows up without touching `.git` at all | ✅ |
+| A state-file poll as the fallback when events are unavailable (network drives, platforms without recursive watch), and a `stat` of the same files when even that fails | ✅ |
 | Live git status/branches/log over `/git-panel/*` | ✅ |
 | Stage / unstage, one file or a whole group | ✅ |
 | Commit box with an explicit scope: index only, or the announced `add -u` | ✅ |
@@ -75,7 +76,8 @@ src/core/      pure TypeScript: types, ports, git parsers, argument validation,
                list as a file tree, and the AI commit message's
                prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
-src/host/      git runner, git service, change watcher, git directory lookup
+src/host/      git runner, git service, git state probe (filesystem events with a
+               polling fallback), git directory lookup
   adapter/     the only place the host names DSH (webServer, sessions, logger,
                and the model services `llm` + `agentDefaultModel`)
 src/client/    browser half
@@ -99,7 +101,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 285 tests && build
+npm run check      # tsc --noEmit && 300 tests && build
 ```
 
 ## Install
@@ -149,12 +151,20 @@ npm test
   real socket: envelopes, 400/404/405/413, the same-origin refusal, the diff read
   (worktree vs index, untracked, unborn, binary, clean), and the SSE
   `ready` / `changed` / `unavailable` frames
+- `test/git-probe.test.ts` — the git state probe over real repositories and real
+  filesystem events: a file an agent writes (which moves nothing inside `.git`), an
+  empty commit and an `update-ref` (which move only the reflog or a ref), a burst
+  coalesced into one report, a strategy that fails at start and one that gives up
+  while running (both handing over to the next), a released subscription going
+  quiet, and the polling fallback's two signals
 - `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, and the
   panel mounting in a composition with no language model at all
 - `test/client-panel.test.ts` — the panel rendered in jsdom: groups, badges, path
   splitting, clean and failure states, lazy history, the commit box's four scopes
   and its `Ctrl+Enter`, per-row and per-group staging, the sync buttons' enabled
-  states, in-place operation errors, the diff pane (opening, folding, layout
+  states, in-place operation errors, what one reported change re-reads (the panel,
+  but the history only for `refs` and nothing at all when the reading came back the
+  same), the diff pane (opening, folding, layout
   memory, binary placeholder, the list→box→diff DOM order, and the dock's height
   default and drag clamp), the branch picker (listing, switching, creating from
   HEAD or a base, the two-click delete, the forced second ask for an unmerged
@@ -180,7 +190,7 @@ npm test
   exit 1 — how an untracked file is rendered as all-new — is what surfaced it.
 - `GitRunner.run` takes `optionalLocks` as a third argument, defaulting to
   **false**, which stops `git status` from rewriting `.git/index`. That is
-  load-bearing: the change watcher polls that file, so a read that wrote it would
+  load-bearing: the git state probe watches that file, so a read that wrote it would
   refresh the panel forever. Every mutation passes `true` explicitly.
 - Unstaging on an **unborn** branch is a different command: `git restore --staged`
   restores from HEAD, and an unborn repository has none. `unstage` probes with

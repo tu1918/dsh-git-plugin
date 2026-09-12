@@ -12,9 +12,9 @@
  * - **A failure lands beside the list, never instead of it** (§4.3). A failed
  *   push leaves the change list exactly where it was, with git's own multi-line
  *   output next to the button that caused it.
- * - **Every mutation re-reads the repository.** The change watcher will fire too
- *   — the index or HEAD moved — but the panel's own action should not wait for a
- *   poll to show what it just did.
+ * - **Every mutation re-reads the repository.** The host's probe will report the
+ *   index or the ref it moved, but the panel's own action should not wait for a
+ *   round trip to show what it just did.
  *
  * @module dsh-git-panel/client/ui/StatusPanel
  */
@@ -24,7 +24,8 @@ import type { ReactNode, Ref } from 'react'
 
 import { commitScopeOf } from '../../core/commit-scope.ts'
 import { lineCount } from '../../core/format.ts'
-import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
+import { statusSignature } from '../../core/status-signature.ts'
+import type { GitChangeKind, GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
 import type {
   BranchInfo,
   BranchRef,
@@ -52,6 +53,7 @@ import {
   type ViewMode,
 } from './change-view.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
+import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './repo-change.tsx'
 import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -73,6 +75,21 @@ export type { Translate }
 
 /** The change-list groups, in the order the panel draws them. */
 const CHANGE_AREAS: readonly ChangeArea[] = ['conflicted', 'staged', 'unstaged', 'untracked']
+
+/**
+ * Every kind of change, for the triggers that cannot know better: the opening
+ * read, and the refresh button.
+ */
+const ALL_CHANGE_KINDS: readonly GitChangeKind[] = ['refs', 'index', 'worktree']
+
+/**
+ * How long reports are collected before one read is made.
+ *
+ * An agent's command writes several state files in a row (an object, then the
+ * index, then a ref), and each is a report; one read after the burst is what the
+ * panel actually wants.
+ */
+const CHANGE_DEBOUNCE_MS = 180
 
 /** Everything the panel needs, in neutral terms. */
 export interface StatusPanelProps {
@@ -151,86 +168,128 @@ export function diffAreaOf(area: ChangeArea): DiffArea {
 /**
  * Read the repository, then keep the reading fresh.
  *
- * One read happens per session and per explicit refresh; change notifications
- * only schedule another read, coalesced, so a burst of git commands from an
- * agent produces one refresh rather than one per file (§4.4, FR-1.4).
+ * One read happens on mount, one per report from the host's git state probe, and
+ * one per explicit refresh; a burst of reports is coalesced, so a hundred files
+ * written by an agent produce one refresh rather than a hundred (§4.4, FR-1.4).
+ *
+ * Two rules make this cheap enough to leave switched on:
+ *
+ * - **A read that changes nothing publishes nothing.** The reading is fingerprinted
+ *   (`core/status-signature.ts`) before it is applied, so a report about
+ *   `.git/objects` — or a report the panel itself provoked — costs one status
+ *   read and no re-render, and never wakes a pane that is showing the same thing.
+ * - **A failed read never replaces a reading that worked.** The panel is a window
+ *   on a repository, not on git's mood: it shows an error only when it has
+ *   nothing else to show.
+ *
  * @param sessionId - The session whose repository is read.
  * @param git - The host-facing git client.
  * @param tabSignal - Aborted when the tab closes.
+ * @param bus - Where a change that DID alter the reading is published.
  * @returns The latest snapshot for this session, or `null` while the first read
- *   is in flight, plus the reload trigger and the generation counter. The
- *   generation is returned rather than kept private because an open diff has to
- *   re-read on the same signal (FR-2's pane refreshes with the list).
+ *   is in flight, plus the reload trigger and whether a read is in flight.
  */
 function useRepoSnapshot(
   sessionId: string,
   git: GitRemoteClient,
   tabSignal: AbortSignal | undefined,
-): { snapshot: Snapshot | null; reload: () => void; busy: boolean; generation: number } {
+  bus: RepoChangeBus,
+): { snapshot: Snapshot | null; reload: () => void; busy: boolean } {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
-  const [generation, setGeneration] = useState(0)
   const [busy, setBusy] = useState(true)
+  /** The fingerprint of the reading on screen, so an unchanged one publishes nothing. */
+  const published = useRef<string | null>(null)
+  /** Whether any reading has been published yet: the first one is not a change. */
+  const shown = useRef(false)
+  /** The signal every read of this mount shares; the effects own its lifetime. */
+  const [controller] = useState(() => new AbortController())
+
+  // A new session is a new repository: nothing from the old one may survive as
+  // this one's "last reading".
+  useEffect(() => {
+    published.current = null
+    shown.current = false
+  }, [sessionId])
 
   useEffect(() => {
-    const controller = new AbortController()
     const abort = (): void => controller.abort()
     if (tabSignal?.aborted === true) controller.abort()
     tabSignal?.addEventListener('abort', abort)
-
-    let live = true
-    setBusy(true)
-    void (async () => {
-      const [status, branches] = await Promise.all([
-        git.status(sessionId, controller.signal),
-        git.branches(sessionId, controller.signal),
-      ])
-      // A read that lost its race (a newer refresh, or a closed tab) must not
-      // write state: the newer read owns the panel now.
-      if (!live) return
-      setBusy(false)
-      if (status.ok) {
-        setSnapshot({
-          sessionId,
-          kind: 'ready',
-          status: status.value,
-          // A branch listing that failed is not worth failing the panel over;
-          // the change lists are the panel's reason to exist.
-          branches: branches.ok ? branches.value : [],
-        })
-      } else {
-        setSnapshot({ sessionId, kind: 'failed', error: status.error })
-      }
-    })()
-
     return () => {
-      live = false
       tabSignal?.removeEventListener('abort', abort)
       controller.abort()
     }
-  }, [sessionId, git, generation, tabSignal])
+  }, [controller, tabSignal])
 
-  // Subscription, separate from the read: a change only bumps the generation.
+  const read = useCallback(
+    async (kinds: readonly GitChangeKind[]): Promise<void> => {
+      const { signal } = controller
+      if (signal.aborted) return
+      const [status, branches] = await Promise.all([
+        git.status(sessionId, signal),
+        git.branches(sessionId, signal),
+      ])
+      // A read that lost its race (a closed tab, a newer session) must not write
+      // state: the newer read owns the panel now.
+      if (signal.aborted) return
+      setBusy(false)
+      if (!status.ok) {
+        if (!shown.current) setSnapshot({ sessionId, kind: 'failed', error: status.error })
+        return
+      }
+      const fingerprint = statusSignature(status.value)
+      if (fingerprint === published.current) return
+      const first = !shown.current
+      published.current = fingerprint
+      shown.current = true
+      setSnapshot({
+        sessionId,
+        kind: 'ready',
+        status: status.value,
+        // A branch listing that failed is not worth failing the panel over; the
+        // change lists are the panel's reason to exist.
+        branches: branches.ok ? branches.value : [],
+      })
+      // The first reading is what the panes mount with. Only a later one is a
+      // change somebody has to hear about.
+      if (!first) bus.publish(kinds)
+    },
+    [bus, controller, git, sessionId],
+  )
+
+  // The opening read.
+  useEffect(() => {
+    void read(ALL_CHANGE_KINDS)
+  }, [read])
+
+  // The host's reports. They arrive as "what moved", which is what the panes get
+  // in turn — the diff cares about a file, the history about a ref.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const unsubscribe = git.watch(sessionId, () => {
+    let kinds: readonly GitChangeKind[] = ALL_CHANGE_KINDS
+    const unsubscribe = git.watch(sessionId, (change) => {
+      kinds = change.kinds
       if (timer !== undefined) return
       timer = setTimeout(() => {
         timer = undefined
-        setGeneration((value) => value + 1)
-      }, 180)
+        void read(kinds)
+      }, CHANGE_DEBOUNCE_MS)
     })
     return () => {
       if (timer !== undefined) clearTimeout(timer)
       unsubscribe()
     }
-  }, [sessionId, git])
+  }, [git, read, sessionId])
 
-  const reload = useCallback(() => setGeneration((value) => value + 1), [])
+  const reload = useCallback(() => {
+    setBusy(true)
+    void read(ALL_CHANGE_KINDS)
+  }, [read])
+
   return {
     snapshot: snapshot?.sessionId === sessionId ? snapshot : null,
     reload,
     busy,
-    generation,
   }
 }
 
@@ -393,7 +452,11 @@ function BranchRail({
  * @param props - Session, git client, copy, and the tab's abort signal.
  */
 export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelProps): ReactNode {
-  const { snapshot, reload, busy, generation } = useRepoSnapshot(sessionId, git, signal)
+  // One bus per panel: the panes below subscribe to it instead of being handed a
+  // generation number through the tree, and a second session's panel is a second
+  // repository with its own changes.
+  const bus = useMemo(createRepoChangeBus, [])
+  const { snapshot, reload, busy } = useRepoSnapshot(sessionId, git, signal, bus)
   // The draft lives up here, not inside the box: a commit that fails must not
   // cost the user the message they just wrote.
   const [message, setMessage] = useState('')
@@ -543,8 +606,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         return
       }
       setAction({ kind: 'done', op, label, summary: result.value })
-      // The watcher would notice the moved index too, but the panel's own action
-      // should not wait for a poll to show what it just did.
+      // The host's probe will report the index this moved too, but the panel's
+      // own action should not wait for that round trip to show what it did.
       reload()
     },
     [reload],
@@ -730,235 +793,238 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
 
   return (
-    <div className={cls.root} data-git-panel="ready" data-repo={status.root}>
-      <BranchRail
-        branch={status.branch}
-        upstreamGone={upstreamGone}
-        t={t}
-        onRefresh={reload}
-        busy={busy || pending}
-        canPull={canPull}
-        canPush={canPush}
-        canSync={canSync}
-        onPull={pull}
-        onPush={push}
-        onSync={sync}
-        pickerOpen={pickerOpen}
-        onTogglePicker={() => setPickerOpen((open) => !open)}
-        railRef={railRef}
-        pickerId={pickerId}
-        mode={mode}
-        onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
-      />
-      {/* The branch list floats over the panel instead of taking a row in its
-          column: it is opened from the rail, used, and dismissed, and the file
-          list underneath must not move while that happens (FR-4.1's dropdown). */}
-      {pickerOpen && (
-        <Popover
-          anchor={railRef.current}
-          id={pickerId}
-          label={t('branch.pickerLabel')}
-          onClose={() => setPickerOpen(false)}
-        >
-          <BranchPicker
-            branches={branches}
-            t={t}
-            busy={busy || pending}
-            onCheckout={checkout}
-            onCreate={createBranch}
-            onDelete={deleteBranch}
-            refusal={branchRefusal}
+    // The provider renders nothing; it is how a pane below hears that the
+    // repository moved without the panel threading a counter down to it.
+    <RepoChangeProvider bus={bus}>
+      <div className={cls.root} data-git-panel="ready" data-repo={status.root}>
+        <BranchRail
+          branch={status.branch}
+          upstreamGone={upstreamGone}
+          t={t}
+          onRefresh={reload}
+          busy={busy || pending}
+          canPull={canPull}
+          canPush={canPush}
+          canSync={canSync}
+          onPull={pull}
+          onPush={push}
+          onSync={sync}
+          pickerOpen={pickerOpen}
+          onTogglePicker={() => setPickerOpen((open) => !open)}
+          railRef={railRef}
+          pickerId={pickerId}
+          mode={mode}
+          onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
+        />
+        {/* The branch list floats over the panel instead of taking a row in its
+            column: it is opened from the rail, used, and dismissed, and the file
+            list underneath must not move while that happens (FR-4.1's dropdown). */}
+        {pickerOpen && (
+          <Popover
+            anchor={railRef.current}
+            id={pickerId}
+            label={t('branch.pickerLabel')}
             onClose={() => setPickerOpen(false)}
-          />
-        </Popover>
-      )}
-      {/* FR-9.3's two ways out of a merge. The bar exists because the state is
-          otherwise invisible: with every conflict resolved, this panel looks
-          exactly like an ordinary staged change set. */}
-      {status.merging && (
-        <div className={cls.mergeBox} data-merge="true">
-          <span className={cls.mergeLabel}>{t('merge.inProgress')}</span>
-          <button
-            type="button"
-            className={cls.ghost}
-            disabled={pending || conflicted.length > 0}
-            title={
-              conflicted.length > 0
-                ? t('merge.continueBlocked', { count: conflicted.length })
-                : t('merge.continue')
-            }
-            onClick={continueMerge}
           >
-            {t('merge.continue')}
-          </button>
-          <button
-            type="button"
-            className={armedKey === 'merge' ? cls.danger : cls.ghost}
-            data-armed={String(armedKey === 'merge')}
-            disabled={pending}
-            title={armedKey === 'merge' ? t('merge.abortConfirm') : t('merge.abort')}
-            onClick={() => {
-              if (armedKey === 'merge') abortMerge()
-              else armKey('merge')
-            }}
-          >
-            {armedKey === 'merge' ? t('merge.abortArmed') : t('merge.abort')}
-          </button>
-        </div>
-      )}
-      {action.kind === 'failed' && failure !== null && (
-        <div className={cls.actionBox} data-action-error={action.op}>
-          <div className={cls.actionHead}>
-            <span className={cls.actionLabel}>
-              {action.label} · {t('action.failed')}
-            </span>
-            <ToolButton label={t('action.dismiss')} onClick={() => setAction({ kind: 'idle' })}>
-              <CloseGlyph />
-            </ToolButton>
+            <BranchPicker
+              branches={branches}
+              t={t}
+              busy={busy || pending}
+              onCheckout={checkout}
+              onCreate={createBranch}
+              onDelete={deleteBranch}
+              refusal={branchRefusal}
+              onClose={() => setPickerOpen(false)}
+            />
+          </Popover>
+        )}
+        {/* FR-9.3's two ways out of a merge. The bar exists because the state is
+            otherwise invisible: with every conflict resolved, this panel looks
+            exactly like an ordinary staged change set. */}
+        {status.merging && (
+          <div className={cls.mergeBox} data-merge="true">
+            <span className={cls.mergeLabel}>{t('merge.inProgress')}</span>
+            <button
+              type="button"
+              className={cls.ghost}
+              disabled={pending || conflicted.length > 0}
+              title={
+                conflicted.length > 0
+                  ? t('merge.continueBlocked', { count: conflicted.length })
+                  : t('merge.continue')
+              }
+              onClick={continueMerge}
+            >
+              {t('merge.continue')}
+            </button>
+            <button
+              type="button"
+              className={armedKey === 'merge' ? cls.danger : cls.ghost}
+              data-armed={String(armedKey === 'merge')}
+              disabled={pending}
+              title={armedKey === 'merge' ? t('merge.abortConfirm') : t('merge.abort')}
+              onClick={() => {
+                if (armedKey === 'merge') abortMerge()
+                else armKey('merge')
+              }}
+            >
+              {armedKey === 'merge' ? t('merge.abortArmed') : t('merge.abort')}
+            </button>
           </div>
-          <p className={cls.statusHint}>{failure.title}</p>
-          {failure.detail !== undefined && failure.detail !== '' && (
-            <p className={cls.note} data-multiline={String(lineCount(failure.detail) > 1)}>
-              {failure.detail}
-            </p>
+        )}
+        {action.kind === 'failed' && failure !== null && (
+          <div className={cls.actionBox} data-action-error={action.op}>
+            <div className={cls.actionHead}>
+              <span className={cls.actionLabel}>
+                {action.label} · {t('action.failed')}
+              </span>
+              <ToolButton label={t('action.dismiss')} onClick={() => setAction({ kind: 'idle' })}>
+                <CloseGlyph />
+              </ToolButton>
+            </div>
+            <p className={cls.statusHint}>{failure.title}</p>
+            {failure.detail !== undefined && failure.detail !== '' && (
+              <p className={cls.note} data-multiline={String(lineCount(failure.detail) > 1)}>
+                {failure.detail}
+              </p>
+            )}
+          </div>
+        )}
+        {action.kind === 'done' && (
+          <p className={cls.actionNotice} data-action-done={action.op}>
+            {action.summary === '' ? action.label : action.summary}
+          </p>
+        )}
+        {/* The column: the staged drawer, the message box, the working-tree
+            drawers, the conflict group, then the bottom pane. The first two are
+            deliberately not VS Code's order — see the drawer's own comment — and the
+            last one cannot be: VS Code opens a diff in the editor area, and this
+            plugin registers only a right-sidebar tab, so the diff shares the bottom
+            pane with the history as its second tab (`BottomPane`). FR-2.1 still
+            holds in both cases: embedded, never a modal. */}
+        {/* The staged drawer sits directly above the commit box, because it is what
+            that box commits: the association is the closest one in the panel, and it
+            is worth breaking VS Code's own order (message box first, staged list
+            below it) to make it read — these files, this message, commit. The cost
+            is that staging a row moves it across the box, which is the same jump
+            VS Code makes between its two groups. It is also the one drawer that
+            stays on screen when it is empty: it is the box's anchor, and its count
+            of zero is the answer to "what will this commit?". */}
+        <ChangeGroupPane
+          area="staged"
+          label={t('group.staged')}
+          resizeLabel={t('staged.resize')}
+          entries={staged}
+          t={t}
+          busy={busy || pending}
+          batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+          emptyNote={t('group.stagedEmpty')}
+          collapsed={collapsedGroups.has('staged')}
+          view={view}
+          onToggle={() => toggleGroup('staged')}
+          onStage={stage}
+          onUnstage={unstage}
+          onOpen={openDiff}
+        />
+        <CommitBox
+          message={message}
+          onMessage={setMessage}
+          scope={scope}
+          busy={pending}
+          // The box only carries its own failures: a rejected push is reported in
+          // the action box above, where the button that caused it lives.
+          error={action.kind === 'failed' && action.op === 'commit' && failure !== null ? failure.title : undefined}
+          onCommit={commitNow}
+          // FR-3.5's prompt is built from the staged diff, so the button is offered
+          // exactly when there is one — an empty index has nothing to describe.
+          aiEnabled={scope.kind === 'staged'}
+          generating={generating}
+          aiNote={aiNote ?? undefined}
+          onGenerate={generate}
+          t={t}
+        />
+        <div className={cls.body}>
+          {clean ? (
+            <div className={cls.status} data-git-panel-state="clean">
+              <p className={cls.statusTitle}>{t('clean.title')}</p>
+              <p className={cls.statusHint}>{t('clean.hint')}</p>
+            </div>
+          ) : (
+            <>
+              {/* Conflicts keep the top of the list, where VS Code puts them: while
+                  a merge is open, nothing in the panel matters more. They get a
+                  group and a `+` per row, but no bulk action — the conflict UI
+                  proper (FR-9) is a later milestone, and "stage all" over a
+                  half-resolved merge is not a shortcut worth offering — and no
+                  drawer either: a group that exists for one afternoon is not height
+                  anyone wants to take back from the list for good. */}
+              <Group
+                label={t('group.conflicted')}
+                area="conflicted"
+                entries={conflicted}
+                t={t}
+                busy={busy || pending}
+                collapsed={collapsedGroups.has('conflicted')}
+                view={view}
+                onToggle={() => toggleGroup('conflicted')}
+                onStage={stage}
+                onUnstage={unstage}
+                onOpen={openDiff}
+              />
+              {/* The working tree as two drawers with the same shape as the staged
+                  one — each with its own grip, its own cap, and its own scroller, so
+                  "make this group taller" works on any of them and a long group can
+                  never push another out of the panel. They are not resident: a group
+                  with no rows is not a pane worth keeping an empty note in, which is
+                  exactly what the staged drawer above is for. */}
+              <ChangeGroupPane
+                area="unstaged"
+                label={t('group.unstaged')}
+                resizeLabel={t('unstaged.resize')}
+                entries={unstaged}
+                t={t}
+                busy={busy || pending}
+                batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
+                collapsed={collapsedGroups.has('unstaged')}
+                view={view}
+                onToggle={() => toggleGroup('unstaged')}
+                onStage={stage}
+                onUnstage={unstage}
+                onOpen={openDiff}
+              />
+              <ChangeGroupPane
+                area="untracked"
+                label={t('group.untracked')}
+                resizeLabel={t('untracked.resize')}
+                entries={untracked}
+                t={t}
+                busy={busy || pending}
+                batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
+                collapsed={collapsedGroups.has('untracked')}
+                view={view}
+                onToggle={() => toggleGroup('untracked')}
+                onStage={stage}
+                onUnstage={unstage}
+                onOpen={openDiff}
+              />
+              {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
+            </>
           )}
         </div>
-      )}
-      {action.kind === 'done' && (
-        <p className={cls.actionNotice} data-action-done={action.op}>
-          {action.summary === '' ? action.label : action.summary}
-        </p>
-      )}
-      {/* The column: the staged drawer, the message box, the working-tree
-          drawers, the conflict group, then the bottom pane. The first two are
-          deliberately not VS Code's order — see the drawer's own comment — and the
-          last one cannot be: VS Code opens a diff in the editor area, and this
-          plugin registers only a right-sidebar tab, so the diff shares the bottom
-          pane with the history as its second tab (`BottomPane`). FR-2.1 still
-          holds in both cases: embedded, never a modal. */}
-      {/* The staged drawer sits directly above the commit box, because it is what
-          that box commits: the association is the closest one in the panel, and it
-          is worth breaking VS Code's own order (message box first, staged list
-          below it) to make it read — these files, this message, commit. The cost
-          is that staging a row moves it across the box, which is the same jump
-          VS Code makes between its two groups. It is also the one drawer that
-          stays on screen when it is empty: it is the box's anchor, and its count
-          of zero is the answer to "what will this commit?". */}
-      <ChangeGroupPane
-        area="staged"
-        label={t('group.staged')}
-        resizeLabel={t('staged.resize')}
-        entries={staged}
-        t={t}
-        busy={busy || pending}
-        batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-        emptyNote={t('group.stagedEmpty')}
-        collapsed={collapsedGroups.has('staged')}
-        view={view}
-        onToggle={() => toggleGroup('staged')}
-        onStage={stage}
-        onUnstage={unstage}
-        onOpen={openDiff}
-      />
-      <CommitBox
-        message={message}
-        onMessage={setMessage}
-        scope={scope}
-        busy={pending}
-        // The box only carries its own failures: a rejected push is reported in
-        // the action box above, where the button that caused it lives.
-        error={action.kind === 'failed' && action.op === 'commit' && failure !== null ? failure.title : undefined}
-        onCommit={commitNow}
-        // FR-3.5's prompt is built from the staged diff, so the button is offered
-        // exactly when there is one — an empty index has nothing to describe.
-        aiEnabled={scope.kind === 'staged'}
-        generating={generating}
-        aiNote={aiNote ?? undefined}
-        onGenerate={generate}
-        t={t}
-      />
-      <div className={cls.body}>
-        {clean ? (
-          <div className={cls.status} data-git-panel-state="clean">
-            <p className={cls.statusTitle}>{t('clean.title')}</p>
-            <p className={cls.statusHint}>{t('clean.hint')}</p>
-          </div>
-        ) : (
-          <>
-            {/* Conflicts keep the top of the list, where VS Code puts them: while
-                a merge is open, nothing in the panel matters more. They get a
-                group and a `+` per row, but no bulk action — the conflict UI
-                proper (FR-9) is a later milestone, and "stage all" over a
-                half-resolved merge is not a shortcut worth offering — and no
-                drawer either: a group that exists for one afternoon is not height
-                anyone wants to take back from the list for good. */}
-            <Group
-              label={t('group.conflicted')}
-              area="conflicted"
-              entries={conflicted}
-              t={t}
-              busy={busy || pending}
-              collapsed={collapsedGroups.has('conflicted')}
-              view={view}
-              onToggle={() => toggleGroup('conflicted')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
-            {/* The working tree as two drawers with the same shape as the staged
-                one — each with its own grip, its own cap, and its own scroller, so
-                "make this group taller" works on any of them and a long group can
-                never push another out of the panel. They are not resident: a group
-                with no rows is not a pane worth keeping an empty note in, which is
-                exactly what the staged drawer above is for. */}
-            <ChangeGroupPane
-              area="unstaged"
-              label={t('group.unstaged')}
-              resizeLabel={t('unstaged.resize')}
-              entries={unstaged}
-              t={t}
-              busy={busy || pending}
-              batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
-              collapsed={collapsedGroups.has('unstaged')}
-              view={view}
-              onToggle={() => toggleGroup('unstaged')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
-            <ChangeGroupPane
-              area="untracked"
-              label={t('group.untracked')}
-              resizeLabel={t('untracked.resize')}
-              entries={untracked}
-              t={t}
-              busy={busy || pending}
-              batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
-              collapsed={collapsedGroups.has('untracked')}
-              view={view}
-              onToggle={() => toggleGroup('untracked')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
-            {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
-          </>
-        )}
+        {/* One region for everything that is not the change list: the recent
+            commits and the diff of the row that was clicked share it as two tabs
+            (VS Code keeps the list and the editor apart; this panel has no editor
+            area, so they take turns in the same box). */}
+        <BottomPane
+          sessionId={sessionId}
+          git={git}
+          t={t}
+          locale={locale}
+          signal={signal}
+          openFile={openFile}
+          onCloseDiff={() => setOpenFile(null)}
+        />
       </div>
-      {/* One region for everything that is not the change list: the recent
-          commits and the diff of the row that was clicked share it as two tabs
-          (VS Code keeps the list and the editor apart; this panel has no editor
-          area, so they take turns in the same box). */}
-      <BottomPane
-        sessionId={sessionId}
-        git={git}
-        t={t}
-        locale={locale}
-        signal={signal}
-        generation={generation}
-        openFile={openFile}
-        onCloseDiff={() => setOpenFile(null)}
-      />
-    </div>
+    </RepoChangeProvider>
   )
 }

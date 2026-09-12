@@ -228,7 +228,7 @@ export function createGitService(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
     // See GitRunOptions.optionalLocks: a read must not rewrite the index the
-    // change watcher polls, and a write must be able to take its lock.
+    // probe watches, and a write must be able to take its lock.
     optionalLocks,
   })
 
@@ -651,7 +651,7 @@ export function createGitService(
    * --porcelain=v2` does not print: once every conflicted path has been staged,
    * the unmerged list is empty while the merge is still open — which is exactly
    * the state "continue / abort the merge" belongs to. The file is stat-ed rather
-   * than asked about, the same way the change watcher already treats it.
+   * than asked about, the same way the git state probe already treats it.
    * @param root - Repository root.
    * @returns Whether a merge is in progress.
    */

@@ -21,7 +21,7 @@ import { createSessionDirResolver } from './adapter/workspace.ts'
 import { createGitRunner } from './git-exec.ts'
 import { createGitService, type GitServiceLimits } from './git-service.ts'
 import { registerGitPanelRoutes } from './adapter/routes.ts'
-import { createRepoWatcher } from './watcher.ts'
+import { createGitProbe } from './git-probe.ts'
 
 /**
  * Services required before this plugin can mount.
@@ -55,20 +55,20 @@ export function apply(ctx: Context, config: Config = {}): void {
   const runner = createGitRunner()
   const resolver = createSessionDirResolver(ctx, ports)
   const service = createGitService(runner, resolver, ports, limits)
-  const watcher = createRepoWatcher(ports)
+  const probe = createGitProbe(ports)
 
-  // `ctx.effect` ties both the routes and the watcher to this plugin's own
-  // lifetime, so an unload or a config reload leaves no route, no interval, and
-  // no open SSE socket behind.
+  // `ctx.effect` ties both the routes and the probe to this plugin's own
+  // lifetime, so an unload or a config reload leaves no route, no filesystem
+  // watch, and no open SSE socket behind.
   ctx.effect(
     () => {
-      const disposeRoutes = registerGitPanelRoutes(ctx, service, watcher, ports)
+      const disposeRoutes = registerGitPanelRoutes(ctx, service, probe, ports)
       ports.log('info', 'git panel host ready at /git-panel')
       return () => {
         disposeRoutes()
-        watcher.dispose()
+        probe.dispose()
       }
     },
-    'dsh-git-panel: /git-panel routes + change watcher',
+    'dsh-git-panel: /git-panel routes + git state probe',
   )
 }

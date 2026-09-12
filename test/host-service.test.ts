@@ -24,7 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createGitRunner } from '../src/host/git-exec.ts'
 import { createGitService } from '../src/host/git-service.ts'
 import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
-import { createRepoWatcher } from '../src/host/watcher.ts'
+import { createGitProbe } from '../src/host/git-probe.ts'
 import type { HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
 import {
   cleanupRepos,
@@ -464,8 +464,8 @@ async function startHarness(
   const registrations: Registration[] = []
   const ctx = stubContext(registrations)
   const service = serviceWith(ports, sessions)
-  const watcher = createRepoWatcher(ports)
-  const dispose = registerGitPanelRoutes(ctx, service, watcher, ports)
+  const probe = createGitProbe(ports)
+  const dispose = registerGitPanelRoutes(ctx, service, probe, ports)
 
   const server: Server = createServer((req, res) => dispatch(registrations, req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -475,7 +475,7 @@ async function startHarness(
     origin: `http://127.0.0.1:${port}`,
     async close() {
       dispose()
-      watcher.dispose()
+      probe.dispose()
       await new Promise<void>((resolve) => {
         server.closeAllConnections()
         server.close(() => resolve())
@@ -858,8 +858,8 @@ describe('the loopback fence', () => {
 
     const registrations: Registration[] = []
     const service = serviceFor({ s1: repo })
-    const watcher = createRepoWatcher(SILENT)
-    registerGitPanelRoutes(stubContext(registrations), service, watcher, SILENT)
+    const probe = createGitProbe(SILENT)
+    registerGitPanelRoutes(stubContext(registrations), service, probe, SILENT)
     const routes = registrations as Registration[]
     const post = routes.find((route) => route.kind === 'prefix')
     assert.ok(post)
@@ -909,7 +909,7 @@ describe('the loopback fence', () => {
       assert.match(answer.body, /loopback/)
     }
 
-    watcher.dispose()
+    probe.dispose()
   })
 })
 
@@ -944,6 +944,47 @@ describe('the change stream', () => {
       )
       assert.ok(frames.some((f) => f.event === 'ready'), `expected a ready frame, got ${JSON.stringify(frames)}`)
       assert.ok(frames.some((f) => f.event === 'changed'), `expected a changed frame, got ${JSON.stringify(frames)}`)
+      // The frame carries WHAT moved, which is what lets a pane re-read only what
+      // it shows: `git add` rewrites the index, and nothing here is a ref move.
+      const changed = frames.find((frame) => frame.event === 'changed')
+      const kinds: unknown = changed === undefined ? null : JSON.parse(changed.data).kinds
+      assert.ok(Array.isArray(kinds), `expected kinds in the frame, got ${String(changed?.data)}`)
+      assert.ok(kinds.includes('index'), `expected an index kind, got ${String(changed?.data)}`)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports a written file, which no git state file moves for', async () => {
+    const repo = makeRepo('sse-worktree')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/events?session=s1`)
+      assert.equal(response.status, 200)
+
+      // No `git add`, no `git commit`: just a file an agent wrote. Nothing inside
+      // `.git` changes, which is why an mtime poll of `.git` never saw it — and
+      // this is the report the panel needs to show the new untracked file.
+      let wrote = false
+      const frames = await readFrames(
+        response,
+        (seen) => {
+          if (seen.some((f) => f.event === 'ready') && !wrote) {
+            wrote = true
+            write(repo, 'fresh.txt', 'written by the agent\n')
+          }
+          return seen.some((f) => f.event === 'changed')
+        },
+        6_000,
+      )
+      const changed = frames.find((frame) => frame.event === 'changed')
+      assert.ok(changed !== undefined, `expected a changed frame, got ${JSON.stringify(frames)}`)
+      const kinds = (JSON.parse(changed.data) as { kinds: readonly string[] }).kinds
+      assert.ok(kinds.includes('worktree'), `expected a worktree kind, got ${changed.data}`)
     } finally {
       await harness.close()
     }
@@ -964,7 +1005,7 @@ describe('the change stream', () => {
 
   it('does NOT fire from the panel reading status', async () => {
     // The loop this guards against: with git's optional locks enabled, `status`
-    // refreshes and rewrites .git/index, so the watcher would see a change caused
+    // refreshes and rewrites .git/index, so the probe would see a change caused
     // by the act of reading and the panel would refresh itself forever.
     const repo = makeRepo('sse-no-loop')
     write(repo, 'a.txt', 'one\n')

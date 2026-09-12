@@ -23,15 +23,22 @@
  * @module dsh-git-panel/client/ui/History
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { relativeTimeParts } from '../../core/format.ts'
 import type { GitRemoteClient, Result } from '../../core/ports.ts'
 import type { CommitDetail, CommitInfo } from '../../core/types.ts'
 import { cls } from './styles.ts'
+import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
 import { CloseGlyph, DotGlyph, RingGlyph } from './icons.tsx'
+
+/** Rows per page: FR-3.7's default, and what "load more" appends. */
+const LOG_PAGE_SIZE = 30
+
+/** The host's own ceiling on one log read, mirrored so a refresh asks for no more. */
+const MAX_LOG_ROWS = 500
 
 /**
  * One file inside a commit (FR-3.6).
@@ -253,24 +260,65 @@ export function HistoryPanel({
   const [openOid, setOpenOid] = useState<string | null>(null)
   /** Details already read, by object id, so reselecting costs no process. */
   const [details, setDetails] = useState<ReadonlyMap<string, Result<CommitDetail>>>(new Map())
+  /**
+   * How many rows are on screen, so a refresh keeps that width.
+   *
+   * A refresh that always re-read one page would throw away the pages a user
+   * loaded, and one that kept the old rows would leave the list permanently the
+   * wrong length. It is a ref because the reads above already hold the rows, and
+   * a second copy in state would be a second thing to keep in step.
+   */
+  const held = useRef(0)
+  /** The change count this list was read at; a different one means it is stale. */
+  const [readAt, setReadAt] = useState<number | null>(null)
+  /**
+   * History changes, which is a narrower thing than "the repository changed":
+   * a commit, a fetch, a rebase or a reset moves a ref, while an agent editing a
+   * file does not. Subscribing to that one kind is what keeps a write from
+   * costing a `git log`.
+   */
+  const refsChanged = useRepoChange('refs')
 
   const append = useCallback(
     async (offset: number) => {
       setBusy(true)
-      const page = await git.log(sessionId, offset, 30, signal)
+      const page = await git.log(sessionId, offset, LOG_PAGE_SIZE, signal)
       setBusy(false)
       if (!page.ok) return
-      setCommits((current) => (offset === 0 ? page.value.commits : [...current, ...page.value.commits]))
+      setCommits((current) => {
+        const next = offset === 0 ? page.value.commits : [...current, ...page.value.commits]
+        held.current = next.length
+        return next
+      })
       setHasMore(page.value.hasMore)
       setLoaded(true)
     },
     [git, sessionId, signal],
   )
 
+  /** Re-read what is on screen — as many rows as are on screen, not just one page. */
+  const refresh = useCallback(async () => {
+    const limit = Math.min(Math.max(held.current, LOG_PAGE_SIZE), MAX_LOG_ROWS)
+    setBusy(true)
+    const page = await git.log(sessionId, 0, limit, signal)
+    setBusy(false)
+    if (!page.ok) return
+    setCommits(page.value.commits)
+    held.current = page.value.commits.length
+    setHasMore(page.value.hasMore)
+    setLoaded(true)
+  }, [git, sessionId, signal])
+
+  // The list follows the repository for as long as its tab is showing. A commit
+  // made by the agent, a fetch, or this panel's own commit all arrive here as a
+  // ref change; the FIRST read is the mount, and only a later one is "the
+  // history moved under you".
   useEffect(() => {
-    if (!active || loaded) return
-    void append(0)
-  }, [active, loaded, append])
+    if (!active) return
+    if (readAt === refsChanged) return
+    setReadAt(refsChanged)
+    void (loaded ? refresh() : append(0))
+  }, [active, loaded, readAt, refsChanged, append, refresh])
 
   const select = useCallback(
     (oid: string) => {

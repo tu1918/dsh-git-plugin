@@ -1,14 +1,14 @@
 /**
  * Where a work tree keeps its git directory.
  *
- * Two host modules need this and neither should own it: the change watcher
+ * Two host modules need this and neither should own it: the git state probe
  * stats `HEAD`/`index`/`MERGE_HEAD` inside it (FR-1.4), and the git service asks
  * whether `MERGE_HEAD` exists at all, which is the one fact `git status
  * --porcelain=v2` does not report and FR-9.3 needs (a fully resolved merge has
  * no unmerged paths left, yet is still open).
  *
  * Reading it instead of asking git is deliberate: it is the same two syscalls the
- * watcher already performs once a second, where a `git rev-parse --git-dir` would
+ * probe already performs, where a `git rev-parse --git-dir` would
  * be a process per status read.
  *
  * @module dsh-git-panel/host/git-dir

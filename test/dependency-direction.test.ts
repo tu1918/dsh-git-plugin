@@ -233,7 +233,7 @@ describe('dependency direction (§5.2)', () => {
   })
 
   it('keeps the host business layer off DSH types too', () => {
-    // `src/host/*.ts` (git-exec, git-service, watcher, routes) works through the
+    // `src/host/*.ts` (git-exec, git-service, git-probe, routes) works through the
     // core ports only; the adapter satisfies them.
     const offenders: string[] = []
     for (const path of sourceFiles('src/host')) {

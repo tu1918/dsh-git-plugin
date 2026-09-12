@@ -32,6 +32,7 @@ import { pathParts } from '../../core/format.ts'
 import type { GitPanelError, GitRemoteClient } from '../../core/ports.ts'
 import type { DiffArea, DiffHunk, DiffLine, FileDiff } from '../../core/types.ts'
 import { cls } from './styles.ts'
+import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
 import { errorCopy } from './error-copy.ts'
 import {
@@ -453,14 +454,6 @@ export interface DiffPaneProps {
   readonly t: Translate
   /** Aborted when the tab closes; cancels the read. */
   readonly signal?: AbortSignal
-  /**
-   * A counter that changes whenever the repository may have changed.
-   *
-   * It is the panel's own change notification, handed down rather than
-   * re-subscribed: the diff a user is reading should refresh itself under the
-   * agent's next `git add`, without a second watcher and without a modal.
-   */
-  readonly generation: number
   /** Leave the diff and go back to the change list. */
   readonly onClose: () => void
 }
@@ -504,7 +497,6 @@ export function DiffPane({
   git,
   t,
   signal,
-  generation,
   onClose,
 }: DiffPaneProps): ReactNode {
   const [diff, setDiff] = useState<FileDiff | null>(null)
@@ -513,6 +505,13 @@ export function DiffPane({
   const [layout, setLayout] = useState<DiffLayout>(readDiffLayout)
   const [expanded, setExpanded] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
+  /**
+   * The panel's change notifications, subscribed rather than handed down: the
+   * diff a user is reading refreshes itself under the agent's next write, and it
+   * does so without this pane knowing what a "report from the git state probe"
+   * is. Any kind counts — a file change or a stage both move what this shows.
+   */
+  const change = useRepoChange()
 
   // A new file starts folded, whatever the last one was: FR-2.6's budget is per
   // file, and remembering "expanded" across files would unfold the next one
@@ -550,7 +549,7 @@ export function DiffPane({
       signal?.removeEventListener('abort', abort)
       controller.abort()
     }
-  }, [git, sessionId, path, area, signal, generation, reloadNonce])
+  }, [git, sessionId, path, area, signal, change, reloadNonce])
 
   const onLayout = useCallback((next: DiffLayout): void => {
     setLayout(next)

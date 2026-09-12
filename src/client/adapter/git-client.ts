@@ -19,7 +19,13 @@
  * @module dsh-git-panel/client/adapter/git-client
  */
 
-import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
+import type {
+  GitChange,
+  GitChangeKind,
+  GitPanelError,
+  GitRemoteClient,
+  Result,
+} from '../../core/ports.ts'
 import type {
   BranchRef,
   CommitDetail,
@@ -185,19 +191,27 @@ export function createGitRemoteClient(): GitRemoteClient {
       request<CommitDetail>('/showCommit', { session: sessionId, hash }, signal),
 
     watch(sessionId, onChange) {
+      /** Every kind: the guesses this transport makes on its own. */
+      const ALL: GitChange = { kinds: ['refs', 'index', 'worktree'] }
       // Polling only: no stream available in this browser.
       if (typeof EventSource === 'undefined') {
-        const timer = setInterval(onChange, POLL_FALLBACK_MS)
-        return () => clearInterval(timer)
+        const timer = window.setInterval(() => onChange(ALL), POLL_FALLBACK_MS)
+        return () => window.clearInterval(timer)
       }
 
       const url = new URL(`${ROUTE_PREFIX}/events`, window.location.origin)
       url.searchParams.set('session', sessionId)
       const source = new EventSource(url)
-      let poll: ReturnType<typeof setInterval> | undefined
+      let poll: number | undefined
 
-      const onChanged = (): void => onChange()
+      const onChanged = (event: Event): void => onChange(readChange((event as MessageEvent).data))
       source.addEventListener('changed', onChanged)
+      // The panel reads the repository as it mounts, and the host's probe
+      // becomes live a moment later; a change landing in between would otherwise
+      // be the one change nobody reports. Re-reading once on `ready` closes that
+      // window, and an unchanged repository publishes nothing.
+      const onReady = (): void => onChange(ALL)
+      source.addEventListener('ready', onReady)
 
       // The host says "unavailable" when it cannot watch anything yet — most
       // often because the session's directory is not a repository. Closing the
@@ -206,14 +220,41 @@ export function createGitRemoteClient(): GitRemoteClient {
       source.addEventListener('unavailable', () => {
         source.close()
         source.removeEventListener('changed', onChanged)
-        if (poll === undefined) poll = setInterval(onChange, POLL_FALLBACK_MS)
+        source.removeEventListener('ready', onReady)
+        if (poll === undefined) poll = window.setInterval(() => onChange(ALL), POLL_FALLBACK_MS)
       })
 
       return () => {
         source.removeEventListener('changed', onChanged)
+        source.removeEventListener('ready', onReady)
         source.close()
-        if (poll !== undefined) clearInterval(poll)
+        if (poll !== undefined) window.clearInterval(poll)
       }
     },
   }
+}
+
+/**
+ * Read one `changed` frame's payload.
+ *
+ * The frame is the host's {@link GitChange}. Anything unreadable — an older
+ * host, a proxy that ate the body — becomes "every kind": re-reading something
+ * unchanged is cheap once the panel compares the reading, and missing a change
+ * is not.
+ * @param data - The frame's data field.
+ * @returns What moved, or every kind when the frame cannot be trusted.
+ */
+function readChange(data: string): GitChange {
+  try {
+    const kinds = (JSON.parse(data) as { kinds?: unknown }).kinds
+    if (Array.isArray(kinds)) {
+      const known = kinds.filter(
+        (kind): kind is GitChangeKind => kind === 'refs' || kind === 'index' || kind === 'worktree',
+      )
+      if (known.length > 0) return { kinds: known }
+    }
+  } catch {
+    // Fall through to the conservative answer.
+  }
+  return { kinds: ['refs', 'index', 'worktree'] }
 }

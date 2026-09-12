@@ -50,7 +50,7 @@ function gitEnvironment(optionalLocks: boolean): NodeJS.ProcessEnv {
     LC_ALL: 'C',
     LANG: 'C',
     // See GitRunOptions.optionalLocks: off by default so a read cannot rewrite
-    // the index our change watcher is watching.
+    // the index our probe is watching.
     GIT_OPTIONAL_LOCKS: optionalLocks ? '1' : '0',
   }
   // A parent that set GIT_CONFIG_PARAMETERS would inject config into every call

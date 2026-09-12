@@ -75,8 +75,6 @@ export interface BottomPaneProps {
   readonly locale: string
   /** Aborted when the tab closes; cancels in-flight reads. */
   readonly signal?: AbortSignal
-  /** The panel's change counter, so an open diff re-reads when the repo moves. */
-  readonly generation: number
   /** The file whose diff is open, or `null` when no row has been chosen. */
   readonly openFile: OpenFile | null
   /** Drop the diff tab and fold the pane back to its strip. */
@@ -93,7 +91,6 @@ export function BottomPane({
   t,
   locale,
   signal,
-  generation,
   openFile,
   onCloseDiff,
 }: BottomPaneProps): ReactNode {
@@ -242,7 +239,6 @@ export function BottomPane({
                 git={git}
                 t={t}
                 signal={signal}
-                generation={generation}
                 onClose={closeDiff}
               />
             </div>

@@ -107,7 +107,7 @@ export interface GitRunOptions {
    * refreshing the index and rewriting `.git/index`.
    *
    * Defaults to `false`, and the default is load-bearing rather than an
-   * optimisation: this plugin's own change watcher polls `.git/index`'s mtime, so
+   * optimisation: this plugin's own probe watches the state files, so
    * a read that rewrote the index would announce a change caused by the act of
    * reading, and the panel would refresh itself forever. Mutating commands in
    * later milestones must pass `true`, because they genuinely need the lock.
@@ -552,12 +552,35 @@ export interface GitRemoteClient {
    * The adapter owns the transport (an SSE stream, or a poll when the stream is
    * unavailable) and collapses however many host-side observations arrive into
    * whatever the UI needs; the UI only learns that re-reading is worthwhile
-   * (§5.3, host watcher → client subscription).
+   * (§5.3, host probe → client subscription).
+   *
+   * The notification carries {@link GitChange}: *what* moved, coarsely enough
+   * that a reader can tell whether its own reading is worth redoing — a pane
+   * showing commit history cares about `refs`, one showing a file's diff cares
+   * about `worktree`. A subscriber that does not care may ignore the argument;
+   * one that cannot tell gets every kind.
    * @param sessionId - Opaque session identity to watch.
    * @param onChange - Called when the repository may have changed.
    * @returns Unsubscribe callback.
    */
-  watch(sessionId: string, onChange: () => void): () => void
+  watch(sessionId: string, onChange: (change: GitChange) => void): () => void
+}
+
+/**
+ * What moved in a repository, at the coarseness a reader can act on.
+ *
+ * The three are the three things that go stale for different reasons: `refs`
+ * (HEAD, a branch, the reflog, a remote-tracking ref — a commit, a checkout, a
+ * fetch), `index` (the staging area, or any other git state file), and
+ * `worktree` (a file in the working tree). They are deliberately not file names:
+ * a consumer decides what to re-read, not where to look.
+ */
+export type GitChangeKind = 'refs' | 'index' | 'worktree'
+
+/** One coalesced report from the host's git state probe. */
+export interface GitChange {
+  /** Everything that moved within one coalescing window. */
+  readonly kinds: readonly GitChangeKind[]
 }
 
 /** Client-side capability: the workspace the panel should follow (§4.4). */

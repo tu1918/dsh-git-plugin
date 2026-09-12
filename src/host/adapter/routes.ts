@@ -45,7 +45,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { GitPanelError, HostPorts, WorkspaceGitService } from '../../core/ports.ts'
-import type { RepoWatcher } from '../watcher.ts'
+import type { GitProbe } from '../git-probe.ts'
 
 /** The path prefix this plugin owns; distinct from git-graph's `/git`. */
 const ROUTE_PREFIX = '/git-panel'
@@ -302,14 +302,14 @@ function intOf(url: URL, name: string, fallback: number): number {
  * longer, exact match.
  * @param ctx - Host context carrying `webServer`.
  * @param service - The git service.
- * @param watcher - The change watcher feeding the stream.
+ * @param probe - The git state probe feeding the stream.
  * @param ports - Diagnostic port.
  * @returns A disposer that unregisters both routes and ends every open stream.
  */
 export function registerGitPanelRoutes(
   ctx: Context,
   service: WorkspaceGitService,
-  watcher: RepoWatcher,
+  probe: GitProbe,
   ports: HostPorts,
 ): () => void {
   /** Live SSE responses, so disposal can end them rather than leak sockets. */
@@ -507,13 +507,14 @@ export function registerGitPanelRoutes(
     const status = await service.status(sessionId)
     let unsubscribe: (() => void) | null = null
     if (status.ok) {
-      // Await the baseline BEFORE saying ready: a client told "ready" must not be
-      // able to make a change that the watcher silently absorbed instead of
-      // reporting. The promise resolves as soon as the first stat pass lands.
-      unsubscribe = await watcher.watch(status.value.root, () => {
-        res.write('event: changed\ndata: {}\n\n')
+      // Subscribing BEFORE saying ready: the probe resolves only once it is
+      // live, so a change made after this await is reported rather than
+      // absorbed. The frame carries what moved, which is what lets a pane
+      // re-read only what it shows.
+      unsubscribe = await probe.watch(status.value.root, (change) => {
+        res.write(`event: changed\ndata: ${JSON.stringify(change)}\n\n`)
       })
-      // The client can vanish while the baseline was being read; in that case
+      // The client can vanish while the probe was starting; in that case
       // release immediately rather than holding a subscription nobody reads.
       if (res.writableEnded || res.destroyed) {
         unsubscribe()

@@ -11,8 +11,8 @@
 下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
 「与需求文档的偏差」。
 
-- 代码：`src/`（42 个源文件）、`test/`（14 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 282 项测试 + 两个打包产物
+- 代码：`src/`（45 个源文件）、`test/`（15 个测试文件）
+- 校验：`npm run check` → `tsc --noEmit` + 300 项测试 + 两个打包产物
 
 ---
 
@@ -101,7 +101,7 @@ discard 与 undoCommit 在 M5a。
 | **D1** | §4.1「与内置 Files 标签并列」的 sidebar tab | 注册为**右侧栏** tab type（`ctx.sidebarRightTabs` + `sidebar.right.pane.tab` 两段式） | DSH 0.1.5-rc.1 里 Files 就在右侧栏（`dsh-client-ui-sidebar-right`）。文档的意图（与 Files 并列、非模态）达成，只是换了一侧 |
 | **D2** | §5.3 首选 TypertRemoteService，备选 webServer 路由 | 采用 **webServer HTTP 路由 + SSE**（文档自己的备选） | Remote 的 wire schema 由 `@deepseek-ai/dsh-typert-generator` 从主仓 FaceModel 生成；该生成器未随发行版安装、也未发布。`ctx.typert.register()` 接受手写 schema，但无先例。同 profile 里成熟的第三方 git 插件也走 HTTP 路由。改动面被限制在 `client/adapter/git-client.ts` + `host/adapter/routes.ts` 两个文件，端口不变 |
 | **D3** | §5.2 用 eslint `no-restricted-imports` | 改为可执行测试 `test/dependency-direction.test.ts` | 会跑的规则比「配了但没人跑」的规则更可靠。它在开发中真的抓到了违规（`routes.ts`、`locales.ts` 都曾从 adapter 之外碰 DSH），因此把它们移进 `adapter/` |
-| **D4** | FR-1.4「mtime 监听 + 面板可见时 10s 轮询，不可见时停止」 | 订阅期间按 1s 轮询 `.git/index`/`HEAD`/`packed-refs` 等；「可见」表达为「存在 SSE 订阅者」 | 文档 §8.2 自己指出 mtime 监听在同步盘/网络盘不可靠，故只做轮询不做 `fs.watch`。「停止」由浏览器断开 SSE 实现——没人看时不花任何代价。轮询 1s 而非 10s，以满足 §4.4「1s 内自动反映」 |
+| **D4** | FR-1.4「mtime 监听 + 面板可见时 10s 轮询，不可见时停止」 | 订阅期间按 1s 轮询 `.git/index`/`HEAD`/`packed-refs` 等；「可见」表达为「存在 SSE 订阅者」 | 文档 §8.2 自己指出 mtime 监听在同步盘/网络盘不可靠，故只做轮询不做 `fs.watch`。「停止」由浏览器断开 SSE 实现——没人看时不花任何代价。轮询 1s 而非 10s，以满足 §4.4「1s 内自动反映」。**⚠ 2026-09-12 由 D25 修订**：主路径换成文件系统事件，轮询降级为回退策略（原因见 D25） |
 | **D5** | FR-3.7 历史分页显示总数，上限 500 | 多取 1 条判断 hasMore；`total` 故意为 `null` | 算总数需要 `git rev-list --count HEAD`，在大 monorepo 上要遍历全部历史（秒级），只为显示一个「加载更多」不需要的数字。上限 500 已实现 |
 | **D6** | §5.5 安全需求（假定路由在 DSH 鉴权之后） | **额外**加了 loopback-only 网关 | 实测：`/` 无凭据返回 401，而插件注册的 `/git-panel/*` 返回 200——DSH 前端鉴权不覆盖第三方 `webServer` 路由。详见 §6 |
 | **D7** | FR-1.2 路径过长截断目录（隐含字符预算实现） | 用 CSS flex：文件名不收缩、目录可裁切 | 侧栏宽度可变，字符预算需要测量容器；CSS 在任意宽度下都正确。因此删掉了已写好的 `shortenPath()` 纯函数，不留无人调用的代码 |
@@ -122,6 +122,7 @@ discard 与 undoCommit 在 M5a。
 | **D22** | FR-3.6 提交详情「完整信息、文件清单、每文件增删行、**可下钻看该提交的 diff**」 | M4 做前三项（行内展开），**下钻 diff 与提交改写（drop/squash/reset、FR-3.8 的撤销）不在 M4** | 下钻需要一个「按提交取 diff」的第三种 `DiffArea`（客户端与路由都要扩），而提交改写是另一类操作（重写历史）。产品方确认：提交详情具备初步功能即可，提交管理往后排 |
 | **D23** | §5.2 的意图是「DSH 名字只在 adapter 里，且最好是类型」 | `host/adapter/llm.ts` 引入了 `@deepseek-ai/dsh-llm` 的**运行时值**（`BlockAssembler`、`createUserMessage`），并把它声明为 peerDependency | 手写一份流式装配会复刻 harness 的块合并规则（工具调用截断、未知块、delta-only 协议都已在那层处理过），手写 message 形状则要跟住它的不可变创建契约。用宿主自己的装配器是唯一不会随宿主漂移的选择。**代价**：host bundle 首次带一个 `@deepseek-ai/*` 的运行时 import（此前只有 Node 内建 + `vscode-diff`），安装时必须能解析到宿主提供的 `dsh-llm`——`link:` 安装由本仓 devDependencies 提供，npm 安装由 peer 自动补齐 |
 | **D24** | §7 的 M5 是**一个**里程碑：discard、stash、提交图、撤销、多仓库 → 发布 v1.0 | 拆成 **M5a**（行级菜单机制 + FR-6.1 discard + FR-3.8 撤销 + FR-6.2 stash）与 **M5b**（FR-7.1 提交图 + FR-7.2 下钻 diff + FR-8 多仓库 + 提交改写 drop/squash/reset），M5b 收尾即文档 §7 的 v1.0 | M5 的实际体量大于 M4：文档 §3.1 的 5 个功能跨 P1/P2，另加 M4 明确留下的两件（下钻 diff、提交改写）。拆点选在「破坏性写操作」这一侧——**discard 与 undoCommit 正是 §7 的 M5 待办点名的两个**，它们与已交付的 deleteBranch 共用同一套武装确认（`ui/armed.ts`）与审计通道，一起做才不重复实现；提交图与多仓库是纯新增表面，不改变任何写操作的安全性。产品方 2026-09-12 确认按此拆分并先开工 M5a，工作包与排序见 §10 |
+| **D25** | FR-1.4 把「mtime 监听 + 定时轮询」当作刷新机制；D4 进一步把它收成「只轮询 `.git` 状态文件」 | 抽出**独立的 git 状态探测模块** `src/host/git-probe.ts`：主策略是文件系统事件（工作区递归 + git 目录各一个 `fs.watch`），轮询降级为**回退策略**；探测只产出中性事件 `GitChange`（`refs` / `index` / `worktree`），对 transport（SSE）与 UI 一无所知，客户端一侧再由 `ui/repo-change.tsx` 的事件总线分发给各面板 | 三条实测理由：① **工作区里发生的事不动 `.git`**——agent 新建/编辑文件时 `index`、`HEAD`、`logs/HEAD` 的 mtime 全不变，只盯 `.git` 的轮询永远看不见新文件（这正是产品方报的「写文件时丢更新」）；② **只盯 `index`/`HEAD` 会漏掉空提交与远端变化**——实测 `git commit --allow-empty` 只动 `logs/HEAD`，`git fetch` 只动 `FETCH_HEAD` 与 `refs/remotes`，两者都不动 index/HEAD；③ **客户端轮询太重**——同 profile 的 `dsh-better-sidebar` 用的是可见时 2s 轮询（`client/use-polling.ts`，Git lens 2s、变更列表 2.5s），而我们的 `/status` 一次要 2–3 个 git 进程，可见期间约每小时 5400 次 spawn，大仓库上 `git status` 是 100ms–1s 级。**代价**：`fs.watch` 在同步盘/网络盘上不可靠（D4 的老问题）——所以 `pollStrategy` 完整保留为回退（建立失败自动降级；那一路在 1s 状态 tick 之外每 10s 补报一次 `worktree`，文档 FR-1.4 自己的数字） |
 
 ---
 
@@ -134,10 +135,13 @@ discard 与 undoCommit 在 M5a。
    （M2 的 7 个写操作全部如此），否则写操作拿不到 index 锁。守住这条性质的测试：
    「the change stream」→ `does NOT fire from the panel reading status`。
 
-2. **watcher 先建立基线，再宣布 ready。**
+2. **探测模块先「活着」，再宣布 ready。**
    第一版在定时器首跳时才建立基线，于是「订阅后、首跳前」发生的改动会被当成基线
-   吞掉。现在 `watch()` 返回 Promise，其 resolve 即「从现在起一定能看见」的语义保证；
-   SSE 的 `ready` 在 await 之后才发出。改这块时不要把它变回「先 ready 再落基线」。
+   吞掉。现在 `GitProbe.watch()` 返回 Promise，其 resolve 即「从现在起一定能看见」
+   的语义保证（`fs.watch` 建立完成，或轮询基线落定），SSE 的 `ready` 在 await 之后
+   才发出。改这块时不要把它变回「先 ready 再启动探测」。另一侧的窗口由客户端关：
+   `ready` 也当成一次「可能变了」（见 `git-client.ts`），否则「面板首次读到探测建立」
+   之间那一瞬的改动没人报。
 
 3. **未出生分支的 unstage 是另一条命令。**
    `git restore --staged` 是从 HEAD 恢复，而空仓库没有 HEAD（实测：
@@ -168,6 +172,17 @@ discard 与 undoCommit 在 M5a。
    M3 的未跟踪文件渲染正好要靠「退出 1 = 有差异」与真失败区分（D15），于是在
    `git-exec.ts` 里两个字段都读（`code` 为字符串的两种情况——ENOENT、缓冲溢出——
    都在上面处理掉了）。凡是要靠退出码区分失败种类的调用，先确认这个映射还在。
+
+9. **刷新是「探测 → 事件 → 订阅」，中间没有谁认识谁（D25）。**
+   `host/git-probe.ts` 只认路径与 git 自己的状态文件，产出 `GitChange`（`refs` /
+   `index` / `worktree`）；`adapter/routes.ts` 只把它塞进 SSE；客户端 `ui/repo-change.tsx`
+   是面板内唯一的总线，各面板自己订阅、自己决定重读什么（历史订 `refs`、diff 订全部）。
+   **不要**为了省事把 `generation` 之类的计数器再顺着 props 往下传，也不要在探测里
+   加 session/HTTP/UI 的概念——那正是这个模块存在的理由。两条附带性质：探测按 burst
+   窗口合并（一次 `npm install` 不等于几千条事件），面板在**重读结果与上次指纹相同**
+   时不发布（`core/status-signature.ts`），所以「有事件」不等于「要重渲染」。
+   另一个容易忽略的点：**只盯 `index`/`HEAD` 是不够的**——空提交只动 `logs/HEAD`，
+   fetch/push 只动 `FETCH_HEAD` 与 `refs/remotes`，工作区里发生的事什么都不动。
 
 ---
 
@@ -344,6 +359,26 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | **FR-1.3 落地：变更文件按文件树展示**，并保留平铺列表与一个常显的切换按钮（文档要求「支持列表/树形两种展示模式切换（树形按目录折叠）」，所以两种都在）。**默认是树形**——产品方最新口径（文档没有规定默认值）；选择与目录折叠都写进 `localStorage`（`dsh-git-panel/view-mode`、`dsh-git-panel/collapsed-dirs`），像 diff 布局与分组折叠一样是偏好 | 纯函数 `core/change-tree.ts`（按 `/` 嵌套、**目录优先**、按 git 的字节序而非本机 locale 排序、把「只有一个子目录且自己没有文件」的链压成一行如 `deep/nested/dir`、目录带整棵子树的文件计数）→ `ui/ChangeGroup.tsx` 的 `Group`/`TreeNodeView`（**两种形状都在 Group 里**，因为两个容器都要用；缩进是外层 `treeNode` 的 `padding-left`，行自己的内边距仍归样式表，深度步长 14px）→ `ui/change-view.ts`（模式 + 折叠目录的读写与 `dirKey(area, path)`：每组各建自己的树，所以在「已暂存」里折叠 `src` 不会折叠「更改」里的）→ 状态栏末端一个 `aria-pressed` 的切换按钮（VS Code 把视图动作放在视图标题栏，本插件没有标题栏，就放在状态栏；字形画的是**将要切到**的那一侧） |
 | 树的折叠状态是在嵌套里逐层渲染的（`TreeNodeView` 递归），行内动作与点行开 diff 都沿用 `ChangeRow`——树只改变路径**怎么画**，从不改变动作带着**哪个路径**走；因此树里的文件行不再重复目录前缀（`showDirectory={false}`），tooltip 仍是完整路径（FR-1.2） | `ui/ChangeGroup.tsx` + 测试断言树内 `+` 暂存的是完整仓库相对路径、点行读的也是同一个 path |
 
+### 刷新链路重做：独立的 git 状态探测模块
+
+产品方报障：「最近提交没有事件更新，刚刚丢更新了；你刚开始写文件的时候，文件也丢更新」。
+先诊断，后重做——**两个症状是两个不同的 bug**，第三个是顺带发现的漏报：
+
+| 症状 | 真因 | 处置 |
+|---|---|---|
+| **最近提交不更新** | 客户端 `HistoryPanel` 只在 `active && !loaded` 时读一次，`loaded` 永不复位，而那个「仓库变了」的计数器**只传给了 diff 面板**——所以事件其实触发了，列表也不会重读。与探测无关，是纯客户端 bug | 历史改订 `refs`（§6 第 9 条），重读时按**当前已展开的行数**取，不把用户翻出来的页丢掉。测试：「re-reads the history when a ref moves, and not when only a file does」 |
+| **写文件时丢更新** | 工作区里新建/编辑文件**不动 `.git` 里任何文件**（实测 `index`/`HEAD`/`logs/HEAD` 三者 mtime 全不变），而当时的 watcher 只 stat `.git` 下的几个文件——**事件源根本不存在**，不是丢事件 | 探测模块改为文件系统事件为主（工作区递归 + git 目录），轮询降为回退。实测覆盖：新建/修改/删除/新目录/新目录里的新文件/整目录删除后重建 |
+| （顺带）空提交、fetch、push 一直没信号 | `--allow-empty` 只动 `logs/HEAD`；`git fetch` 只动 `FETCH_HEAD` 与 `refs/remotes`；两者都不动 `index`/`HEAD`，而旧 stamp 列表里恰好一个都没包含 | 新增 `refs` 类信号；`test/git-probe.test.ts` 分别用空提交、`update-ref`、轮询回退三条测试钉住 |
+
+| 落点 | 内容 |
+|---|---|
+| `src/host/git-probe.ts`（新，**替代并删除** `host/watcher.ts`） | `createGitProbe(ports, { strategies })`：策略列表按序尝试，启动失败或运行中 `unavailable` 就换下一个。`fileSystemStrategy`＝工作区递归 + git 目录各一个 `fs.watch`（**空闲零成本**，无定时器）；`pollStrategy`＝回退（1s 状态戳 + 每 10s 补报一次 `worktree`，因为「什么都没动」在 `.git` 里看不出来）。分类是两个纯函数（`kindsInWorkTree` / `kindsInGitDir`），burst 窗口 80ms 合并后才上报 |
+| `src/host/adapter/routes.ts` | `/events` 退回纯 transport：`changed` 帧带上 `{"kinds":[…]}`。**订阅先于 ready**（探测 resolve＝已建立），客户端把 `ready` 也当成一次「可能变了」，关掉「面板首次读」与「探测建立」之间那一瞬的窗口 |
+| `src/client/ui/repo-change.tsx`（新） | 面板内的事件总线（context + `useSyncExternalStore`，单调计数）：历史订 `refs`、diff 订全部。**`generation` 那条 prop 链已删除**——以后加面板不必再改中间层 |
+| `src/core/status-signature.ts`（新） | 一次 status 读数的指纹。相同就不发布、不重渲染——「有事件」不等于「要重渲染」，否则 `.git/objects` 的写入会让整个面板每秒钟重画 |
+| `src/core/ports.ts` | `watch(sessionId, onChange: (change: GitChange) => void)`；`GitChangeKind`/`GitChange` 是探测与 UI 共用**中性词汇**（谁都不提文件名） |
+| 测试 | `test/git-probe.test.ts` 11 项（三类信号、burst 合并、启动失败换策略、运行中换策略、退订后安静、轮询回退的两种信号）+ 客户端 4 项（宿主报变化即重读、读数没变不发布、refs 重读历史而 worktree 不读、打开的 diff 跟随） |
+
 ### 已登记、本次不做的后续工作
 
 以下三项都是产品方在提出「提交 entry 要像 better-sidebar 那样」时确认要**记录**的工作（本文档对
@@ -423,7 +458,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | §8 | 现状 |
 |---|---|
 | 1 client-plugin API 稳定性 | **已证实是真问题**：本 profile 里装着 `@dsh-plugin/dsh-loader`，它的存在理由之一就是 `httpServer` 被改名为 `webServer`。防腐层正在起作用——DSH 变更的改动面被收口在 `adapter/` |
-| 2 watcher 可靠性 | 已用轮询（非 `fs.watch`）规避；但**同步盘/网络盘仍未实机验证** |
+| 2 watcher 可靠性 | **主路径已改为文件系统事件**（见 D25）：工作区递归 + git 目录各一个 `fs.watch`；D4 当初的顾虑（同步盘/网络盘上事件不可靠）仍成立，因此保留 `pollStrategy` 作为回退——它也是唯一会轮询的地方，并在自己的节奏上补报 `worktree`。**两条路径都未在真实的同步盘/网络盘上验过**；`fs.watch` 递归建立失败（inotify 上限/平台不支持）会自动降级 |
 | 3 AI 提交信息成本 | **已按文档落成**：只有 ✨ 被点才生成，`MAX_PROMPT_DIFF_CHARS = 12 000` 截断、`maxTokens = 512`、60s 截止。**未用一个真实 provider 跑过**——测试用的是桩模型（提示词、清洗、失败分类都验了，真实模型的措辞质量与延迟没验） |
 | 4 大仓库性能 | timeout 15s + `truncated` 标记已就位；**未在真实 monorepo 上压过** |
 | 5 兼容层的代价 | 接受。代价是简单功能也要过一道 ports；收益是 `core` 能在裸 Node 里测试 |

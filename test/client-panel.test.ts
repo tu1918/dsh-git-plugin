@@ -73,7 +73,7 @@ import type {
   OperationReport,
   RepoStatus,
 } from '../src/core/types.ts'
-import type { GitRemoteClient, Result } from '../src/core/ports.ts'
+import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
 
 /** A translator over the real English dictionary. */
 const t = (key: keyof typeof en, vars?: Readonly<Record<string, string | number>>): string => {
@@ -209,7 +209,7 @@ function stubGit(options: {
   status?: Result<RepoStatus>
   branches?: readonly BranchRef[]
   log?: readonly CommitInfo[]
-  watch?: (sessionId: string, onChange: () => void) => () => void
+  watch?: (sessionId: string, onChange: (change: GitChange) => void) => () => void
   /** What every report-returning mutation answers; a silent success by default. */
   report?: Result<OperationReport>
   /** What every commit answers; a fixed commit by default. */
@@ -893,8 +893,8 @@ describe('StatusPanel rendering', () => {
     )
   })
 
-  it('re-reads when the watcher reports a change', async () => {
-    let listeners: (() => void)[] = []
+  it('re-reads when the host reports a change', async () => {
+    let listeners: ((change: GitChange) => void)[] = []
     let statusCalls = 0
     const git: GitRemoteClient = {
       ...stubGit({}),
@@ -914,13 +914,114 @@ describe('StatusPanel rendering', () => {
     assert.equal(statusCalls, 1)
 
     await act(async () => {
-      for (const listener of listeners) listener()
+      for (const listener of listeners) listener({ kinds: ['worktree'] })
     })
     // The panel coalesces a burst into one trailing re-read.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 260))
     })
     assert.equal(statusCalls, 2, 'a change notification must trigger exactly one re-read')
+  })
+
+  it('publishes nothing when the reading did not change', async () => {
+    // The panel is told about `.git/objects`, a lock file, a branch it already
+    // knows: re-reading costs one status call, and re-rendering would fight every
+    // hover and scroll position in the panel. The panes must not hear about it.
+    let listeners: ((change: GitChange) => void)[] = []
+    let logCalls = 0
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      log: () => {
+        logCalls += 1
+        return Promise.resolve({
+          ok: true,
+          value: { commits: [commitFixture()], total: null, hasMore: false },
+        })
+      },
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((l) => l !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    assert.equal(logCalls, 1)
+
+    await act(async () => {
+      for (const listener of listeners) listener({ kinds: ['refs'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+    assert.equal(logCalls, 1, 'an unchanged repository must not wake the history')
+    assert.match(container.textContent ?? '', /a commit subject/)
+  })
+
+  it('re-reads the history when a ref moves, and not when only a file does', async () => {
+    let listeners: ((change: GitChange) => void)[] = []
+    let status: Result<RepoStatus> = { ok: true, value: statusFixture() }
+    let logCalls = 0
+    let commits: readonly CommitInfo[] = [commitFixture()]
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      status: () => Promise.resolve(status),
+      log: () => {
+        logCalls += 1
+        return Promise.resolve({ ok: true, value: { commits, total: null, hasMore: false } })
+      },
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((l) => l !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    assert.equal(logCalls, 1)
+    assert.match(container.textContent ?? '', /a commit subject/)
+
+    /** Report a change, and let the panel's coalescing window pass. */
+    const announce = async (kinds: readonly GitChangeKind[]): Promise<void> => {
+      await act(async () => {
+        for (const listener of listeners) listener({ kinds: [...kinds] })
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 260))
+      })
+    }
+
+    const base = statusFixture()
+    const moved = (oid: string): RepoStatus => ({ ...base, branch: { ...base.branch, oid } })
+
+    // A commit lands: the branch moves, and the list is about what is recent.
+    status = { ok: true, value: moved('b'.repeat(40)) }
+    commits = [
+      { ...commitFixture(), oid: 'c'.repeat(40), shortOid: 'ccccccc', subject: 'a newer commit' },
+      commitFixture(),
+    ]
+    await announce(['refs'])
+    assert.equal(logCalls, 2, 'a ref move must re-read the history')
+    assert.match(container.textContent ?? '', /a newer commit/)
+
+    // A file in the working tree is not history: re-reading the log for it would
+    // be a git process the user never asked for.
+    status = {
+      ok: true,
+      value: {
+        ...moved('b'.repeat(40)),
+        groups: {
+          ...base.groups,
+          untracked: [
+            { path: 'fresh.txt', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+          ],
+        },
+      },
+    }
+    await announce(['worktree'])
+    assert.equal(logCalls, 2, 'a worktree change must not spend a git log')
   })
 })
 
@@ -1570,6 +1671,54 @@ describe('the diff view (FR-2)', () => {
     assert.equal(must(container, `.${cls.diffView}`).getAttribute('data-diff-area'), 'index')
   })
 
+  it('refreshes an open diff when the repository moves (§4.4)', async () => {
+    // The pane subscribes to the panel's change bus rather than being handed a
+    // counter; this is the behaviour that subscription exists for — a diff a
+    // user is reading follows the agent's next write to that file.
+    const diffCalls: string[] = []
+    let listeners: ((change: GitChange) => void)[] = []
+    const base = statusFixture()
+    let status: Result<RepoStatus> = { ok: true, value: base }
+    const git: GitRemoteClient = {
+      ...stubGit({ diffCalls }),
+      status: () => Promise.resolve(status),
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((l) => l !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(diffCalls.length, 1)
+
+    // Something changed elsewhere in the repository (a new untracked file), so
+    // this reading differs from the last one and the change is published.
+    status = {
+      ok: true,
+      value: {
+        ...base,
+        groups: {
+          ...base.groups,
+          untracked: [
+            ...base.groups.untracked,
+            { path: 'fresh.txt', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+          ],
+        },
+      },
+    }
+    await act(async () => {
+      for (const listener of listeners) listener({ kinds: ['worktree'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+
+    assert.equal(diffCalls.length, 2, 'the open diff must re-read what it shows')
+  })
+
   it('stages from the + without opening a diff', async () => {
     const calls: ActionLog = { entries: [] }
     const diffCalls: string[] = []
@@ -1717,7 +1866,7 @@ describe('the diff view (FR-2)', () => {
     // A committed or discarded file has no row to go back to, so the pane must
     // not stay behind describing something the list no longer lists.
     let status: Result<RepoStatus> = { ok: true, value: statusFixture() }
-    let listeners: (() => void)[] = []
+    let listeners: ((change: GitChange) => void)[] = []
     const git: GitRemoteClient = {
       ...stubGit({}),
       status: () => Promise.resolve(status),
@@ -1735,7 +1884,7 @@ describe('the diff view (FR-2)', () => {
 
     status = { ok: true, value: statusWith({}) }
     await act(async () => {
-      for (const listener of listeners) listener()
+      for (const listener of listeners) listener({ kinds: ['worktree'] })
     })
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 260))
