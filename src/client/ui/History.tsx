@@ -1,17 +1,24 @@
 /**
- * The recent-commits panel: the rows, the detail they open, and the reading that
- * produces them (FR-3.6).
+ * The recent-commits panel: the list, the detail of the selected commit, and the
+ * reading that produces them (FR-3.6).
  *
  * It is the content of one tab of the bottom pane (the other is the diff), so it
  * has no header and no height of its own: activating its tab is what mounts it
- * with `active`, and the pane around it owns the scrolling edge and the grip.
+ * with `active`, and the pane around it owns the grip.
  *
- * The load is lazy for the reason §4.4 gives: a git call is a process, and the
- * panel's job at rest is the uncommitted change list. Nothing is read until the
- * tab is actually shown, which is also why `active` rather than `mounted`
- * triggers the first page. The DETAIL is lazier still — one row at a time, on
- * the click that opens it, because `git show --numstat` is another process and
- * most rows are never opened.
+ * ## Why the detail is a column, not an expansion
+ *
+ * Clicking a commit splits the panel in two: the entries stay on the left and the
+ * selected commit's information opens on the right. Expanding the detail under
+ * the row was the first shape, and it has two costs that only show up once a
+ * commit has more than a couple of files: the list jumps (the row you clicked
+ * moves down by the height of the detail) and the detail pushes the rest of the
+ * history off screen. A side-by-side split keeps both in place, and it is what
+ * the comparable sidebar's commit view does with the pane at its bottom.
+ *
+ * The DETAIL is read lazily — one commit at a time, on the click that selects it,
+ * because `git show --numstat` is another process and most commits are never
+ * opened. Each one is remembered, so switching back and forth costs nothing.
  *
  * @module dsh-git-panel/client/ui/History
  */
@@ -24,7 +31,7 @@ import type { GitRemoteClient, Result } from '../../core/ports.ts'
 import type { CommitDetail, CommitInfo } from '../../core/types.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
-import { DotGlyph, RingGlyph } from './icons.tsx'
+import { CloseGlyph, DotGlyph, RingGlyph } from './icons.tsx'
 
 /**
  * One file inside a commit (FR-3.6).
@@ -58,70 +65,132 @@ function CommitFileRow({
 }
 
 /**
- * One commit row: the handle for this commit, its metadata, and the detail it
- * can expand into.
+ * The right half: everything the panel knows about the selected commit.
  *
- * The row's entry is a real `<button>` because a commit is something the panel
- * will do things TO — M5 adds drop/squash/reset, and FR-3.8's undo already names
- * the newest commit. A button is what that handle has to be: focusable,
- * Enter/Space-activatable, and `aria-expanded`-able without a hand-rolled
- * keyboard handler that can drift from the mouse one.
+ * It names its commit in its own header — hash and subject — because the row
+ * that was clicked is in the other column and can be scrolled out of sight.
+ * @param props - The commit, its detail, and the way back to the full-width list.
  */
-function CommitRow({
+function CommitDetailPane({
   commit,
   detail,
-  now,
   t,
   locale,
-  busy,
-  open,
-  onToggle,
+  onClose,
 }: {
   readonly commit: CommitInfo
-  /** The row's detail, or `null` while it has not been read (or failed). */
+  /** The commit's detail, or `null` while it is still being read. */
   readonly detail: Result<CommitDetail> | null
-  readonly now: number
   readonly t: Translate
   readonly locale: string
-  /** True while this row's detail is being read. */
-  readonly busy: boolean
-  readonly open: boolean
-  readonly onToggle: () => void
+  readonly onClose: () => void
 }): ReactNode {
-  const age = relativeTimeParts(commit.committedAt, now)
-  const format = useMemo(() => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }), [locale])
   const date = useMemo(
     () => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }),
     [locale],
   )
+
+  return (
+    <section
+      className={cls.historyDetail}
+      data-commit-detail={commit.shortOid}
+      aria-label={t('history.detail', { hash: commit.shortOid })}
+    >
+      <div className={cls.historyDetailHead}>
+        <span className={cls.commitHash}>{commit.shortOid}</span>
+        <span className={cls.commitSubject} title={commit.subject}>
+          {commit.subject === '' ? '—' : commit.subject}
+        </span>
+        <button
+          type="button"
+          className={cls.tool}
+          title={t('history.close')}
+          aria-label={t('history.close')}
+          onClick={onClose}
+        >
+          <CloseGlyph />
+        </button>
+      </div>
+      {detail === null && <p className={cls.note}>{t('history.loading')}</p>}
+      {detail !== null && !detail.ok && (
+        <p className={cls.note} data-multiline={String((detail.error.detail ?? '').includes('\n'))}>
+          {detail.error.message}
+        </p>
+      )}
+      {detail !== null && detail.ok && (
+        <>
+          <dl className={cls.commitFields}>
+            <dt>{t('history.author')}</dt>
+            <dd>{detail.value.commit.authorName}</dd>
+            <dt>{t('history.authoredAt')}</dt>
+            <dd>{date.format(new Date(detail.value.commit.authoredAt))}</dd>
+            <dt>{t('history.committedAt')}</dt>
+            <dd>{date.format(new Date(detail.value.commit.committedAt))}</dd>
+            {detail.value.commit.parents.length > 0 && (
+              <>
+                <dt>{t('history.parents')}</dt>
+                <dd className={cls.commitHash}>
+                  {detail.value.commit.parents.map((parent) => parent.slice(0, 7)).join(' ')}
+                </dd>
+              </>
+            )}
+          </dl>
+          <p className={cls.commitFilesHead}>{t('history.files', { count: detail.value.files.length })}</p>
+          {detail.value.files.length === 0 && <p className={cls.note}>{t('history.noFiles')}</p>}
+          {detail.value.files.map((file) => (
+            <CommitFileRow key={file.path} file={file} t={t} />
+          ))}
+        </>
+      )}
+    </section>
+  )
+}
+
+/**
+ * One commit row: the handle for this commit.
+ *
+ * The row IS a real `<button>` — both of its lines — because a commit is
+ * something the panel will do things TO (M5 adds drop/squash/reset, and FR-3.8's
+ * undo already names the newest commit). A real button brings focus, Enter/Space
+ * activation and a future disabled state with it, and it is also what makes the
+ * clickable area exactly the hover band: a highlight that covered the caption
+ * while only the title answered a click would be lying about where the click
+ * lands. Consequence for that action strip: it has to be a SIBLING of this
+ * button, never a child.
+ */
+function CommitRow({
+  commit,
+  now,
+  t,
+  locale,
+  selected,
+  onSelect,
+}: {
+  readonly commit: CommitInfo
+  readonly now: number
+  readonly t: Translate
+  readonly locale: string
+  /** Whether this commit is the one showing in the detail column. */
+  readonly selected: boolean
+  readonly onSelect: () => void
+}): ReactNode {
+  const age = relativeTimeParts(commit.committedAt, now)
+  const format = useMemo(() => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }), [locale])
   const relative = format.format(age.value, age.unit)
 
   return (
     // The row carries the commit's full object id, because per-commit operations
-    // (M5's drop/squash/reset) address a commit by that id and the DOM is where a
-    // future action strip will read it from. The short hash stays what is shown.
-    <div className={cls.commit} data-open={String(open)} data-commit={commit.oid}>
-      {/* The row IS the button, and it holds both of its lines.
-          That is the whole point: the hot zone has to be what the hover band
-          covers, or the band lies about where a click lands. The comparable
-          sidebar's commit rows have the same reach (they are a div wearing
-          `role="button"`, which is the same shape with worse semantics); ours is
-          a real `<button>`, so focus, Enter/Space and a future disabled state
-          come from the element rather than from a hand-rolled key handler.
-          Consequence to keep in mind for the action strip recorded in
-          docs/plan.md: it has to be a SIBLING of this button, never a child —
-          a button inside a button is invalid markup, and the inner one is not
-          reliably clickable (the same rule the change group's header follows).
-          That is also why the reference implementation keeps its per-commit
-          operations in a row-level context menu. */}
+    // (M5's drop/squash/reset) address a commit by that id. The short hash is what
+    // is shown.
+    <div className={cls.commit} data-commit={commit.oid}>
       <button
         type="button"
         className={cls.commitRow}
-        data-selected={String(open)}
-        aria-expanded={open}
+        data-selected={String(selected)}
+        aria-expanded={selected}
         aria-label={t('history.open', { hash: commit.shortOid })}
         title={commit.subject}
-        onClick={onToggle}
+        onClick={onSelect}
       >
         <span className={cls.commitTop}>
           <span className={cls.commitHash}>{commit.shortOid}</span>
@@ -142,43 +211,6 @@ function CommitRow({
           )}
         </span>
       </button>
-      {open && (
-        <div className={cls.commitDetail} data-commit-detail={commit.shortOid}>
-          {detail === null && <p className={cls.note}>{t('history.loading')}</p>}
-          {detail !== null && !detail.ok && (
-            <p className={cls.note} data-multiline={String((detail.error.detail ?? '').includes('\n'))}>
-              {detail.error.message}
-            </p>
-          )}
-          {detail !== null && detail.ok && (
-            <>
-              <dl className={cls.commitFields}>
-                <dt>{t('history.author')}</dt>
-                <dd>{detail.value.commit.authorName}</dd>
-                <dt>{t('history.authoredAt')}</dt>
-                <dd>{date.format(new Date(detail.value.commit.authoredAt))}</dd>
-                <dt>{t('history.committedAt')}</dt>
-                <dd>{date.format(new Date(detail.value.commit.committedAt))}</dd>
-                {detail.value.commit.parents.length > 0 && (
-                  <>
-                    <dt>{t('history.parents')}</dt>
-                    <dd className={cls.commitHash}>
-                      {detail.value.commit.parents.map((parent) => parent.slice(0, 7)).join(' ')}
-                    </dd>
-                  </>
-                )}
-              </dl>
-              <p className={cls.commitFilesHead}>
-                {t('history.files', { count: detail.value.files.length })}
-              </p>
-              {detail.value.files.length === 0 && <p className={cls.note}>{t('history.noFiles')}</p>}
-              {detail.value.files.map((file) => (
-                <CommitFileRow key={file.path} file={file} t={t} />
-              ))}
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -200,7 +232,8 @@ export interface HistoryPanelProps {
 }
 
 /**
- * The commit list, paged with the host's look-ahead, with per-row detail.
+ * The commit list, paged with the host's look-ahead, and the selected commit's
+ * detail beside it.
  * @param props - Session, client, copy, and whether the tab is showing.
  */
 export function HistoryPanel({
@@ -216,12 +249,10 @@ export function HistoryPanel({
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [now] = useState(() => Date.now())
-  /** The row whose detail is open, by object id. */
+  /** The selected commit, by object id: the one the detail column is about. */
   const [openOid, setOpenOid] = useState<string | null>(null)
-  /** Details already read, by object id, so reopening costs no process. */
+  /** Details already read, by object id, so reselecting costs no process. */
   const [details, setDetails] = useState<ReadonlyMap<string, Result<CommitDetail>>>(new Map())
-  /** The row whose detail is being read right now, if any. */
-  const [loadingOid, setLoadingOid] = useState<string | null>(null)
 
   const append = useCallback(
     async (offset: number) => {
@@ -241,48 +272,63 @@ export function HistoryPanel({
     void append(0)
   }, [active, loaded, append])
 
-  const toggle = useCallback(
+  const select = useCallback(
     (oid: string) => {
+      // Clicking the selected row again closes the column: with only two states,
+      // one gesture has to do both, and the detail's own close button is there
+      // for anyone who expects it to be the only way.
       setOpenOid((current) => (current === oid ? null : oid))
       if (details.has(oid)) return
-      setLoadingOid(oid)
       void (async () => {
         const detail = await git.showCommit(sessionId, oid, signal)
-        setLoadingOid((current) => (current === oid ? null : current))
         setDetails((current) => new Map(current).set(oid, detail))
       })()
     },
     [details, git, sessionId, signal],
   )
 
+  const selected = commits.find((commit) => commit.oid === openOid) ?? null
+
   return (
-    <>
-      {loaded && commits.length === 0 && <p className={cls.note}>{t('history.empty')}</p>}
-      {commits.map((commit) => (
-        <CommitRow
-          key={commit.oid}
-          commit={commit}
-          detail={details.get(commit.oid) ?? null}
-          now={now}
+    // The list is the first child and the detail the second, which is what makes
+    // "entries on the left, information on the right" a property of the markup
+    // rather than of a style rule the tests would have to guess at.
+    <div className={cls.historySplit} data-split={String(selected !== null)}>
+      <div className={cls.historyList}>
+        {loaded && commits.length === 0 && <p className={cls.note}>{t('history.empty')}</p>}
+        {commits.map((commit) => (
+          <CommitRow
+            key={commit.oid}
+            commit={commit}
+            now={now}
+            t={t}
+            locale={locale}
+            selected={commit.oid === openOid}
+            onSelect={() => select(commit.oid)}
+          />
+        ))}
+        {hasMore && (
+          <p className={cls.note}>
+            <button
+              type="button"
+              className={cls.ghost}
+              disabled={busy}
+              onClick={() => void append(commits.length)}
+            >
+              {t('history.loadMore')}
+            </button>
+          </p>
+        )}
+      </div>
+      {selected !== null && (
+        <CommitDetailPane
+          commit={selected}
+          detail={details.get(selected.oid) ?? null}
           t={t}
           locale={locale}
-          busy={loadingOid === commit.oid}
-          open={openOid === commit.oid}
-          onToggle={() => toggle(commit.oid)}
+          onClose={() => setOpenOid(null)}
         />
-      ))}
-      {hasMore && (
-        <p className={cls.note}>
-          <button
-            type="button"
-            className={cls.ghost}
-            disabled={busy}
-            onClick={() => void append(commits.length)}
-          >
-            {t('history.loadMore')}
-          </button>
-        </p>
       )}
-    </>
+    </div>
   )
 }

@@ -90,14 +90,16 @@ export const cls = {
   statusHint: `${P}-status-hint`,
   primary: `${P}-primary`,
   note: `${P}-note`,
+  historySplit: `${P}-history-split`,
   historyList: `${P}-history-list`,
+  historyDetail: `${P}-history-detail`,
+  historyDetailHead: `${P}-history-detail-head`,
   commit: `${P}-commit`,
   commitRow: `${P}-commit-row`,
   commitTop: `${P}-commit-top`,
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
   commitMeta: `${P}-commit-meta`,
-  commitDetail: `${P}-commit-detail`,
   commitFields: `${P}-commit-fields`,
   commitFilesHead: `${P}-commit-files-head`,
   commitFile: `${P}-commit-file`,
@@ -1089,14 +1091,16 @@ export const css = `
   min-height: 0;
 }
 
-/* The commit list is the one panel that scrolls its whole body; the diff brings
-   its own scroller (the hunks) so its path header and layout buttons stay put. */
+/* The history tab's frame. It does NOT scroll: the split inside it has a
+   scrolling column per side (the list and the selected commit), which is what
+   lets the two scroll independently. The diff tab is the same idea with its own
+   scroller (the hunks), so its path header and layout buttons stay put. */
 .${cls.bottomScroll} {
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* The diff panel is a flex column of its own (header, hunks, notes), so it does
@@ -1169,12 +1173,52 @@ export const css = `
   gap: 6px;
 }
 
-.${cls.commitDetail} {
+/* ── the commit list and its detail (FR-3.6) ───────────────────────────── */
+
+/* One row of two columns: the entries on the left, the selected commit on the
+   right. Closed, the list takes the whole width — the split exists only while
+   something is selected. */
+.${cls.historySplit} {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.${cls.historyList} {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+.${cls.historySplit}[data-split='true'] > .${cls.historyList} {
+  /* Half each, as asked: the entries stay readable while the information is
+     open, and neither side can push the other out of the pane. */
+  flex: 1 1 50%;
+}
+
+.${cls.historyDetail} {
+  display: flex;
+  flex: 1 1 50%;
   flex-direction: column;
-  gap: 2px;
-  /* Aligned under the row above it, one step in from the row's own padding. */
-  padding: 5px 12px 3px 24px;
+  gap: 3px;
+  min-width: 0;
+  overflow: auto;
+  padding: 6px 12px 8px;
+  border-left: 0.5px solid var(--dsw-alias-border-l3);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+/* Which commit the column is about: the row it came from is in the other column
+   and can be scrolled out of sight. */
+.${cls.historyDetailHead} {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
 }
 
 .${cls.commitFields} {

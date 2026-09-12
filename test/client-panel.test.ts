@@ -2141,12 +2141,30 @@ describe('the commit detail (FR-3.6)', () => {
     assert.equal(title.firstElementChild?.className, cls.commitHash)
     assert.equal(entry.getAttribute('data-selected'), 'false')
 
+    // Closed, the list has the whole pane to itself.
+    const split = must(container, `.${cls.historySplit}`)
+    assert.equal(split.getAttribute('data-split'), 'false')
+    assert.equal(split.children.length, 1)
+
     // Clicking the CAPTION toggles too. That is the assertion that would fail if
     // the button ever went back to wrapping only the title.
     await click(must(container, `[data-commit-meta]`))
     await flush()
     assert.equal(entry.getAttribute('aria-expanded'), 'true')
     assert.equal(entry.getAttribute('data-selected'), 'true')
+
+    // Open, the pane is two columns: the ENTRIES on the left, the selected
+    // commit's information on the right. That order is markup, not styling.
+    assert.equal(split.getAttribute('data-split'), 'true')
+    assert.equal(split.children.length, 2)
+    assert.equal(split.children[0]?.className, cls.historyList)
+    assert.equal(split.children[1]?.className, cls.historyDetail)
+    assert.ok(split.children[0]?.contains(entry), 'the clicked row stays in the left column')
+    // The information column names its commit, because the row it came from is in
+    // the other column and can be scrolled out of sight.
+    const head = must(split.children[1] as Element, `.${cls.historyDetailHead}`)
+    assert.match(head.textContent ?? '', /bbbbbbb/)
+    assert.match(head.textContent ?? '', /a commit subject/)
 
     const panel = must(container, '[data-commit-detail]')
     const text = panel.textContent ?? ''
@@ -2160,13 +2178,66 @@ describe('the commit detail (FR-3.6)', () => {
     assert.match(text, /ddddddd/, 'the parent is named, shortened')
     assert.deepEqual(calls.entries, [`showCommit:${'b'.repeat(40)}`])
 
-    // Folding and reopening costs no second git call: the detail is remembered.
+    // Its own close button is the second way out, for anyone who does not think
+    // to click the row again.
+    await click(must(split.children[1] as Element, `.${cls.tool}`))
+    assert.equal(container.querySelector('[data-commit-detail]'), null)
+    assert.equal(split.getAttribute('data-split'), 'false')
+    assert.equal(split.children.length, 1)
+
+    // Closing and reopening costs no second git call: the detail is remembered.
+    await click(entry)
+    assert.equal(entry.getAttribute('aria-expanded'), 'true')
+    assert.equal(calls.entries.length, 1)
+
+    // Clicking the selected row again closes the column.
     await click(entry)
     assert.equal(container.querySelector('[data-commit-detail]'), null)
     assert.equal(entry.getAttribute('aria-expanded'), 'false')
     assert.equal(entry.getAttribute('data-selected'), 'false')
-    await click(entry)
-    assert.equal(calls.entries.length, 1)
+  })
+
+  it('switches the information column to whichever commit was clicked last', async () => {
+    const calls: ActionLog = { entries: [] }
+    const second: CommitInfo = {
+      ...commitFixture(),
+      oid: 'e'.repeat(40),
+      shortOid: 'eeeeeee',
+      subject: 'the newer one',
+    }
+    const git: GitRemoteClient = {
+      // Newest first, as `git log` reports it.
+      ...stubGit({ calls, log: [second, commitFixture()] }),
+      showCommit: (_sessionId, hash) =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            commit: { ...commitFixture(), oid: hash, shortOid: hash.slice(0, 7) },
+            files: [{ path: 'src/a.ts', additions: 1, deletions: 0, binary: false }],
+          },
+        }),
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(must(container, `.${cls.bottomTab}`))
+
+    const rows = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRow}`)]
+    assert.equal(rows.length, 2)
+
+    await click(must(rows[0] as Element, `[data-commit-meta]`))
+    await flush()
+    let info = must(container, `[data-commit-detail]`)
+    assert.match(info.textContent ?? '', /eeeeeee/)
+    assert.match(info.textContent ?? '', /the newer one/)
+
+    // Selecting another commit re-points the same column; it does not stack a
+    // second one beside it.
+    await click(rows[1] as Element)
+    await flush()
+    info = must(container, `[data-commit-detail]`)
+    assert.match(info.textContent ?? '', /bbbbbbb/)
+    assert.match(info.textContent ?? '', /a commit subject/)
+    assert.equal(container.querySelectorAll('[data-commit-detail]').length, 1)
   })
 })
 

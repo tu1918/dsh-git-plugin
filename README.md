@@ -46,7 +46,7 @@ message, and a commit detail.
 | Merge state: a bar with "continue" (git's own `MERGE_MSG`) and "abort" (two clicks), driven by `MERGE_HEAD` rather than by the conflict list | ✅ |
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
 | Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
-| A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — stays lit while its detail is open, and expands into its metadata and file list (per-file churn, and git's own binary answer) | ✅ |
+| A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — and selecting it splits the pane: the entries stay on the left, that commit's information opens on the right (metadata, then its file list with per-file churn and git's own binary answer) | ✅ |
 | Discard / stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
@@ -98,7 +98,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 281 tests && build
+npm run check      # tsc --noEmit && 282 tests && build
 ```
 
 ## Install

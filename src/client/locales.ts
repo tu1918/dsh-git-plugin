@@ -130,6 +130,8 @@ export const zh = {
   'history.files': '{count} 个文件',
   'history.noFiles': '这次提交没有文件改动（合并提交按第一个父提交统计，也可能为空）。',
   'history.binary': '二进制',
+  'history.detail': '提交 {hash} 的信息',
+  'history.close': '收起提交信息',
 
   'diff.open': '打开 {path} 的差异',
   'diff.close': '返回变更列表',
@@ -274,6 +276,8 @@ export const en: Record<GitPanelKey, string> = {
   'history.noFiles':
     'This commit changed no files (a merge is counted against its first parent, and can still be empty).',
   'history.binary': 'binary',
+  'history.detail': 'Details of commit {hash}',
+  'history.close': 'Close the commit detail',
 
   'diff.open': 'Open the diff of {path}',
   'diff.close': 'Back to the change list',
