@@ -2133,6 +2133,12 @@ describe('the commit detail (FR-3.6)', () => {
     // the button, so there is no part of the band that does not respond.
     assert.ok(entry.contains(must(container, `.${cls.commitTop}`)))
     assert.ok(entry.contains(must(container, `[data-commit-meta]`)))
+    // No disclosure caret in front of the hash: the row itself is the button, so
+    // an expand arrow would be a second affordance saying what the band already
+    // says (asked for after the row became one button).
+    const title = must(container, `.${cls.commitTop}`)
+    assert.equal(title.querySelector('svg'), null, 'the entry carries no leading glyph')
+    assert.equal(title.firstElementChild?.className, cls.commitHash)
     assert.equal(entry.getAttribute('data-selected'), 'false')
 
     // Clicking the CAPTION toggles too. That is the assertion that would fail if

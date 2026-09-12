@@ -24,7 +24,7 @@ import type { GitRemoteClient, Result } from '../../core/ports.ts'
 import type { CommitDetail, CommitInfo } from '../../core/types.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
-import { CaretGlyph, DotGlyph, RingGlyph } from './icons.tsx'
+import { DotGlyph, RingGlyph } from './icons.tsx'
 
 /**
  * One file inside a commit (FR-3.6).
@@ -124,7 +124,6 @@ function CommitRow({
         onClick={onToggle}
       >
         <span className={cls.commitTop}>
-          <CaretGlyph className={cls.historyCaret} />
           <span className={cls.commitHash}>{commit.shortOid}</span>
           <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
         </span>

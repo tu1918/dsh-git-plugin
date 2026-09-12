@@ -97,7 +97,6 @@ export const cls = {
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
   commitMeta: `${P}-commit-meta`,
-  historyCaret: `${P}-history-caret`,
   commitDetail: `${P}-commit-detail`,
   commitFields: `${P}-commit-fields`,
   commitFilesHead: `${P}-commit-files-head`,
@@ -1136,7 +1135,7 @@ export const css = `
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
-  padding: 4px 12px 5px 22px;
+  padding: 4px 12px 5px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -1170,23 +1169,12 @@ export const css = `
   gap: 6px;
 }
 
-.${cls.historyCaret} {
-  flex: none;
-  align-self: center;
-  color: var(--dsw-alias-label-tertiary);
-  transition: transform 120ms ease;
-}
-
-.${cls.commitRow}[aria-expanded='true'] .${cls.historyCaret} {
-  transform: rotate(90deg);
-}
-
 .${cls.commitDetail} {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* Aligned under the row above it: the row's own 22px gutter plus one step. */
-  padding: 5px 12px 3px 40px;
+  /* Aligned under the row above it, one step in from the row's own padding. */
+  padding: 5px 12px 3px 24px;
 }
 
 .${cls.commitFields} {
