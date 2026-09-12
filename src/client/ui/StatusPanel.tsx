@@ -465,6 +465,7 @@ function Group({
   t,
   busy,
   batch,
+  emptyNote,
   collapsed,
   onToggle,
   onStage,
@@ -477,6 +478,13 @@ function Group({
   readonly t: Translate
   readonly busy: boolean
   readonly batch?: GroupBatch
+  /**
+   * Copy to show when the group has no rows, which also keeps the group on
+   * screen. Without it an empty group renders nothing at all — right for a list
+   * that comes and goes, wrong for the staged drawer, which is the anchor of the
+   * commit box above it and should not vanish the moment the index is empty.
+   */
+  readonly emptyNote?: string
   /** Whether the group's rows are folded away. */
   readonly collapsed: boolean
   /** Fold or unfold this group. */
@@ -485,7 +493,7 @@ function Group({
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
-  if (entries.length === 0) return null
+  if (entries.length === 0 && emptyNote === undefined) return null
   return (
     <section className={cls.group} data-group={area} data-collapsed={String(collapsed)}>
       <div className={cls.groupHead}>
@@ -513,6 +521,9 @@ function Group({
           </span>
         )}
       </div>
+      {!collapsed && entries.length === 0 && (
+        <p className={cls.groupEmpty}>{emptyNote}</p>
+      )}
       {!collapsed &&
         entries.map((entry) => (
           <ChangeRow
@@ -779,7 +790,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-                collapsed={collapsedGroups.has('staged')}
+              emptyNote={t('group.stagedEmpty')}
+              collapsed={collapsedGroups.has('staged')}
               onToggle={() => toggleGroup('staged')}
               onStage={stage}
               onUnstage={unstage}
@@ -803,7 +815,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-                collapsed={collapsedGroups.has('staged')}
+              emptyNote={t('group.stagedEmpty')}
+              collapsed={collapsedGroups.has('staged')}
               onToggle={() => toggleGroup('staged')}
               onStage={stage}
               onUnstage={unstage}

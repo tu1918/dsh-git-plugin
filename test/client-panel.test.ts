@@ -458,6 +458,44 @@ describe('StatusPanel rendering', () => {
     await settle()
     assert.equal(container.querySelector('[data-git-panel-state="clean"]') !== null, true)
     assert.match(container.textContent ?? '', /No uncommitted changes/)
+    // The staged drawer is a fixture of the panel rather than a list that comes
+    // and goes with its content: it is the commit box's anchor, and its own empty
+    // state says so in words.
+    const drawer = must(container, `[data-group="staged"]`)
+    assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
+    assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
+  })
+
+  it('keeps the staged drawer on screen when only the index is empty', async () => {
+    const status = statusFixture()
+    const working = {
+      ...status,
+      groups: { ...status.groups, staged: [], conflicted: [] },
+    }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: working } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // No clean state here — there are unstaged changes — but the drawer is still
+    // there, counting zero, with its note instead of rows.
+    assert.equal(container.querySelector('[data-git-panel-state="clean"]'), null)
+    const drawer = must(container, `[data-group="staged"]`)
+    assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
+    assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
+    assert.equal(drawer.querySelectorAll(`.${cls.row}`).length, 0)
+    // A group whose content is genuinely optional still comes and goes.
+    assert.equal(container.querySelector('[data-group="untracked"]') !== null, true)
+
+    // Folding it leaves the header and the count: the anchor survives the fold.
+    await click(must(drawer, `.${cls.groupToggle}`))
+    assert.equal(drawer.querySelector(`.${cls.groupEmpty}`), null)
+    assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
   })
 
   it('renders a git failure in the panel’s own words, with git’s text as detail', async () => {

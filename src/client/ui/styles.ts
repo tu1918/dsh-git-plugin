@@ -41,6 +41,7 @@ export const cls = {
   groupHead: `${P}-group-head`,
   groupLabel: `${P}-group-label`,
   count: `${P}-count`,
+  groupEmpty: `${P}-group-empty`,
   groupActions: `${P}-group-actions`,
   groupToggle: `${P}-group-toggle`,
   groupCaret: `${P}-group-caret`,
@@ -357,6 +358,16 @@ export const css = `
    as one. */
 .${cls.groupActions} .${cls.ghost} {
   color: var(--dsw-alias-label-secondary);
+}
+
+/* The empty state of a resident group. Indented to the rows' text column
+   (12px of row padding + a 12px badge + the 8px gap) so it reads as "this group
+   has no rows" rather than as a stray sentence. */
+.${cls.groupEmpty} {
+  margin: 0;
+  padding: 4px 12px 6px 32px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
 }
 
 .${cls.row} {
