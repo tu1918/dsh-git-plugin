@@ -1215,11 +1215,24 @@ export const css = `
    replaces that with pixels. */
 .${cls.bottom} {
   display: flex;
-  /* Shrinkable to its tab strip, and never taller than what the rest of the
-     column's floors leave — the same number the grip's drag is clamped to, so a
-     remembered height from a taller window cannot squeeze the regions above it
-     either. */
-  flex: 0 1 auto;
+  /* NOT shrinkable, and never taller than what the rest of the column's floors
+     leave — the same number the grip's drag is clamped to, so a remembered
+     height from a taller window cannot squeeze the regions above it either.
+
+     '0 0' rather than '0 1' is the fix for "folding the staged drawer squeezes
+     the dock": the dock's height belongs to its drag, its content, and the
+     budget's clamp — never to a sibling's growth. With shrink on, expanding the
+     staged list made flexbox tax the dock for the difference (the change list
+     already at its floor has nothing left to give); with it off, the staged
+     drawer absorbs its own growth by shrinking into its own scroller, and the
+     dock keeps the height the user set.
+
+     Spelled as three longhands rather than the 'flex' shorthand: jsdom does not
+     expand 'flex: 0 0 auto', so the shorthand would leave the layout contracts
+     in test/client-panel.test.ts asserting nothing. */
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: auto;
   flex-direction: column;
   min-height: ${DOCK_MIN_HEIGHT}px;
   max-height: calc(100% - ${DOCK_RESERVED}px);

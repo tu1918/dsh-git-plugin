@@ -815,6 +815,11 @@ describe('StatusPanel rendering', () => {
     // The dock opens on the history tab, whose default is "content height, up to
     // two fifths of the window" — and never more than the budget leaves.
     assert.equal(dockStyle.maxHeight, `min(40vh, 100% - ${String(DOCK_RESERVED)}px)`)
+    // And it never pays for a sibling's growth: with shrink on, expanding the
+    // staged list taxed the dock for the difference (the change list was
+    // already at its floor) — folding the staged drawer visibly squeezed the
+    // tab area. Reported from the running panel; the shrink flag stays off.
+    assert.equal(dockStyle.flexShrink, '0')
 
     // A dragged height is remembered, but clamped by the same number — otherwise
     // a reload in a shorter window would squeeze the regions above the dock.
