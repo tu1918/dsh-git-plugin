@@ -38,6 +38,7 @@ import type {
 } from '../../core/types.ts'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
+import { Menu, type MenuEntry } from './menu.tsx'
 import { Popover } from './popover.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
@@ -135,6 +136,16 @@ type ActionState =
   | { readonly kind: 'running'; readonly op: ActionOp; readonly label: string }
   | { readonly kind: 'done'; readonly op: ActionOp; readonly label: string; readonly summary: string }
   | { readonly kind: 'failed'; readonly op: ActionOp; readonly label: string; readonly error: GitPanelError }
+
+/** The row whose menu is open, and the element its layer hangs from. */
+interface RowMenu {
+  /** The row element: the layer is measured from its bottom (or top) edge. */
+  readonly anchor: HTMLElement
+  /** The file the menu acts on. */
+  readonly entry: FileChange
+  /** The group the row was opened in, which decides what the row can do. */
+  readonly area: ChangeArea
+}
 
 /**
  * Reduce a mutation's report to the one line the panel shows.
@@ -471,6 +482,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
   /** Whether the branch picker is unfolded (FR-4.1). */
   const [pickerOpen, setPickerOpen] = useState(false)
+  /** The change row whose menu is open (§9's file menu), or `null`. */
+  const [menu, setMenu] = useState<RowMenu | null>(null)
   /** The rail the picker's layer is measured from, and the id that names it. */
   const railRef = useRef<HTMLDivElement | null>(null)
   const pickerId = useId()
@@ -548,6 +561,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setAction({ kind: 'idle' })
     setOpenFile(null)
     setPickerOpen(false)
+    setMenu(null)
     setBranchRefusal(null)
     setGenerating(false)
     setAiNote(null)
@@ -573,6 +587,18 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     )
     if (!listed) setOpenFile(null)
   }, [openFile, snapshot, busy])
+
+  // The same rule for an open menu: the row it hangs from can leave the list
+  // under it — another window commits or discards the file — and a menu over a
+  // row that is gone would act on a path the panel no longer lists.
+  useEffect(() => {
+    if (menu === null || busy || snapshot === null || snapshot.kind !== 'ready') return
+    const { groups } = snapshot.status
+    const listed = CHANGE_AREAS.some((area) =>
+      groups[area].some((entry) => entry.path === menu.entry.path),
+    )
+    if (!listed) setMenu(null)
+  }, [menu, snapshot, busy])
 
   /**
    * Run one mutation, then report it or re-read the repository.
@@ -786,10 +812,58 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param area - The group it was activated in, which picks the comparison.
    */
   const openDiff = (entry: FileChange, area: ChangeArea): void => {
+    // The row IS the open menu's anchor, and a press on the anchor is not an
+    // "outside" press — so without this the menu would stay up over the diff it
+    // just opened.
+    setMenu(null)
     setOpenFile({ path: entry.path, area: diffAreaOf(area) })
   }
 
+  /**
+   * Open one row's menu (§9's file menu), anchored on the row that asked for it.
+   * @param entry - The row the menu acts on.
+   * @param area - The group the row was opened in.
+   * @param anchor - The row element, which the layer is measured from.
+   */
+  const openMenu = (entry: FileChange, area: ChangeArea, anchor: HTMLElement): void => {
+    // Shift+F10 reaches here without a press, so the branch list would otherwise
+    // stay open behind the menu: two layers, one panel.
+    setPickerOpen(false)
+    setMenu({ anchor, entry, area })
+  }
+
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
+
+  /**
+   * What the open row menu offers.
+   *
+   * One entry today: the row's own staging action — the one thing this row can do
+   * that the panel can already run (`git add` for a conflict is FR-9.2's "mark
+   * resolved", the same command with the name that says so). It is the shape §9's
+   * file menu fills in rather than a finished menu: 「放弃更改」 arrives with M5a's
+   * discard (§10.1 order 2), the copying entries with §10.2 order 6.
+   */
+  const menuLabel = menu === null ? '' : t('menu.fileRow', { path: menu.entry.path })
+  const menuEntries: readonly MenuEntry[] =
+    menu === null
+      ? []
+      : [
+          menu.area === 'staged'
+            ? {
+                kind: 'item',
+                id: 'unstage',
+                label: t('action.unstage'),
+                disabled: pending,
+                onSelect: () => unstage([menu.entry.path]),
+              }
+            : {
+                kind: 'item',
+                id: 'stage',
+                label: menu.area === 'conflicted' ? t('action.resolve') : t('action.stage'),
+                disabled: pending,
+                onSelect: () => stage([menu.entry.path]),
+              },
+        ]
 
   return (
     // The provider renders nothing; it is how a pane below hears that the
@@ -834,6 +908,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               onDelete={deleteBranch}
               refusal={branchRefusal}
               onClose={() => setPickerOpen(false)}
+            />
+          </Popover>
+        )}
+        {/* A change row's menu (§9's file menu): the same layer the branch list
+            uses, anchored on the row that opened it — right-click, Shift+F10, or
+            the menu key — so it covers the list instead of moving it. */}
+        {menu !== null && (
+          <Popover
+            anchor={menu.anchor}
+            label={menuLabel}
+            onClose={() => setMenu(null)}
+          >
+            <Menu
+              entries={menuEntries}
+              label={menuLabel}
+              onClose={() => setMenu(null)}
             />
           </Popover>
         )}
@@ -928,6 +1018,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             onStage={stage}
             onUnstage={unstage}
             onOpen={openDiff}
+            onMenu={openMenu}
           />
         </div>
         <CommitBox
@@ -974,6 +1065,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onStage={stage}
                 onUnstage={unstage}
                 onOpen={openDiff}
+                onMenu={openMenu}
               />
               {/* The working tree as two more sections of this one list. They do not
                   size themselves: the body scrolls, and its groups flow into it —
@@ -994,6 +1086,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onStage={stage}
                 onUnstage={unstage}
                 onOpen={openDiff}
+                onMenu={openMenu}
               />
               <Group
                 label={t('group.untracked')}
@@ -1008,6 +1101,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 onStage={stage}
                 onUnstage={unstage}
                 onOpen={openDiff}
+                onMenu={openMenu}
               />
               {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
             </>

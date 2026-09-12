@@ -47,6 +47,9 @@ export const cls = {
   branchFormActions: `${P}-branch-form-actions`,
   branchFooter: `${P}-branch-footer`,
   popover: `${P}-popover`,
+  menu: `${P}-menu`,
+  menuItem: `${P}-menu-item`,
+  menuSeparator: `${P}-menu-separator`,
   danger: `${P}-danger`,
   mergeBox: `${P}-merge-box`,
   mergeLabel: `${P}-merge-label`,
@@ -183,6 +186,84 @@ export const css = `
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: 0 6px 16px var(--dsw-alias-bg-mask-2);
+}
+
+/* Flipped above its anchor when there was no room below (a row menu on the
+   panel's last rows): the rule that separates the layer from the content moves
+   to its top edge, where the content now is. */
+.${cls.popover}[data-placement='above'] {
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+  border-bottom: 0;
+}
+
+/* ── a row menu (§9's two registered menus; M5a order 1 is the first) ───── */
+
+/* The layer owns the chrome — position, background, border, shadow, scrolling —
+   so this lays the entries out and nothing else. One row per action, the full
+   width of the layer, because the panel is narrow enough that a menu sized to its
+   longest sentence would be most of the sidebar anyway. */
+.${cls.menu} {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+/* Focus is on the menu as a whole — that is what the arrow keys listen to — but
+   the ring that says "the keyboard is here" belongs on the ENTRY the keys would
+   activate, not around the whole layer. So the layer's own ring is off, and the
+   active entry's highlight is what shows. Scoped through the layer, and with the
+   focus-visible pseudo-class spelled out, because the quality-floor rule at the
+   end of this sheet targets any focused descendant of the root and would
+   otherwise draw a ring around a dropdown — which reads as a rendering bug. */
+.${cls.popover} > .${cls.menu}:focus,
+.${cls.popover} > .${cls.menu}:focus-visible {
+  outline: none;
+}
+
+.${cls.menuItem} {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Hover and the keyboard's active row are the same state, and they share one
+   rule: two highlights that can disagree would make Enter's target a guess. */
+.${cls.menuItem}:hover:not(:disabled),
+.${cls.menuItem}[data-active='true']:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A destructive entry. §4.3 asks for the confirmation on the click; this is the
+   colour that says a confirmation is coming, before it does. Written before the
+   disabled rule below on purpose: while an operation is in flight even the
+   destructive entry is unavailable, and unavailable is the state that should
+   win. */
+.${cls.menuItem}[data-danger='true'] {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+}
+
+.${cls.menuItem}:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+/* The hairline between two groups of entries, inset from both edges the way the
+   entries' own text is. */
+.${cls.menuSeparator} {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--dsw-alias-border-l3);
 }
 
 /* ── state rail ─────────────────────────────────────────────────────────── */

@@ -70,6 +70,12 @@ export function ToolButton({
  * the row. The strip is a plain `div` for exactly that: `ToolButton` keeps its
  * one-argument `onClick` signature, and the containment lives where the layout
  * says it does.
+ *
+ * The row also opens the panel's row menu (§9's file menu, M5a's first work
+ * package): a right-click anywhere on the band, or Shift+F10 / the menu key while
+ * the row has focus. The row is the anchor — the layer is measured from it — and
+ * it is `event.currentTarget`, read here because a synthetic event's
+ * `currentTarget` is only valid while the handler is running.
  */
 export function ChangeRow({
   entry,
@@ -80,6 +86,7 @@ export function ChangeRow({
   onStage,
   onUnstage,
   onOpen,
+  onMenu,
 }: {
   readonly entry: FileChange
   readonly area: ChangeArea
@@ -96,6 +103,13 @@ export function ChangeRow({
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
+  /**
+   * Open this row's menu, anchored on the row.
+   *
+   * The element travels with the call because the menu's layer is measured from
+   * it, and only the row knows which element it is.
+   */
+  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
 }): ReactNode {
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
@@ -118,12 +132,25 @@ export function ChangeRow({
       tabIndex={0}
       aria-label={t('diff.open', { path: entry.path })}
       onClick={() => onOpen(entry, area)}
+      onContextMenu={(event) => {
+        // A right-click on the row is the row's menu, not the browser's: the
+        // native one would cover the panel and offer nothing this list can do.
+        event.preventDefault()
+        onMenu(entry, area, event.currentTarget)
+      }}
       onKeyDown={(event) => {
         // Only the row's own key press counts. A key press on the `+`/`−` inside
         // it bubbles here, and Space activates a button — so without this guard,
         // staging by keyboard would also open a diff, the same bug the click
         // handler's `stopPropagation` prevents for the mouse.
         if (event.target !== event.currentTarget) return
+        // The keyboard's way into the row menu (§4.3's keyboard rules): the menu
+        // key, or what a keyboard without one sends — Shift+F10.
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+          event.preventDefault()
+          onMenu(entry, area, event.currentTarget)
+          return
+        }
         if (event.key !== 'Enter' && event.key !== ' ') return
         // Space would otherwise scroll the panel, which is not what pressing a
         // row means.
@@ -200,6 +227,7 @@ function TreeNodeView({
   onStage,
   onUnstage,
   onOpen,
+  onMenu,
 }: {
   readonly node: ChangeTreeNode
   readonly area: ChangeArea
@@ -210,6 +238,7 @@ function TreeNodeView({
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
+  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
 }): ReactNode {
   // Depth alone: the 12px that lines the tree up with the group header's caret
   // belongs to the button and the row themselves (both carry it in the
@@ -228,6 +257,7 @@ function TreeNodeView({
           onStage={onStage}
           onUnstage={onUnstage}
           onOpen={onOpen}
+          onMenu={onMenu}
         />
       </div>
     )
@@ -267,6 +297,7 @@ function TreeNodeView({
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
+            onMenu={onMenu}
           />
         ))}
     </>
@@ -302,6 +333,7 @@ export function Group({
   onStage,
   onUnstage,
   onOpen,
+  onMenu,
 }: {
   readonly label: string
   readonly area: ChangeArea
@@ -325,6 +357,7 @@ export function Group({
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
+  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
 }): ReactNode {
   if (entries.length === 0 && emptyNote === undefined) return null
   // Built once per render, and only when it will be drawn: the flat list is a
@@ -385,6 +418,7 @@ export function Group({
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
+            onMenu={onMenu}
           />
         ))}
       {!collapsed &&
@@ -400,6 +434,7 @@ export function Group({
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}
+            onMenu={onMenu}
           />
         ))}
     </section>

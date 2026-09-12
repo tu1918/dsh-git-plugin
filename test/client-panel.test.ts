@@ -55,6 +55,8 @@ const { createRoot } = await import('react-dom/client')
 const { act } = await import('react')
 
 const { StatusPanel } = await import('../src/client/ui/StatusPanel.tsx')
+const { placeLayer } = await import('../src/client/ui/popover.tsx')
+const { Menu } = await import('../src/client/ui/menu.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
 const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
 const { BOTTOM_PANE_KEY } = await import('../src/client/ui/bottom-view.ts')
@@ -74,6 +76,7 @@ import type {
   RepoStatus,
 } from '../src/core/types.ts'
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
+import type { MenuEntry } from '../src/client/ui/menu.tsx'
 
 /** A translator over the real English dictionary. */
 const t = (key: keyof typeof en, vars?: Readonly<Record<string, string | number>>): string => {
@@ -518,6 +521,23 @@ describe('the panel stylesheet', () => {
       sheet,
       new RegExp(
         `\\.${cls.commitRow}\\[data-selected='true'\\]\\s*\\{[^}]*--dsw-alias-interactive-bg-active`,
+        'u',
+      ),
+    )
+  })
+
+  it('gives a menu entry one highlight, whoever put it there', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Hover and the arrow keys' active row share ONE rule on purpose: a menu whose
+    // two highlights could disagree about what Enter will run would be lying about
+    // its own next click.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.menuItem}:hover:not\\(:disabled\\),\\s*\\.${cls.menuItem}\\[data-active='true'\\]:not\\(:disabled\\)\\s*\\{[^}]*--dsw-alias-interactive-bg-hover`,
         'u',
       ),
     )
@@ -2271,6 +2291,313 @@ describe('the branch picker as a dropdown (§4.3, FR-4.1)', () => {
     // Reopening after a dismissal still works, and the layer is back.
     picker = await openPicker(container)
     assert.ok(picker.isConnected)
+  })
+})
+
+/* ── M5a order 1: the row menu, and the layer it hangs from ─────────────── */
+
+/**
+ * Press a key on an element, so the panel's own key handlers see it.
+ * @param node - The element the key lands on.
+ * @param init - The key, and any modifiers.
+ */
+async function keyDown(node: Element, init: KeyboardEventInit): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(
+      new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }),
+    )
+  })
+  await flush()
+}
+
+/** Right-click one group's first change row, and return the menu it opened. */
+async function openRowMenu(container: HTMLElement, area: string): Promise<HTMLElement> {
+  const row = must<HTMLElement>(container, `[data-group="${area}"] .${cls.row}`)
+  await act(async () => {
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  })
+  await settle()
+  return must<HTMLElement>(container, '[data-menu="true"]')
+}
+
+/** A menu's entries, as the labels a user reads. */
+function menuLabels(menu: HTMLElement): (string | null)[] {
+  return [...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)
+}
+
+describe('where a floating layer goes (§4.3’s dropdowns)', () => {
+  // jsdom has no layout, so every rectangle here is stated: a 600px panel whose
+  // top edge sits at y=100, and the 38px rail at its top.
+  const panel = { top: 100, height: 600 }
+  const rail = { top: 100, bottom: 138 }
+
+  it('hangs under the anchor, capped at the room the panel has left', () => {
+    assert.deepEqual(placeLayer({ anchor: rail, panel, gap: 4, naturalHeight: 120 }), {
+      placement: 'below',
+      top: 42,
+      bottom: null,
+      maxHeight: 554,
+    })
+  })
+
+  it('keeps a long list below when above is no roomier', () => {
+    // Thirty branches under the rail: the list scrolls where it was opened rather
+    // than jumping to the top of the panel, because there is nothing above the
+    // rail to gain. Only a menu on the panel's bottom rows is worth moving.
+    const placed = placeLayer({ anchor: rail, panel, gap: 4, naturalHeight: 900 })
+    assert.equal(placed.placement, 'below')
+    assert.equal(placed.maxHeight, 554)
+  })
+
+  it('flips above a row that has no room under it', () => {
+    // A row menu on the panel's last rows: a 26px row ending 14px above the
+    // bottom edge leaves 6px below, which is a menu nobody could use.
+    const row = { top: 660, bottom: 686 }
+    assert.deepEqual(placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44 }), {
+      placement: 'above',
+      top: null,
+      bottom: 44,
+      maxHeight: 552,
+    })
+  })
+
+  it('leaves a short menu below when it fits, even near the bottom', () => {
+    const row = { top: 620, bottom: 646 }
+    const placed = placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44 })
+    assert.equal(placed.placement, 'below')
+    assert.equal(placed.maxHeight, 46)
+  })
+
+  it('does not move a layer inside a panel that has no height to measure', () => {
+    // jsdom, or a panel that is not visible: there is no room to run out of, so
+    // the layer stays under its anchor and keeps its height. (Both existing
+    // dropdown tests rely on this: they state the anchor's rectangle and nothing
+    // else.)
+    const placed = placeLayer({ anchor: rail, panel: { top: 100, height: 0 }, gap: 4, naturalHeight: 0 })
+    assert.deepEqual(placed, { placement: 'below', top: 42, bottom: null, maxHeight: null })
+  })
+})
+
+describe('the row menu (§9’s file menu, M5a order 1)', () => {
+  it('opens under the row that was right-clicked, with the action that row offers', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    const panel = must(container, `.${cls.root}`)
+    const before = [...panel.children]
+
+    // jsdom measures nothing, so the row's rectangle is stated: 26px of row whose
+    // top edge is 300px below the panel's.
+    const row = must<HTMLElement>(container, `[data-group="unstaged"] .${cls.row}`)
+    row.getBoundingClientRect = () => rect(300, 26)
+
+    const menu = await openRowMenu(container, 'unstaged')
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+
+    // The same floating layer the branch list uses: it covers the list instead of
+    // taking a row in the column, so the file under the pointer never moves.
+    assert.equal(window.getComputedStyle(layer).position, 'absolute')
+    assert.equal(layer.dataset.placement, 'below')
+    // Measured from the ROW — 26px of row plus the 4px gap — not from the rail.
+    assert.equal(layer.style.top, '330px')
+    // Opening adds exactly one element, and it is the layer.
+    assert.deepEqual(
+      [...panel.children].filter((child) => !before.includes(child)),
+      [layer],
+    )
+    // A menu, named for the row it belongs to.
+    assert.equal(menu.getAttribute('role'), 'menu')
+    assert.match(menu.getAttribute('aria-label') ?? '', /deep\/nested\/dir\/changed\.ts/)
+    assert.deepEqual(menuLabels(menu), ['Stage'])
+  })
+
+  it('runs the action on the file the row stands for, and closes', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openRowMenu(container, 'unstaged')
+    await click(must(menu, '[role="menuitem"]'))
+
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/changed.ts'])
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+  })
+
+  it('offers the other side of the index on a staged row, and stage on an untracked one', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const staged = await openRowMenu(container, 'staged')
+    assert.deepEqual(menuLabels(staged), ['Unstage'])
+    await click(must(staged, '[role="menuitem"]'))
+
+    const untracked = await openRowMenu(container, 'untracked')
+    assert.deepEqual(menuLabels(untracked), ['Stage'])
+    await click(must(untracked, '[role="menuitem"]'))
+
+    assert.deepEqual(calls.entries, ['unstage:src/staged.ts', 'stage:notes.md'])
+  })
+
+  it('marks a conflict resolved under the name that says so (FR-9.2)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openRowMenu(container, 'conflicted')
+    // The command is `git add` either way; the entry says what that means here.
+    assert.deepEqual(menuLabels(menu), ['Mark resolved'])
+    await click(must(menu, '[role="menuitem"]'))
+    assert.deepEqual(calls.entries, ['stage:both.txt'])
+  })
+
+  it('opens from the keyboard, and the keys belong to it while it is open (§4.3)', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+    const row = must<HTMLElement>(container, `[data-group="untracked"] .${cls.row}`)
+    row.focus()
+
+    // Shift+F10 is what a keyboard without a menu key sends.
+    await keyDown(row, { key: 'F10', shiftKey: true })
+    const menu = must<HTMLElement>(container, '[data-menu="true"]')
+    // Focus moves into the menu, and its first entry is already the active one, so
+    // Enter works without an arrow key first.
+    assert.equal(document.activeElement, menu)
+    assert.equal(must<HTMLElement>(menu, '[role="menuitem"]').dataset.active, 'true')
+
+    await keyDown(menu, { key: 'Enter' })
+    assert.deepEqual(calls.entries, ['stage:notes.md'])
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+    // Focus goes back to the row it came from, so the keyboard is where it was.
+    assert.equal(document.activeElement, row)
+  })
+
+  it('is dismissed by a press outside it, and by the row opening its diff', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openRowMenu(container, 'unstaged')
+    // Inside is the menu's own business: a press there must not dismiss it, or the
+    // entry could never be clicked.
+    await press(must(menu, '[role="menuitem"]'))
+    assert.ok(container.querySelector('[data-menu="true"]'), 'a press inside must not close it')
+
+    // Anywhere else in the panel dismisses it, exactly like the branch list.
+    await press(must(container, `.${cls.commitBox}`))
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+
+    // Opening the row's diff is a press on the menu's own anchor, which the layer
+    // does not count as "outside" — so the panel closes it itself.
+    await openRowMenu(container, 'unstaged')
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+  })
+
+  it('leaves the panel with one layer: a row menu closes the branch list', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+    await openPicker(container)
+
+    const row = must<HTMLElement>(container, `[data-group="unstaged"] .${cls.row}`)
+    // Shift+F10 arrives without a press, so nothing would dismiss the open branch
+    // list but the panel itself.
+    await keyDown(row, { key: 'ContextMenu' })
+
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
+    assert.ok(container.querySelector('[data-menu="true"]'))
+  })
+})
+
+describe('the menu’s own entries and keyboard (M5a’s row-menu mechanism)', () => {
+  /** A menu of four entries, one of them a separator and one of them disabled. */
+  function renderMenu(chosen: string[]): Promise<HTMLElement> {
+    const entries: readonly MenuEntry[] = [
+      { kind: 'item', id: 'first', label: 'First', onSelect: () => chosen.push('first') },
+      { kind: 'separator' },
+      { kind: 'item', id: 'off', label: 'Unavailable', disabled: true, onSelect: () => chosen.push('off') },
+      { kind: 'item', id: 'last', label: 'Discard', danger: true, onSelect: () => chosen.push('last') },
+    ]
+    return render(h(Menu, { entries, label: 'Actions', onClose: () => chosen.push('close') }))
+  }
+
+  it('draws one row per entry, marks the destructive one, and names the separator', async () => {
+    const container = await renderMenu([])
+    const menu = must<HTMLElement>(container, '[role="menu"]')
+    assert.deepEqual(menuLabels(menu), ['First', 'Unavailable', 'Discard'])
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
+    assert.equal(must<HTMLButtonElement>(menu, '[data-danger="true"]').textContent, 'Discard')
+    assert.equal(must<HTMLButtonElement>(menu, 'button[disabled]').textContent, 'Unavailable')
+  })
+
+  it('steps over the disabled entry and the separator, and wraps at both ends', async () => {
+    const container = await renderMenu([])
+    const menu = must<HTMLElement>(container, '[role="menu"]')
+    const active = (): string | null => must(menu, '[data-active="true"]').textContent
+
+    // It opens on the first entry that can be activated.
+    assert.equal(active(), 'First')
+    // Down skips the disabled one rather than landing on a row Enter cannot use.
+    await keyDown(menu, { key: 'ArrowDown' })
+    assert.equal(active(), 'Discard')
+    // ...and wraps, so the end of the menu is not a dead stop.
+    await keyDown(menu, { key: 'ArrowDown' })
+    assert.equal(active(), 'First')
+    await keyDown(menu, { key: 'ArrowUp' })
+    assert.equal(active(), 'Discard')
+    await keyDown(menu, { key: 'Home' })
+    assert.equal(active(), 'First')
+    await keyDown(menu, { key: 'End' })
+    assert.equal(active(), 'Discard')
+  })
+
+  it('runs the active entry on Enter, and closes first', async () => {
+    const chosen: string[] = []
+    const container = await renderMenu(chosen)
+    const menu = must<HTMLElement>(container, '[role="menu"]')
+
+    await keyDown(menu, { key: 'ArrowDown' })
+    await keyDown(menu, { key: 'Enter' })
+    // The dismissal comes first, the way the branch picker does it: the layer is
+    // gone before the operation's own state arrives.
+    assert.deepEqual(chosen, ['close', 'last'])
+  })
+
+  it('closes on Escape and on Tab, which are the two ways out', async () => {
+    const chosen: string[] = []
+    const container = await renderMenu(chosen)
+    await keyDown(must(container, '[role="menu"]'), { key: 'Escape' })
+    assert.deepEqual(chosen, ['close'])
+
+    const again: string[] = []
+    const second = await renderMenu(again)
+    await keyDown(must(second, '[role="menu"]'), { key: 'Tab' })
+    assert.deepEqual(again, ['close'])
+  })
+
+  it('moves the same highlight the pointer moves', async () => {
+    const container = await renderMenu([])
+    const menu = must<HTMLElement>(container, '[role="menu"]')
+    const last = must<HTMLElement>(menu, 'button[data-danger="true"]')
+
+    await act(async () => {
+      last.dispatchEvent(new window.Event('pointermove', { bubbles: true }))
+    })
+    // One highlight, not two: what the pointer is over is what Enter will run.
+    assert.equal(must(menu, '[data-active="true"]').textContent, 'Discard')
   })
 })
 

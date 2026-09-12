@@ -49,6 +49,7 @@ message, and a commit detail.
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
 | Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
 | A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — and selecting it splits the pane: the entries stay on the left, that commit's information opens on the right (metadata, then its file list with per-file churn and git's own binary answer) | ✅ |
+| A change row's menu: right-click it (or Shift+F10 / the menu key on the focused row) for that row's own action — stage, unstage, or mark a conflict resolved. It opens in the same floating layer as the branch list, flipping above the row when the panel has no room below | ✅ |
 | Discard / stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
@@ -101,7 +102,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 303 tests && build
+npm run check      # tsc --noEmit && 321 tests && build
 ```
 
 ## Install

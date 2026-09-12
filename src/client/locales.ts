@@ -43,9 +43,12 @@ export const zh = {
   'action.failed': '操作失败',
   'action.dismiss': '关闭提示',
   'action.markResolved': '标记「{path}」为已解决',
+  'action.resolve': '标记已解决',
   'action.checkout': '切换分支',
   'action.createBranch': '新建分支',
   'action.deleteBranch': '删除分支',
+
+  'menu.fileRow': '{path} 的操作',
 
   'commit.placeholder': '提交信息…',
   'commit.button': '提交',
@@ -184,9 +187,12 @@ export const en: Record<GitPanelKey, string> = {
   'action.failed': 'failed',
   'action.dismiss': 'Dismiss',
   'action.markResolved': 'Mark {path} as resolved',
+  'action.resolve': 'Mark resolved',
   'action.checkout': 'Switch branch',
   'action.createBranch': 'Create branch',
   'action.deleteBranch': 'Delete branch',
+
+  'menu.fileRow': 'Actions for {path}',
 
   'commit.placeholder': 'Commit message…',
   'commit.button': 'Commit',

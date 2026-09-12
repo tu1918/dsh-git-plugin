@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（45 个源文件）、`test/`（15 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 303 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 321 项测试 + 两个打包产物
 
 ---
 
@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | ⬜ 未开始（**下一步**；浮层通用件已随分支下拉落地，见 §9） |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）已交付**（`ui/menu.tsx` + 文件行的右键菜单，见 §10.1）；剩 discard / undoCommit / stash |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -391,7 +391,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 |---|---|
 | **① 点击提交行在底部 pane 预览该提交的差异** | 这正是 FR-3.6 的「可下钻看该提交的 diff」/ FR-7.2，也是它替代行内展开的做法（`onPreview(commitRefOf(entry))` → 共享底部 `DiffPane`）。需要：`DiffArea` 增加「按提交取 diff」的形态（如 `{kind:'commit', hash}`）、host 侧 `git show --no-color --no-ext-diff --no-textconv --unified=N <hash>`（**合并提交仍用 `-m --first-parent`**，与 `showCommit` 同口径）、以及多文件 patch 的渲染（它的 `git.commit-diff` 直接回整条 patch；我们要么让 `core/diff-parse.ts` 把一条 patch 切成多个文件段、要么按文件下钻 `git show <hash> -- <path>`）。做完这一项，行内的详情块可以退化成「文件清单 + 点击文件下钻」 |
 | **② 提交行的右键操作菜单** | 它的条目：查看提交差异 / 复制短哈希 / 复制完整哈希 / 复制提交信息 / 分隔线 / **还原此提交**（danger + 确认：「将在当前分支创建一个反转「{subject}」的新提交。」）/ **捡取此提交**（danger + 确认：「将「{subject}」的更改应用到当前分支。」）。复制类三项是纯客户端 clipboard，随时可做；还原/捡取属**改写历史**，与 FR-3.8 的撤销（M5a）、drop/squash/reset（M5b）同一批，需要 host 新路由 + §4.3 的确认（本插件的确认机制是 `ui/armed.ts`，不是原生 `confirm`） |
-| **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 M5a 的 discard 一起做（§10.1 顺序 2）；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航） |
+| **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 M5a 的 discard 一起做（§10.1 顺序 2）；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航）。**2026-09-12 已定并落地**：手搓 —— `ui/popover.tsx`（层）+ `ui/menu.tsx`（条目与键盘），见 §10.1 顺序 1；这张菜单本身现在只有该行自己的暂存动作，「放弃更改」到顺序 2、「复制相对/绝对路径」到顺序 6 |
 
 **这三项在 §10 里的排期**：① = M5b 顺序 5（它的复制类条目 = 顺序 6）；②③ 的**菜单载体**
 就是 M5a 顺序 1——顺序 1 不落地，这两张菜单各自都无从写起；其中「放弃更改」= M5a 顺序 2、
@@ -414,10 +414,26 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |
 |---|---|---|---|---|
-| 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 3 与 §9 的②③都复用它。**状态**：浮层这件通用件已随分支下拉落地（`ui/popover.tsx`，见 §9 的界面调整表）——定位/度量/两种关闭都在了；剩下的是**菜单内容**那一层（锚在行上、条目模型 + 分隔线 + 上下键选择），比浮层多的是条目与键盘选择，不是定位 | S–M |
+| 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 2/3 与 §9 的②③都复用它。**✅ 已交付（2026-09-12）**：浮层通用件随分支下拉落地（`ui/popover.tsx`），菜单内容那一层是新模块 `ui/menu.tsx`（条目模型 + 分隔线 + 上下键选择），并接上第一个真实调用方——**文件行的右键菜单**（右键 / Shift+F10 / 菜单键打开），条目是今天就能用的该行暂存动作。细节见下方「顺序 1 交付」 | S–M |
 | 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | M |
 | 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | S–M |
 | 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | M |
+
+### 顺序 1 交付：行级菜单机制（2026-09-12，已完成）
+
+| 落点 | 内容 |
+|---|---|
+| `ui/menu.tsx`（新） | 菜单**内容**层：条目模型（`item` / `separator`，外加 `disabled` 与 `danger` 两个标志）、一个高亮同时被指针与上下键移动、ArrowDown/Up（跳过禁用项与分隔线、两端回绕）、Home/End、Enter/Space、Esc/Tab 关闭。手搓而非 primitives —— 依赖方向第 3 条不许 `src/client/ui/**` 碰 DSH，包一层 adapter 又会把菜单的**外观**挪到适配器后面 |
+| `ui/popover.tsx` | 新增**纯函数** `placeLayer`：层默认挂在锚点下方，下方放不下**且**上方更宽裕时翻到上方（行菜单可能开在面板最后一行，否则会被 `max-height` 压成几像素）。它是纯函数是因为 jsdom 没有布局：翻转用「给定的矩形」在测试里钉住，DOM 那一半只负责把量到的矩形喂进去。另加「锚点已脱离文档就不再测量」 |
+| `ui/ChangeGroup.tsx` | `ChangeRow` 新增 `onMenu(entry, area, anchor)`，由右键与 Shift+F10 / 菜单键触发（行本身就是锚点，取的 `event.currentTarget`）。`Group`/`TreeNodeView` 只做透传 |
+| `ui/StatusPanel.tsx` | 菜单状态（锚点元素 + 条目 + 所在分组）、条目由该行所在侧决定（已暂存 → 取消暂存；未暂存 → 暂存；冲突 → **标记已解决**，命令仍是 `git add`）、打开菜单时收起分支下拉（Shift+F10 没有 pointerdown，否则会两层叠着）、打开该行 diff 时收起菜单（点锚点不算「外部点击」）、该文件从列表消失时收起菜单（与会话切换时的清空一并做） |
+| 可访问性 | 层 `role="menu"`（名字是「{path} 的操作」），条目 `role="menuitem"`，分隔线 `role="separator"`；焦点进菜单容器（不是某个条目，否则 Space 会走原生 click），关闭时**焦点回到打开它的那一行**——但仅当焦点还在菜单里或已落空，用户在别处的点击不会被抢回来 |
+| 测试 | 18 项：`placeLayer` 5 项（下方放不下才翻、长列表不翻、面板没有高度时不动）、行菜单 7 项（挂在被右键的那一行上、跑对哪些路径、冲突项的名字、Shift+F10 打开且 Enter 执行并还焦点、外部点击与开 diff 两种关闭、同时只有一层）、`Menu` 5 项（条目/分隔线/danger/disabled 的渲染、跳过禁用项与回绕、Enter 先关后执行、Esc 与 Tab、指针与键盘共用同一个高亮）、样式表 1 项（hover 与 `data-active` 共用同一条高亮规则） |
+
+**这张菜单现在只有一条条目**，是刻意的：它今天能做的只有该行自己的暂存动作，
+「放弃更改」是顺序 2（要 host 新路由与武装确认）、「复制相对/绝对路径」是顺序 6、
+「在编辑器中打开」受 D21 阻塞。机制与条目模型先落地，是为了让那三处各自只加一条条目，
+而不是各自再造一个弹层。
 
 ### 10.2 M5b（M5a 验收之后）
 
