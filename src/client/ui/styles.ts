@@ -163,7 +163,8 @@ export const cls = {
   diffHunkHead: `${P}-diff-hunk-head`,
   diffHunkRange: `${P}-diff-hunk-range`,
   diffHunkHeading: `${P}-diff-hunk-heading`,
-  diffRow: `${P}-diff-row`,
+  diffSplit: `${P}-diff-split`,
+  diffSide: `${P}-diff-side`,
   diffLine: `${P}-diff-line`,
   diffCell: `${P}-diff-cell`,
   diffGutter: `${P}-diff-gutter`,
@@ -1932,7 +1933,10 @@ export const css = `
 
 .${cls.diffHunkHead} {
   display: flex;
-  min-width: min-content;
+  /* The header must not widen the pane either: the split rows are 100% of the
+     content box, so a header wider than the pane would stretch the rows with it
+     and push the right half out again. Its heading ellipsizes instead. */
+  min-width: 0;
   align-items: baseline;
   gap: 8px;
   padding: 2px 8px 2px 6px;
@@ -1943,28 +1947,72 @@ export const css = `
 }
 
 .${cls.diffHunkRange} { flex: none; }
-.${cls.diffHunkHeading} { flex: none; color: var(--dsw-alias-label-secondary); }
+.${cls.diffHunkHeading} {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* 'min-width: min-content' on the rows (and the wrappers above) is what keeps
-   a long line intact while the pane scrolls horizontally: without it the text
-   would wrap at the pane's width and the two sides would stop lining up. */
-.${cls.diffRow} {
-  display: grid;
-  width: 100%;
-  min-width: min-content;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 7px;
+/* The side-by-side split: two FIXED halves, each its own scroller.
+
+   Fixed, because a long line must not move the halves apart (the min-content
+   minimum this used to have grew the tracks to fit the longest line and pushed
+   the right half off the pane: "现在有越界的情况"). Its own scroller, because
+   clipping a long line loses content ("如果有超出去的话在底部加滚动条") — so each
+   half scrolls on its own and the two are kept in step from the component, which
+   is what VS Code's side-by-side diff does.
+
+   The gap is a LANE, not just breathing room: it sits between the two scrollers,
+   so nothing a half scrolls can push it around. That is what a per-line action
+   button needs — aligned with a line's row, travelling vertically with the halves
+   (they are synced), never dragged sideways by a long line. */
+.${cls.diffSplit} {
+  display: flex;
+  gap: 16px;
+  flex: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.${cls.diffSide} {
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+/* The divider itself, in the same hairline the commit detail's column uses for
+   its own split. It rides the right half so the lane stays whole. */
+.${cls.diffSide}[data-side='right'] {
+  border-left: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 .${cls.diffLine},
 .${cls.diffCell} {
   display: flex;
-  min-width: min-content;
   align-items: flex-start;
   border-radius: 3px;
 }
 
-.${cls.diffCell} { flex: 1 1 0; }
+/* Inline keeps the min-content minimum: there the full width IS the reading
+   width, so a long line stays intact while the pane scrolls horizontally. */
+.${cls.diffLine} { min-width: min-content; }
+
+/* One cell of one half. Width rides its content, so a long line makes the cell
+   (and with it the half's horizontal scroll) as wide as it needs; the 100%
+   minimum keeps a short line's wash spanning the half. The min-height is the
+   line box — a padded (empty) cell has to be exactly as tall as the line it
+   stands opposite, or the two halves drift apart as you read down. */
+.${cls.diffCell} {
+  width: max-content;
+  min-width: 100%;
+  min-height: 18px;
+}
 
 .${cls.diffGutter} {
   width: 38px;
@@ -2060,6 +2108,7 @@ export const css = `
  */
 .${cls.body},
 .${cls.diffHunks},
+.${cls.diffSide},
 .${cls.bottomScroll} {
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
@@ -2067,6 +2116,7 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar,
 .${cls.diffHunks}::-webkit-scrollbar,
+.${cls.diffSide}::-webkit-scrollbar,
 .${cls.bottomScroll}::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -2074,6 +2124,7 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar-thumb,
 .${cls.diffHunks}::-webkit-scrollbar-thumb,
+.${cls.diffSide}::-webkit-scrollbar-thumb,
 .${cls.bottomScroll}::-webkit-scrollbar-thumb {
   border-radius: 5px;
   background: var(--dsw-alias-scrollbar-bg-l1);
@@ -2081,6 +2132,7 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar-track,
 .${cls.diffHunks}::-webkit-scrollbar-track,
+.${cls.diffSide}::-webkit-scrollbar-track,
 .${cls.bottomScroll}::-webkit-scrollbar-track {
   background: transparent;
 }

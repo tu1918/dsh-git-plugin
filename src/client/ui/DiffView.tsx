@@ -26,7 +26,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 
 import { pathParts } from '../../core/format.ts'
 import { diffTargetKey } from '../../core/diff-target.ts'
@@ -234,6 +234,83 @@ function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
 }
 
 /**
+ * A side-by-side diff: two fixed halves, each its own scroller.
+ *
+ * The split is fixed — each half is half of the pane, always — so a line longer
+ * than its half has to go somewhere. Clipping it loses content ("如果有超出去的话
+ * 在底部加滚动条", reported from the running panel), and letting the ROW grow to
+ * fit pushes the right half out of the pane (the report before that, "现在有越界
+ * 的情况"). So each half scrolls on its own, which is what VS Code's side-by-side
+ * diff does and the only shape that satisfies both.
+ *
+ * The two halves are kept in step on BOTH axes: a paired line that drifted apart
+ * vertically would be worse than useless, and comparing a change means looking at
+ * the same column offset on each side.
+ * @param props - The hunks to split.
+ */
+function SplitHunks({ hunks }: { readonly hunks: readonly DiffHunk[] }): ReactNode {
+  const leftRef = useRef<HTMLDivElement | null>(null)
+  const rightRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Mirror one half's position onto the other.
+   *
+   * The guard is the assignment itself: the copy fires a scroll event on the
+   * other half, which finds both values already equal and stops. No timer and no
+   * lock to leak.
+   * @param from - The half the user scrolled.
+   */
+  const sync = (from: 'left' | 'right'): void => {
+    const source = (from === 'left' ? leftRef : rightRef).current
+    const target = (from === 'left' ? rightRef : leftRef).current
+    if (source === null || target === null) return
+    if (target.scrollTop !== source.scrollTop) target.scrollTop = source.scrollTop
+    if (target.scrollLeft !== source.scrollLeft) target.scrollLeft = source.scrollLeft
+  }
+
+  /**
+   * One half: the same hunk structure as the other, one cell per row.
+   *
+   * Each side renders its own copy of the hunk header, so a half always says
+   * where in the file it is — that is what the header is for, and the two copies
+   * are the same height, which is what keeps the rows aligned.
+   */
+  const half = (
+    which: 'left' | 'right',
+    edge: RunEdge,
+    ref: Ref<HTMLDivElement>,
+  ): ReactNode => (
+    <div
+      className={cls.diffSide}
+      data-side={which}
+      ref={ref}
+      onScroll={() => sync(which === 'left' ? 'left' : 'right')}
+    >
+      {hunks.map((hunk, hunkIndex) => (
+        <div className={cls.diffHunk} key={`${hunk.oldStart}-${hunk.newStart}-${hunkIndex}`}>
+          <HunkHead hunk={hunk} />
+          {splitRows(hunk).map((row, rowIndex) => (
+            <LineCell
+              key={`${which}${rowIndex}`}
+              line={which === 'left' ? row.left : row.right}
+              edge={edge}
+              highlight={false}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className={cls.diffSplit} data-diff-split="true">
+      {half('left', 'removed', leftRef)}
+      {half('right', 'added', rightRef)}
+    </div>
+  )
+}
+
+/**
  * Every hunk of a diff, laid out the chosen way.
  *
  * The hunk header is emitted for both layouts: it is where the two sides' line
@@ -248,33 +325,30 @@ function DiffHunks({
   readonly hunks: readonly DiffHunk[]
   readonly layout: DiffLayout
 }): ReactNode {
+  // Side by side is two scrollers of its own (see {@link SplitHunks}); inline is
+  // one, because there the full width IS the reading width.
+  if (layout === 'side-by-side') return <SplitHunks hunks={hunks} />
+
   return (
     <div className={cls.diffHunks}>
       {hunks.map((hunk, hunkIndex) => (
         <div className={cls.diffHunk} key={`${hunk.oldStart}-${hunk.newStart}-${hunkIndex}`}>
           <HunkHead hunk={hunk} />
-          {layout === 'inline'
-            ? hunk.lines.map((line, lineIndex) => (
-                <div
-                  className={cls.diffLine}
-                  data-kind={line.kind}
-                  key={`l${line.oldLine ?? 0}-${line.newLine ?? 0}-${lineIndex}`}
-                >
-                  <span className={cls.diffGutter}>{line.newLine ?? line.oldLine ?? ''}</span>
-                  <span className={cls.diffSign} aria-hidden="true">
-                    {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
-                  </span>
-                  <span className={cls.diffText}>
-                    <LineBody line={line} highlight />
-                  </span>
-                </div>
-              ))
-            : splitRows(hunk).map((row, rowIndex) => (
-                <div className={cls.diffRow} key={`r${rowIndex}`}>
-                  <LineCell line={row.left} edge="removed" highlight={false} />
-                  <LineCell line={row.right} edge="added" highlight={false} />
-                </div>
-              ))}
+          {hunk.lines.map((line, lineIndex) => (
+            <div
+              className={cls.diffLine}
+              data-kind={line.kind}
+              key={`l${line.oldLine ?? 0}-${line.newLine ?? 0}-${lineIndex}`}
+            >
+              <span className={cls.diffGutter}>{line.newLine ?? line.oldLine ?? ''}</span>
+              <span className={cls.diffSign} aria-hidden="true">
+                {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
+              </span>
+              <span className={cls.diffText}>
+                <LineBody line={line} highlight />
+              </span>
+            </div>
+          ))}
         </div>
       ))}
     </div>

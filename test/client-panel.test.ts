@@ -719,6 +719,47 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('gives each half of a side-by-side diff its own scrollbar, and keeps the halves fixed', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Two reports, one shape: "左右 diff 视图，固定分为左右两半区。现在有越界的情况"
+    // and then "如果有超出去的话在底部加滚动条". Letting the row grow to fit the
+    // longest line pushed the right half off the pane; clipping it lost the rest of
+    // the line. So each half is half of the pane whatever the lines are, and each
+    // half is its own scroller — the scrollbar for an over-long line appears at the
+    // bottom of the half that overflows.
+    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*display: flex`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*flex: 1 1 50%`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*overflow: auto`, 'u'))
+    // The divider is a LANE, not just breathing room: the gap sits between the two
+    // scrollers, so a per-line action placed there can never be dragged sideways by
+    // a long line, and the hairline is the boundary itself.
+    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*gap: 16px`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.diffSide}\\[data-side='right'\\]\\s*\\{[^}]*border-left: 0.5px solid`,
+        'u',
+      ),
+    )
+    // A cell rides its own content (so the half can scroll to it) but never
+    // narrower than the half; its height is the line box, or a padded cell would
+    // make the two halves drift apart line by line.
+    assert.match(sheet, new RegExp(`\\.${cls.diffCell}\\s*\\{[^}]*width: max-content`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffCell}\\s*\\{[^}]*min-width: 100%`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffCell}\\s*\\{[^}]*min-height: 18px`, 'u'))
+    // A header wider than the half must not push it either: the heading ellipsizes.
+    assert.match(sheet, new RegExp(`\\.${cls.diffHunkHead}\\s*\\{[^}]*min-width: 0`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffHunkHeading}\\s*\\{[^}]*text-overflow: ellipsis`, 'u'),
+    )
+    // The INLINE layout keeps whole lines and the pane's own horizontal scroll.
+    assert.match(sheet, new RegExp(`\\.${cls.diffLine}\\s*\\{[^}]*min-width: min-content`, 'u'))
+  })
+
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -2718,22 +2759,35 @@ describe('the diff view (FR-2)', () => {
     await click(split as HTMLButtonElement)
     assert.equal(dom.window.localStorage.getItem(DIFF_LAYOUT_KEY), 'side-by-side')
 
-    // Context lines keep both sides; a removed/added pair is aligned, with each
-    // column showing its own file's line number.
-    const firstRow = [...container.querySelectorAll(`.${cls.diffRow}`)][0] as HTMLElement
-    const firstCells = [...firstRow.querySelectorAll(`.${cls.diffCell}`)]
-    assert.equal(firstCells.length, 2)
-    assert.equal(must<HTMLElement>(firstCells[0] as Element, `.${cls.diffGutter}`).textContent, '1')
-    assert.equal(must<HTMLElement>(firstCells[1] as Element, `.${cls.diffGutter}`).textContent, '1')
+    // Two fixed halves, each its own scroller: "left" is the old file, "right" the
+    // new one, and both render one cell per row so a paired change stays on a line.
+    const sides = [...container.querySelectorAll<HTMLElement>(`.${cls.diffSide}`)]
+    assert.equal(sides.length, 2)
+    const [before, after] = sides as [HTMLElement, HTMLElement]
+    assert.equal(before.getAttribute('data-side'), 'left')
+    assert.equal(after.getAttribute('data-side'), 'right')
 
-    const changed = [...container.querySelectorAll(`.${cls.diffRow}`)][1] as HTMLElement
-    const cells = [...changed.querySelectorAll(`.${cls.diffCell}`)]
-    assert.equal(cells[0]?.getAttribute('data-line'), 'removed')
-    assert.equal(cells[1]?.getAttribute('data-line'), 'added')
-    assert.match(cells[0]?.textContent ?? '', /return thirty \+ two/)
-    assert.match(cells[1]?.textContent ?? '', /return sixty \+ four/)
-    // 6 inline lines collapse into 4 rows: each removed/added pair shares one.
-    assert.equal(container.querySelectorAll(`.${cls.diffRow}`).length, 4)
+    const beforeCells = [...before.querySelectorAll(`.${cls.diffCell}`)]
+    const afterCells = [...after.querySelectorAll(`.${cls.diffCell}`)]
+    // 6 inline lines collapse into 4 rows: each removed/added pair shares one, and
+    // each half shows its own file's line number on it.
+    assert.equal(beforeCells.length, 4)
+    assert.equal(afterCells.length, 4)
+    assert.deepEqual(
+      beforeCells.map((cell) => must<HTMLElement>(cell, `.${cls.diffGutter}`).textContent),
+      ['1', '2', '3', '10'],
+    )
+    assert.deepEqual(
+      afterCells.map((cell) => must<HTMLElement>(cell, `.${cls.diffGutter}`).textContent),
+      ['1', '2', '3', '10'],
+    )
+    // The context row is the same line on both sides; the changed row is not.
+    assert.equal(beforeCells[0]?.getAttribute('data-line'), 'context')
+    assert.equal(afterCells[0]?.getAttribute('data-line'), 'context')
+    assert.equal(beforeCells[1]?.getAttribute('data-line'), 'removed')
+    assert.equal(afterCells[1]?.getAttribute('data-line'), 'added')
+    assert.match(beforeCells[1]?.textContent ?? '', /return thirty \+ two/)
+    assert.match(afterCells[1]?.textContent ?? '', /return sixty \+ four/)
 
     // A later mount reads the remembered choice (FR-2.4).
     const reopened = await render(
@@ -2743,7 +2797,41 @@ describe('the diff view (FR-2)', () => {
     await click(must(reopened, `[data-group="unstaged"] .${cls.row}`))
     const buttons = [...reopened.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)]
     assert.equal(buttons[1]?.getAttribute('aria-pressed'), 'true')
-    assert.equal(reopened.querySelectorAll(`.${cls.diffRow}`).length, 4)
+    assert.equal(reopened.querySelectorAll(`.${cls.diffCell}`).length, 8)
+  })
+
+  it('scrolls the two halves together, on both axes', async () => {
+    // A long line must be readable without the halves drifting apart: each half
+    // has its own scrollbars, and moving one moves the other.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await click(
+      [...container.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)][1] as HTMLButtonElement,
+    )
+    await flush()
+
+    const sides = [...container.querySelectorAll<HTMLElement>(`.${cls.diffSide}`)]
+    const [before, after] = sides as [HTMLElement, HTMLElement]
+
+    before.scrollTop = 120
+    before.scrollLeft = 40
+    await act(async () => {
+      before.dispatchEvent(new dom.window.Event('scroll'))
+    })
+
+    assert.equal(after.scrollTop, 120, 'the halves stay paired while reading down')
+    assert.equal(after.scrollLeft, 40, 'and stay on the same column while reading across')
+
+    // And the mirror image: the guard is the values being equal, so the copy does
+    // not bounce back.
+    after.scrollTop = 300
+    await act(async () => {
+      after.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(before.scrollTop, 300)
   })
 
   it('drops an open diff whose file is no longer changed', async () => {
