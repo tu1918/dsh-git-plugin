@@ -2076,8 +2076,22 @@ describe('the commit detail (FR-3.6)', () => {
     await click(must(container, `.${cls.bottomTab}`))
     assert.equal(container.querySelector('[data-commit-detail]'), null)
 
-    await click(must(container, `.${cls.commitTop}`))
+    // The entry is the handle for per-commit operations, so it is a real
+    // `<button>` — focusable and Enter/Space-activatable without a hand-rolled
+    // keyboard handler — and it carries the commit's full id for those
+    // operations to address.
+    const entry = must<HTMLButtonElement>(container, `.${cls.commitTop}`)
+    assert.equal(entry.tagName, 'BUTTON')
+    assert.equal(entry.getAttribute('role'), null)
+    assert.equal(entry.getAttribute('aria-expanded'), 'false')
+    entry.focus()
+    assert.equal(document.activeElement, entry, 'the row must be reachable by keyboard')
+    const row = must(container, `.${cls.commit}`)
+    assert.equal(row.getAttribute('data-commit'), 'b'.repeat(40))
+
+    await click(entry)
     await flush()
+    assert.equal(entry.getAttribute('aria-expanded'), 'true')
 
     const panel = must(container, '[data-commit-detail]')
     const text = panel.textContent ?? ''
@@ -2092,9 +2106,10 @@ describe('the commit detail (FR-3.6)', () => {
     assert.deepEqual(calls.entries, [`showCommit:${'b'.repeat(40)}`])
 
     // Folding and reopening costs no second git call: the detail is remembered.
-    await click(must(container, `.${cls.commitTop}`))
+    await click(entry)
     assert.equal(container.querySelector('[data-commit-detail]'), null)
-    await click(must(container, `.${cls.commitTop}`))
+    assert.equal(entry.getAttribute('aria-expanded'), 'false')
+    await click(entry)
     assert.equal(calls.entries.length, 1)
   })
 })

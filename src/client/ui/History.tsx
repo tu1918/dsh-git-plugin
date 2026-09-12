@@ -57,7 +57,16 @@ function CommitFileRow({
   )
 }
 
-/** One commit row, with the detail it can expand into. */
+/**
+ * One commit row: the handle for this commit, its metadata, and the detail it
+ * can expand into.
+ *
+ * The row's entry is a real `<button>` because a commit is something the panel
+ * will do things TO — M5 adds drop/squash/reset, and FR-3.8's undo already names
+ * the newest commit. A button is what that handle has to be: focusable,
+ * Enter/Space-activatable, and `aria-expanded`-able without a hand-rolled
+ * keyboard handler that can drift from the mouse one.
+ */
 function CommitRow({
   commit,
   detail,
@@ -88,26 +97,29 @@ function CommitRow({
   const relative = format.format(age.value, age.unit)
 
   return (
-    <div className={cls.commit} data-open={String(open)}>
-      <div
+    // The row carries the commit's full object id, because per-commit operations
+    // (M5's drop/squash/reset) address a commit by that id and the DOM is where a
+    // future action strip will read it from. The short hash stays what is shown.
+    <div className={cls.commit} data-open={String(open)} data-commit={commit.oid}>
+      {/* A real `<button>`, not a div wearing `role="button"`: the row is the
+          handle for everything that will be done TO this commit, so it gets the
+          element that already has focus, Enter/Space activation, and a disabled
+          state for free. Consequence to keep in mind for that action strip: its
+          buttons have to be SIBLINGS of this one, never children — a button
+          inside a button is invalid markup and the inner one is not reliably
+          clickable (the same rule the change group's header follows). */}
+      <button
+        type="button"
         className={cls.commitTop}
-        role="button"
-        tabIndex={0}
         aria-expanded={open}
         aria-label={t('history.open', { hash: commit.shortOid })}
+        title={commit.subject}
         onClick={onToggle}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return
-          event.preventDefault()
-          onToggle()
-        }}
       >
         <CaretGlyph className={cls.historyCaret} />
         <span className={cls.commitHash}>{commit.shortOid}</span>
-        <span className={cls.commitSubject} title={commit.subject}>
-          {commit.subject === '' ? '—' : commit.subject}
-        </span>
-      </div>
+        <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
+      </button>
       <div className={cls.commitMeta}>
         <span>{relative}</span>
         <span>·</span>

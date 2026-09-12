@@ -326,6 +326,13 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 5. **提示词与清洗是纯函数。** `core/commit-message.ts` 不含任何 DSH 名字，因此「问什么、
    怎么读答案」可以在裸 Node 里测（13 项），只有「怎么调模型」在 adapter 里（7 项，用假 ctx 驱动）。
 
+**M4 之后的界面调整（产品方提出）**
+
+| 调整 | 落点 |
+|---|---|
+| **历史里的每条提交改成真正的 `<button>`**（原来是带 `role="button"` 的 `div` + 手写 Enter/Space 处理）。理由是后续要对**具体提交**做操作（M5 的 drop/squash/reset、FR-3.8 的撤销最近提交），这条行就是那些操作的把手：真按钮自带焦点、原生 Enter/Space 激活、可直接挂 `aria-expanded`，不必再手写键盘分支去追平鼠标分支。行容器新增 `data-commit={完整 oid}` 作为操作寻址用的身份（显示仍是短 hash） | `ui/History.tsx` 的 `CommitRow` + `styles.ts` 的 `.dgp-commit-top`（补按钮 reset：`width: 100%`、去边框/背景、`font: inherit`、`text-align: left`、`focus-visible` 描边）；测试断言 `tagName === 'BUTTON'`、可 `focus()`、`aria-expanded` 随点击翻转、`data-commit` 是完整 oid |
+| **同一条约束留在这里，给下一步用**：那条操作条（drop / squash / reset / 复制 hash）必须是这个按钮的**兄弟节点**，不能是子节点——button 里套 button 是非法标记，内层在部分浏览器根本点不到。界面里已有的同类裁决在「变更分组的标题行」（`Group` 的批量按钮是 `groupToggle` 的兄弟，不是子节点） | `ui/History.tsx` 的注释与 `ChangeGroup.tsx` 的既有约定 |
+
 **M5 概要**：discard（二次确认「不可恢复」）、stash、提交图 SVG 泳道、撤销最近提交
 （未推送 `reset --mixed`／已推送 `revert`，执行前后端重新核实 —— FR-3.8）、多仓库扫描（FR-8），
 以及 M4 明确留下的两件：提交详情里下钻单个文件的 diff（FR-7.2）、提交改写（drop/squash/reset）。

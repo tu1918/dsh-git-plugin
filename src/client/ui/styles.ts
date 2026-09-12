@@ -1075,17 +1075,35 @@ export const css = `
 
 /* ── commit detail (FR-3.6) ─────────────────────────────────────────────── */
 
+/* The row's entry is a real button — it is the handle for per-commit operations
+   — so it needs the reset a div never did: no chrome of its own, the row's type,
+   and the full width of the row. Its own aria-expanded turns the caret, exactly
+   as the change group's header does. (No backticks in this file's comments: the
+   sheet is a template string.) */
 .${cls.commitTop} {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   align-items: baseline;
   gap: 6px;
+  padding: 0;
+  border: 0;
   border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
 .${cls.commitTop}:hover .${cls.commitSubject} {
   color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.commitTop}:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
 }
 
 .${cls.historyCaret} {
