@@ -86,6 +86,7 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'continueMerge',
   'abortMerge',
   'generateCommitMessage',
+  'undoCommit',
 ])
 
 /**
@@ -377,6 +378,11 @@ export function registerGitPanelRoutes(
           return fail('bad-request', 'the hash query parameter is required')
         }
         return await service.showCommit(sessionId, hash)
+      }
+      case 'undoCommit': {
+        const hash = stringOf(body, 'hash')
+        if (!hash.ok) return hash
+        return await service.undoCommit(sessionId, hash.value)
       }
       case 'checkout': {
         const name = stringOf(body, 'name')

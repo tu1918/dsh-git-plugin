@@ -11,7 +11,7 @@
  * @module dsh-git-panel/test/host-mutations
  */
 
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -622,6 +622,7 @@ describe('the full M2 flow', () => {
       service.push('missing'),
       service.pull('missing'),
       service.sync('missing'),
+      service.undoCommit('missing', 'a'.repeat(40)),
     ])
     for (const result of results) {
       assert.equal(result.ok, false)
@@ -636,10 +637,195 @@ describe('the full M2 flow', () => {
       service.stage('s1', ['a.txt']),
       service.commit('s1', 'message'),
       service.push('s1'),
+      service.undoCommit('s1', 'a'.repeat(40)),
     ])
     for (const result of results) {
       assert.equal(result.ok, false)
       assert.equal(result.ok ? '' : result.error.code, 'not-a-repo')
     }
+  })
+})
+
+describe('undoing the newest commit (FR-3.8)', () => {
+  /** A repository with two commits, the second rewriting `a.txt` to "two". */
+  function repoWithTwoCommits(prefix: string): { repo: string; first: string; second: string } {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+    return { repo, first, second }
+  }
+
+  it('resets an unpublished commit, returning its changes to the working tree', async () => {
+    const { repo, first, second } = repoWithTwoCommits('undo-reset')
+
+    const result = await serviceFor({ s1: repo }).undoCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.mode, 'reset')
+    assert.equal(result.value.shortOid, second.slice(0, 7))
+    assert.equal(result.value.subject, 'second')
+
+    // The branch moved back to the first commit, and the undone commit's
+    // changes are back in the working tree — `--mixed`, not `--hard`.
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'two\n')
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.deepEqual(status.value.groups.unstaged.map((entry) => entry.path), ['a.txt'])
+  })
+
+  it('resets an unpublished commit even when the branch has an upstream', async () => {
+    // The pushed question is "does the upstream CONTAIN this commit", not "is
+    // there an upstream" — an upstream that has never seen the commit leaves it
+    // unpushed, and reset is the undo.
+    const { repo } = repoWithRemote('undo-tracked')
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).undoCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.mode, 'reset')
+    // The upstream is untouched, and the branch is simply back on it.
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.branch.ahead, 0)
+  })
+
+  it('reverts a published commit instead of rewriting history', async () => {
+    const { repo, remote, branch } = repoWithRemote('undo-revert')
+    write(repo, 'base.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    git(repo, ['push', '-q'])
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).undoCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.mode, 'revert')
+
+    // A NEW commit undoes the old one: the old commit is still there, the
+    // remote still points at it, and the file is back to its previous content.
+    assert.match(git(repo, ['log', '-1', '--format=%s']), /^Revert "second"/u)
+    assert.equal(git(repo, ['rev-parse', 'HEAD~1']).trim(), second)
+    assert.equal(readFileSync(join(repo, 'base.txt'), 'utf8'), 'base\n')
+    assert.equal(git(remote, ['rev-parse', `refs/heads/${branch}`]).trim(), second)
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.branch.ahead, 1, 'the revert commit itself is not pushed yet')
+  })
+
+  it('refuses a hash that is no longer the newest, trusting the host’s own HEAD', async () => {
+    const { repo, second } = repoWithTwoCommits('undo-stale')
+    // A commit lands after the panel's reading: the row that was clicked is
+    // stale, and undoing it would undo a commit nobody is pointing at.
+    write(repo, 'b.txt', 'new\n')
+    stageAll(repo)
+    commit(repo, 'third')
+    const third = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).undoCommit('s1', second)
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.match(result.ok ? '' : result.error.message, /no longer the newest/u)
+    // Nothing moved.
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), third)
+  })
+
+  it('refuses the first commit of a branch: there is nothing before it to return to', async () => {
+    const repo = makeRepo('undo-root')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const only = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).undoCommit('s1', only)
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.error.message, /first one/u)
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), only)
+  })
+
+  it('refuses an unborn branch and a detached HEAD', async () => {
+    const unborn = makeRepo('undo-unborn')
+    const noCommits = await serviceFor({ s1: unborn }).undoCommit('s1', 'a'.repeat(40))
+    assert.equal(noCommits.ok, false)
+    assert.match(noCommits.ok ? '' : noCommits.error.message, /no commit to undo/u)
+
+    const { repo, second } = repoWithTwoCommits('undo-detached')
+    git(repo, ['checkout', '-q', '--detach'])
+    const detached = await serviceFor({ s1: repo }).undoCommit('s1', second)
+    assert.equal(detached.ok, false)
+    assert.match(detached.ok ? '' : detached.error.message, /detached/u)
+  })
+
+  it('refuses to revert a published merge, but resets an unpublished one', async () => {
+    // A clean merge: `side` adds a file, and the base moves on a DIFFERENT one
+    // so the merge cannot fast-forward (a fast-forward "merge" is no merge
+    // commit at all, which is what the first version of this fixture made).
+    const makeMerge = (prefix: string): { repo: string; remote: string; branch: string; merge: string; before: string } => {
+      const { repo, remote, branch } = repoWithRemote(prefix)
+      git(repo, ['checkout', '-q', '-b', 'side'])
+      write(repo, 'side.txt', 'side\n')
+      stageAll(repo)
+      commit(repo, 'side')
+      git(repo, ['checkout', '-q', branch])
+      write(repo, 'base2.txt', 'base2\n')
+      stageAll(repo)
+      commit(repo, 'base work')
+      const before = git(repo, ['rev-parse', 'HEAD']).trim()
+      git(repo, ['merge', '--no-edit', 'side'])
+      const merge = git(repo, ['rev-parse', 'HEAD']).trim()
+      return { repo, remote, branch, merge, before }
+    }
+
+    // Published: reverting a merge needs `-m` and a mainline choice, which is
+    // the user's to make — the panel refuses rather than guessing.
+    const published = makeMerge('undo-merge-pub')
+    git(published.repo, ['push', '-q'])
+    const refused = await serviceFor({ s1: published.repo }).undoCommit('s1', published.merge)
+    assert.equal(refused.ok, false)
+    assert.match(refused.ok ? '' : refused.error.message, /merge/u)
+    assert.equal(git(published.repo, ['rev-parse', 'HEAD']).trim(), published.merge)
+
+    // Unpublished: `reset --mixed HEAD~1` needs no mainline — it simply returns
+    // to the first parent, and the merge's changes land in the working tree.
+    const local = makeMerge('undo-merge-local')
+    const undone = await serviceFor({ s1: local.repo }).undoCommit('s1', local.merge)
+    assert.ok(undone.ok, undone.ok ? '' : JSON.stringify(undone.error))
+    assert.equal(undone.value.mode, 'reset')
+    assert.equal(git(local.repo, ['rev-parse', 'HEAD']).trim(), local.before)
+  })
+
+  it('refuses a malformed hash without spawning git at all', async () => {
+    const { repo, second } = repoWithTwoCommits('undo-badhash')
+    for (const hash of ['HEAD~1', 'ZZZZ', '-c', 'a'.repeat(41), 'abc']) {
+      const result = await serviceFor({ s1: repo }).undoCommit('s1', hash)
+      assert.equal(result.ok, false, `expected ${hash} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), second)
+  })
+
+  it('audits the undo with the commit, the repository, and the mode (§5.5)', async () => {
+    const { repo, second } = repoWithTwoCommits('undo-audit')
+    const lines: string[] = []
+    const service = createGitService(createGitRunner(), resolverFor({ s1: repo }), {
+      log: (_level, message) => lines.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    })
+
+    const result = await service.undoCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    const audit = lines.find((line) => line.includes('undid'))
+    assert.ok(audit, 'an undo must be audited — the commit is gone afterwards')
+    assert.match(audit ?? '', /via reset/u)
+    assert.match(audit ?? '', /second/u)
+    assert.match(audit ?? '', new RegExp(second.slice(0, 7), 'u'))
   })
 })

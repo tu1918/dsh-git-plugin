@@ -22,6 +22,7 @@ import type {
   LogPage,
   OperationReport,
   RepoStatus,
+  UndoResult,
 } from './types.ts'
 
 // Re-exported so the wire contract stays one import for the halves that
@@ -387,6 +388,25 @@ export interface WorkspaceGitService {
     hash: string,
     signal?: AbortSignal,
   ): Promise<Result<CommitDetail>>
+  /**
+   * Undo the newest commit (FR-3.8).
+   *
+   * The hash is the commit the browser believes is newest; the host re-reads
+   * HEAD and the pushed state at execution time and refuses when the two
+   * disagree, because the row the click came from may be stale. An unpublished
+   * commit is undone with `reset --mixed` (its changes return to the working
+   * tree); a published one with `revert` — a new commit, never rewritten
+   * history. Destructive either way, so the panel arms it behind the §4.3
+   * two-click confirmation and the host audits it (§5.5).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - Newest commit's hash, validated as `^[0-9a-f]{4,40}$` before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  undoCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<UndoResult>>
 }
 
 /**
@@ -573,6 +593,18 @@ export interface GitRemoteClient {
     hash: string,
     signal?: AbortSignal,
   ): Promise<Result<CommitDetail>>
+  /**
+   * Undo the newest commit (FR-3.8): `reset --mixed` when unpublished, `revert`
+   * when published; the host decides which at execution time.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - The newest commit's hash.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  undoCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<UndoResult>>
   /**
    * Subscribe to "the repository changed" notifications.
    *

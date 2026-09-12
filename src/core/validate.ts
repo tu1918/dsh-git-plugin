@@ -15,7 +15,7 @@
  * Later milestones' parameters arrive with their own validators, added when the
  * operation that needs them lands (see D7). M4 brought the branch name for
  * `checkout`/`createBranch`/`deleteBranch`, the base for a new branch, and the
- * commit hash for `showCommit`; a hash for `undoCommit` still has no caller.
+ * commit hash for `showCommit`; M5a's `undoCommit` reuses that hash validator.
  *
  * @module dsh-git-panel/core/validate
  */

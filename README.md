@@ -54,7 +54,8 @@ message, and a commit detail.
 | Section headers pinned to the top of the list they scroll in: a partially scrolled change list still says whether it is showing changes or untracked files | ✅ |
 | A change row's menu: right-click it (or Shift+F10 / the menu key on the focused row) for that row's own action — stage, unstage, or mark a conflict resolved. It opens in the same floating layer as the branch list, flipping above the row when the panel has no room below | ✅ |
 | Discard a change (FR-6.1): a working-tree row gains a third button — and its menu a third entry — that takes two clicks and says "cannot be undone" between them. It restores a tracked file from the index (never from HEAD, so it also works before the first commit) and deletes a file the index has never seen; a staged or conflicted row offers it nowhere | ✅ |
-| Stash, commit graph, undo, rewriting a commit (drop/squash/reset) | ⏳ M5 |
+| Undo the newest commit (FR-3.8): the newest history row's menu carries one armed entry whose confirmation says which undo is coming — an unpublished commit is reset (`--mixed`, its changes return to the working tree), a published one is reverted (a new commit; history is never rewritten). The host re-resolves HEAD and re-asks the pushed question at execution time, so a stale row is refused rather than silently undoing a commit nobody pointed at | ✅ |
+| Stash, commit graph, rewriting a commit (drop/squash/reset) | ⏳ M5 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real

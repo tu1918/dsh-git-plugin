@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（45 个源文件）、`test/`（15 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 340 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 355 项测试 + 两个打包产物
 
 ---
 
@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）与顺序 2（discard）已交付**（见 §10.1）；剩 undoCommit / stash |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）、顺序 2（discard）、顺序 3（undoCommit）已交付**（见 §10.1）；剩 stash |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -108,7 +108,7 @@ discard 与 undoCommit 在 M5a。
 | **D8** | FR-5.1「同步 = pull --rebase=false + push」 | 实现为 `git pull --no-rebase --no-edit` | 两条 flag 都是「不要等一个不存在的终端」：`--no-rebase` 让分叉的 pull 产生合并提交（文档自己的措辞），而**分叉时必须合并**意味着 git 会要一个提交信息——没有 `--no-edit` 它会等到 15s deadline 被杀掉（已实测）。**代价**：忽略用户 `pull.rebase=true` 的偏好；分叉时留下一个合并提交 |
 | **D9** | §5.5 假定路由在 DSH 鉴权之后 | **写入路由额外**加同源（`Origin` ↔ `Host`）校验 | loopback 只挡别的机器，不挡别的页面：本机任何网页都能向 `POST /git-panel/*` 发请求。写在 200/400 之前，跨源一律 403。无 `Origin` 的请求（curl、测试、自带工具）放行，由 loopback 兜底 |
 | **D10** | §5.4 服务契约未规定传输细节 | 读用 `GET`（session 在 query），写用 `POST`（session + 参数在 JSON body）；**body 形状错也算操作失败**，与业务失败一样走 200 + 信封 | 前端只有一条错误路径（信封），这是本文件一以贯之的选择（见 `routes.ts` 头注释）。只有「body 根本不是 JSON」「没有 session」「方法不对」「跨源」才用非 200 |
-| **D11** | §5.5 要求「所有 git 参数校验形状」 | M2 只实现**真的有调用方**的两个校验：路径、提交信息；hash/分支名校验留到 M4/M5a 使用它们的操作一起写（M4 已带来分支名、基点与 `showCommit` 的 hash；`undoCommit` 的 hash 校验到 M5a 才有第一个调用方，见 §10.1） | 遵循 D7 的同一条理由（不留无人调用的代码）。`.git` 路径是**额外**加的：`git status` 永远不报告它，所以只可能是手写请求——正是要挡的那种 |
+| **D11** | §5.5 要求「所有 git 参数校验形状」 | M2 只实现**真的有调用方**的两个校验：路径、提交信息；hash/分支名校验留到使用它们的操作一起写（M4 已带来分支名、基点与 `showCommit` 的 hash；M5a 顺序 3 的 `undoCommit` 复用同一个 `validateHash`） | 遵循 D7 的同一条理由（不留无人调用的代码）。`.git` 路径是**额外**加的：`git status` 永远不报告它，所以只可能是手写请求——正是要挡的那种 |
 | **D12** | §5.3「移植 VS Code `DefaultLinesDiffComputer` 入 core」 | 改为**依赖** `vscode-diff@^3.0.1`（MIT、零运行时依赖，就是那个引擎的抽取版），并给 `core` 的「零外部 import」守卫开一个**具名白名单**（`test/dependency-direction.test.ts` 的 `CORE_ALLOWED_PACKAGES`） | 手写同构算法只能复刻 Myers 搜索，复刻不了它上面那层启发式（丢短匹配、extend-to-word、把变更块细化到字符区间），而那层才是「VS Code 级」的实际含义。该包零依赖、纯 TS，`node --test` 仍能直接跑 core，所以守卫要保护的性质没变。**代价**：插件首次有运行时依赖（host bundle 仍 `packages: 'external'`，由 profile 的 node_modules 解析；client bundle 不引用引擎，浏览器打包规则不变） |
 | **D13** | §8「`core/diff-engine/`：输入两段文本，输出行级 hunks + 逐词区间」 | 行级 hunks 由 **git** 产出、`core/diff-parse.ts` 解析；引擎只负责**一个变更块内部**的逐词区间与行对齐（`diff-engine/marks.ts`） | git 的行级 diff 尊重 `.gitattributes` 过滤器、rename 检测、二进制嗅探，且不需要把整文件读进内存；引擎做 git 不报告的那部分。VS Code 自己也是「diff computer / renderer」这样分工 |
 | **D14** | FR-2.6「单文件 diff 超过 5000 行时默认折叠，点击加载」 | 响应里是两个**不同**的字段：`large`（行数 > `MAX_DIFF_LINES = 5000`，内容完整，客户端默认折叠、点「加载」展开）与 `truncated`（撞 host 字节上限，尾部确实没读到，只能提示） | 把两者合成一个布尔，会让「加载」按钮承诺一段根本没读到的内容。文档说的「在响应里标记而不是在 host 里折叠」照做：host 只计数，折叠是渲染决定 |
@@ -127,6 +127,7 @@ discard 与 undoCommit 在 M5a。
 | **D27** | §4.2 只规定了分区的**顺序**，没规定各分区的高度约束 | 整列的高度收成**一本预算** `ui/panel-layout.ts`：**只有更改列表是弹性的**（`flex-grow: 1; flex-shrink: 1; flex-basis: 0`——零基准意味着它的**内容高度不参与 flex 分配**），其余分区各有上下限，其中已暂存抽屉是**按内容**画的（上限 `min(40%, 320px)`，不设下限——见该行末尾的修订），dock 的拖动上限 = 其余分区下限（已暂存那块计入的是**预留** `STAGED_RESERVED_HEIGHT`）之和 `DOCK_RESERVED`，样式表里 dock 的 `max-height` 与拖动器用的是**同一个常量**。**2026-09-12 修订**（产品方实测：「staged-pane 下面的空白……收起时让 commit-box 跟他贴在一起」）：抽屉的 `min-height` 从 72px 改回 `0`，它按内容画；72 这个数**降级为「预留给它多少」**——dock 拖动时不能吃掉的空间，而不是一段必须画出来的空白 | 产品方 2026-09-12 实测后提出四条：更改区被挤（当时它的下限只有 56px，长索引或拖开的 dock 都会压它）、暂存区与提交框没有明确上下限、dock 的拖动没有边界、滚动时看不出当前是哪个分组。做成预算而不是再散着写几个 `min-height`，是因为「谁可以长、谁必须让」只能有一个答案——多写几处，下一个分区加进来时就会开始互相矛盾。**代价**：`panel-layout.ts` 用 px 而不是百分比（侧栏高度不由窗口决定），很矮的窗口里退化到「各分区停在下限、整列溢出被侧栏裁掉」——这是有意的：宁可整列溢出，也不让某个分区消失或让别人越过下限 |
 
 | **D28** | §4.3「无变更显示**干净状态图标**」 | 干净状态不再由 body 里的一段文字表达（原实现是「没有未提交的更改」+「工作区与 HEAD 一致。」两个 `<p>`，而且本来也没有图标）：改成「更改」与「未跟踪的文件」两个分组**常驻**，用表头 + 计数 0 表达；提交框自己的 `commit.hintClean`（「没有可提交的更改。」）在提交按钮旁边说同一件事 | 产品方 2026-09-12 指出这段文字与分组表头重复（「这个能扔了吗」），要求删掉。常驻是**必需的配套**：只删文字不常驻的话，干净状态下 body 会是一片空白。**代价**：放弃了文档要求的「图标」，也少了一句「工作区与 HEAD 一致」的完整句子——现在干净状态 = 三个 0 + 提交框一句提示，§4.3 的意图（让人知道现在是干净的）仍然成立。顺带定下：空分组的批量按钮不再常显，只有 staged 抽屉保留（它有 `emptyNote` 解释那个灰按钮） |
+| **D29** | §5.4 的 `undoCommit(): { mode }` 是**无参**的 | 实现为 `undoCommit(hash)`：浏览器传它以为是最新提交的那个 hash，host 现读 `rev-parse HEAD` 并**要求两者相等**，不等则拒绝 | 「仅最新一条」若无参，则面板上一条过期行（点击之后 agent 又提交了一次）会撤销掉一个没人指着的提交。hash 是「点击落在哪一行」的证据，host 的重核是「该行仍然是最新」的证据——FR-3.8 的「执行前由后端重新核实」因此同时覆盖推送状态与行本身。顺带让 `validateHash` 得到复用（D11）。返回值在 `{ mode }` 之外带 `shortOid` 与 `subject`：reset 之后该提交从历史消失，通知与审计需要点名它 |
 
 
 ---
@@ -228,7 +229,9 @@ discard 与 undoCommit 在 M5a。
   需要各自的「点击武装→3s 内再点」确认（§4.3）与更明确的审计（删了哪个分支、
   丢弃了哪些路径）。deleteBranch 已在 M4 交付（`not-merged` → 同一行武装成强制删除），
   **discard 已在 M5a 顺序 2 交付**（行内按钮与菜单条目各自武装，审计逐条记路径，
-  `auditPaths` 只保留前 20 条 + 计数），剩 **undoCommit** 排在 M5a（见 D24 与 §10）。
+  `auditPaths` 只保留前 20 条 + 计数），**undoCommit 已在 M5a 顺序 3 交付**（历史行
+  菜单武装确认；host 执行前重核 HEAD 与推送状态；审计记 hash、仓库、reset/revert
+  与 subject）。M5a 只剩 **stash**（§10.1 顺序 4）。
   若将来要支持 LAN 访问，
   再补「可信 authority / 配对设备 cookie」的逃生口。
 
@@ -444,7 +447,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 |---|---|---|---|---|
 | 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 2/3 与 §9 的②③都复用它。**✅ 已交付（2026-09-12）**：浮层通用件随分支下拉落地（`ui/popover.tsx`），菜单内容那一层是新模块 `ui/menu.tsx`（条目模型 + 分隔线 + 上下键选择），并接上第一个真实调用方——**文件行的右键菜单**（右键 / Shift+F10 / 菜单键打开），条目是今天就能用的该行暂存动作。细节见下方「顺序 1 交付」 | S–M |
 | 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | **✅ 已交付（2026-09-12）**：见下方「顺序 2 交付」 |
-| 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | S–M |
+| 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | **✅ 已交付（2026-09-12）**：见下方「顺序 3 交付」 |
 | 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | M |
 
 ### 顺序 1 交付：行级菜单机制（2026-09-12，已完成）
@@ -476,6 +479,18 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | 与已有的两条规则对齐 | 打开菜单时收起分支下拉、行开 diff 时收起菜单、文件从列表消失时收起菜单——都沿用顺序 1 的三条；一次成功的 discard 之后面板自己的通知说「已放弃「{path}」的更改」，因为 `git restore` 什么都不打印，而用户需要听到自己刚放弃了哪个文件 |
 | 测试 | 14 项（335 总计）：服务层 8 项真仓库（索引那一半保住、"three" 回到 "two"、未出生分支、删未跟踪文件、一次请求两半都走对、已暂存-only 是 no-op 且不动索引、删除的文件被恢复、冲突被拒绝且文件原样、四种非法路径 refusals 不发 git）、路由 1 项（POST 走通 + GET 405）、客户端 4 项（行内按钮先武装后执行且文案含「不可恢复」、已暂存/冲突行没有这个按钮而菜单也没有该条目与分隔线、菜单条目武装后菜单不关且第二击执行并关闭、被拒的 discard 落回列表旁）、菜单机制 1 项（`stayOpen` 的条目不关菜单，普通条目照旧先关后执行） |
 
+### 顺序 3 交付：撤销最近提交 undoCommit（2026-09-12，已完成）
+
+| 落点 | 内容 |
+|---|---|
+| `host/git-service.ts` | `undoCommit(sessionId, hash)`：**执行前全部重核，不信客户端的任何读数**——`rev-parse HEAD` 必须与传入 hash 相等（行已过期则拒绝，而不是默默撤销一个没人指着的提交）；推送状态用 `merge-base --is-ancestor HEAD <upstream>` 现问仓库（与历史行 ○/● 标记同一基准，两者不会打架），上游不存在或解析不出都算「未推送」——**reset 是安全的倾斜方向**（不碰远端）。未推送 → `reset --mixed HEAD~1`（改动退回工作区）；已推送 → `revert --no-edit`（新提交，不改写已发布历史）。两种明确拒绝：未推送路径上的**根提交**（没有 `HEAD~1` 可回退；「撤销」到分支不存在是另一个决定，不是撤销一个提交）与已推送路径上的**合并提交**（revert 需要 `-m` 选主线，那是用户在终端里的决定，不是面板猜的）；未推送的合并允许 reset（不需要选主线）。游离 HEAD 与未出生分支同样前置拒绝 |
+| 审计（§5.5） | 每次 undo 记一行：短 hash、仓库根、`via reset`/`via revert` 与 subject——reset 之后提交从历史消失，日志是唯一的记录 |
+| `core/types.ts` + `core/ports.ts` | 新增 `UndoResult { mode, shortOid, subject }`（文档 §5.4 的 `{ mode }` 加上提交身份，好让通知能说出撤销的是谁）；`WorkspaceGitService` 与 `GitRemoteClient` 各加一个方法。**API 形状有意带 hash**：文档 §5.4 的 `undoCommit()` 无参，但 hash 是「过期行」防线的一半（host 拿它与现读的 HEAD 比对），也是让 `validateHash` 复用得上的形状——登记为对文档的一处扩展 |
+| `host/adapter/routes.ts` + `client/adapter/git-client.ts` | `POST /git-panel/undoCommit` 进 `WRITE_OPERATIONS`（GET 405、跨源 403、同源校验照旧） |
+| `ui/History.tsx` | `CommitRow` 获得可选 `onMenu`（右键 / Shift+F10 / 菜单键，锚点就是行自身）；`HistoryPanel` 只把**最新一行**（`commits[0]`）接上菜单——FR-3.8 的「仅最新一条」在 UI 层就不提供入口，其余行的右键不作任何拦截 |
+| `ui/BottomPane.tsx` + `ui/StatusPanel.tsx` | `onCommitMenu(commit, anchor)` 透传到面板：菜单状态并入既有的 `menu`（判别联合 `kind: 'file' | 'commit'`），同一套 `Popover` + `Menu`；条目只有一条 danger 的「撤销此提交」，`stayOpen` 武装（键 `undo:{oid}`），**武装文案跟着该行的 ○/● 标记走**：未推送「再点一次：改动退回工作区」、已推送「再点一次：创建反转提交（原历史保留）」——客户端的标记与 host 的现问同基准，所以预告不会说谎。成功通知按 host 返回的 `mode` 分两句，都点名被撤销的 subject（reset 后行已不在历史里，这句话是唯一记录）。「行从列表消失则收起菜单」的既有规则**不适用**于 commit 菜单（历史不在面板的 snapshot 里），过期行的答案就是 host 的拒绝 |
+| `ui/error-copy.ts` | `bad-request` 不再丢掉 `error.message`：§5.5 的形状校验在诚实 UI 下不可达，而 undo 的拒绝是**可达状态**（过期行、根提交、已发布合并），那句原因必须被看见。原先「请求不完整，请重新打开这个面板」的文案键随之删除 |
+| 测试 | 14 项（355 总计）：服务层 8 项真仓库（未推送 reset 且改动退回工作区、有上游但未推送仍 reset、已推送 revert 且远端不动而反转提交未推送、过期 hash 拒绝且 HEAD 不动、根提交拒绝、未出生与游离拒绝、已发布合并拒绝而未发布合并 reset 成功、五种非法 hash 不发 git）+ 审计 1 项（记 hash/仓库/mode/subject）+ 路由 1 项（POST 走通 + GET 405）+ 客户端 5 项（只有最新行有菜单且单条目 danger、未推送武装成 reset 文案且第二击执行并通知点名 subject、已推送武装成 revert 文案、Shift+F10 打开且 Enter 先武装后执行、拒绝落在列表旁且历史原样）；既有「不认识会话/非仓库」两表也补进 `undoCommit` |
 ### 10.2 M5b（M5a 验收之后）
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |

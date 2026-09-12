@@ -35,6 +35,7 @@ import type {
   OperationReport,
   RepoStatus,
   FileDiff,
+  UndoResult,
 } from '../../core/types.ts'
 
 /** The host route prefix; must match `host/routes.ts`. */
@@ -191,6 +192,8 @@ export function createGitRemoteClient(): GitRemoteClient {
       ),
     showCommit: (sessionId, hash, signal) =>
       request<CommitDetail>('/showCommit', { session: sessionId, hash }, signal),
+    undoCommit: (sessionId, hash, signal) =>
+      mutate<UndoResult>('/undoCommit', { session: sessionId, hash }, signal),
 
     watch(sessionId, onChange) {
       /** Every kind: the guesses this transport makes on its own. */

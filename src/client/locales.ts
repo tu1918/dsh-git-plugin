@@ -53,6 +53,13 @@ export const zh = {
   'action.discardConfirm': '将丢弃「{path}」的更改，不可恢复',
 
   'menu.fileRow': '{path} 的操作',
+  'menu.commitRow': '提交 {hash} 的操作',
+
+  'action.undoCommit': '撤销此提交',
+  'action.undoCommitArmedReset': '再点一次：改动退回工作区',
+  'action.undoCommitArmedRevert': '再点一次：创建反转提交（原历史保留）',
+  'undo.doneReset': '已撤销「{subject}」，改动已退回工作区',
+  'undo.doneRevert': '已创建反转提交，撤销「{subject}」',
 
   'commit.placeholder': '提交信息…',
   'commit.button': '提交',
@@ -159,7 +166,6 @@ export const zh = {
   'error.gitMissing': '找不到 git 命令，请确认这台机器已安装 Git。',
   'error.timeout': 'Git 响应太慢，这次读取已中止。',
   'error.tooLarge': '输出太大，这次读取已中止。',
-  'error.badRequest': '请求不完整，请重新打开这个面板。',
   'error.generic': '读取失败：{message}',
   'error.actionFailed': '操作失败：{message}',
   'error.nothingToCommit': '暂存区是空的，没有可提交的内容。',
@@ -199,6 +205,13 @@ export const en: Record<GitPanelKey, string> = {
   'action.discardConfirm': 'Discards the changes to {path}; this cannot be undone',
 
   'menu.fileRow': 'Actions for {path}',
+  'menu.commitRow': 'Actions for commit {hash}',
+
+  'action.undoCommit': 'Undo this commit',
+  'action.undoCommitArmedReset': 'Click again: the changes return to the working tree',
+  'action.undoCommitArmedRevert': 'Click again: a revert commit is created (history kept)',
+  'undo.doneReset': 'Undid “{subject}”; its changes are back in the working tree',
+  'undo.doneRevert': 'Created a revert commit undoing “{subject}”',
 
   'commit.placeholder': 'Commit message…',
   'commit.button': 'Commit',
@@ -308,7 +321,6 @@ export const en: Record<GitPanelKey, string> = {
   'error.gitMissing': 'The git command was not found. Check that Git is installed on this machine.',
   'error.timeout': 'Git took too long, so this read was stopped.',
   'error.tooLarge': 'The output was too large, so this read was stopped.',
-  'error.badRequest': 'The request was incomplete. Reopen this panel.',
   'error.generic': 'Could not read: {message}',
   'error.actionFailed': 'The operation failed: {message}',
   'error.nothingToCommit': 'The index is empty, so there is nothing to commit.',

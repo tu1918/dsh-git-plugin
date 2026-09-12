@@ -234,6 +234,33 @@ export interface OperationReport {
   readonly detail: string
 }
 
+/**
+ * Which way FR-3.8's undo went.
+ *
+ * The host decides, from state it re-read at execution time (never from the
+ * client's claim): a commit the upstream does not contain is undone with
+ * `reset --mixed` — its changes return to the working tree — while one that is
+ * already published is undone with `revert`, a new commit rather than rewritten
+ * history.
+ */
+export type UndoMode = 'reset' | 'revert'
+
+/**
+ * What undoing the newest commit did (FR-3.8, §5.4's `{ mode }`).
+ *
+ * The undone commit's identity rides along so the panel's notice can name what
+ * it acted on — after a reset the row is gone from the history, so the notice
+ * is the only place that says which commit it was.
+ */
+export interface UndoResult {
+  /** Which command undid the commit. */
+  readonly mode: UndoMode
+  /** Abbreviated object id of the commit that was undone. */
+  readonly shortOid: string
+  /** First line of the undone commit's message. */
+  readonly subject: string
+}
+
 /** Log levels the panel reports through the host port. */
 export type LogLevel = 'info' | 'warn' | 'error'
 

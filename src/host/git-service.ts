@@ -45,6 +45,7 @@ import type {
   LogPage,
   OperationReport,
   RepoStatus,
+  UndoResult,
 } from '../core/types.ts'
 import {
   validateBranchBase,
@@ -975,6 +976,108 @@ export function createGitService(
     return { ok: true, value: { commit, files: parseNumstat(stats.value.stdout) } }
   }
 
+  /**
+   * Undo the newest commit (FR-3.8).
+   *
+   * Everything the decision rests on is re-read HERE, at execution time — the
+   * hash the browser sent is only a claim about which row was clicked, and the
+   * pushed state in the panel's last reading is exactly as old as that reading:
+   *
+   * - HEAD is re-resolved and must equal the sent hash. A row that is no longer
+   *   the newest (an agent committed in the meantime, or the panel was stale) is
+   *   refused rather than silently undoing a commit nobody pointed at.
+   * - The pushed question is asked of the repository, not of the client's
+   *   marker: the commit is "published" exactly when the branch's upstream
+   *   contains it (`merge-base --is-ancestor`). The same basis the ○/● marker
+   *   uses, so the two can never disagree about what happened next.
+   *
+   * The two undo paths are the doc's own: unpublished → `reset --mixed HEAD~1`,
+   * which moves the branch back and leaves the commit's changes in the working
+   * tree; published → `revert --no-edit`, a NEW commit that undoes the old one,
+   * because the published history is not this panel's to rewrite. Erring towards
+   * reset is the safe direction (it touches nothing remote), so an upstream ref
+   * that cannot be resolved at all — a gone upstream, say — counts as
+   * unpublished.
+   *
+   * Two commits are refused outright: the FIRST commit on the unpublished path
+   * (there is no `HEAD~1` to reset to; unmaking the branch is a different
+   * decision than undoing a commit), and a MERGE on the published path (a revert
+   * needs `-m` and a mainline choice, which is the user's to make in a terminal,
+   * not the panel's to guess). A reset of a merge commit is fine and allowed.
+   * @param sessionId - Session whose repository to act on.
+   * @param hash - The hash of the commit the browser believes is newest.
+   */
+  async function undoCommit(sessionId: string, hash: string): Promise<Result<UndoResult>> {
+    const valid = validateHash(hash)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const branch = await currentBranch(root.value)
+    if (!branch.ok) return branch
+    const info = branch.value
+    if (info.head === 'unborn') {
+      return fail('bad-request', 'there is no commit to undo yet')
+    }
+    if (info.head !== 'branch') {
+      return fail('bad-request', 'HEAD is detached, so there is no branch whose newest commit to undo')
+    }
+
+    // The host, not the browser, says which commit is newest: the row the click
+    // came from may predate a commit that landed since.
+    const head = await run(['rev-parse', 'HEAD'], root.value)
+    if (!head.ok) return head
+    const headOid = head.value.stdout.trim()
+    if (headOid !== valid.value) {
+      return fail('bad-request', 'that commit is no longer the newest one')
+    }
+
+    // One read answers both questions the paths below need: the subject the
+    // audit names, and the parents that decide the two refusals.
+    const meta = await run(['log', '-1', '--date=iso-strict', `--format=${LOG_FORMAT}`], root.value)
+    if (!meta.ok) return meta
+    const commit = parseLog(meta.value.stdout).commits[0]
+    if (commit === undefined) {
+      return fail('internal', 'git reported a HEAD it could not describe')
+    }
+
+    let published = false
+    if (info.upstream !== null) {
+      // `--is-ancestor` exits 1 for "not contained" and non-zero at large for an
+      // unresolvable upstream; both read as "not published", which is the safe
+      // side — reset touches nothing remote.
+      const contained = await runner.run(
+        ['merge-base', '--is-ancestor', headOid, info.upstream],
+        options(root.value, false),
+      )
+      published = contained.code === 0
+    }
+
+    if (!published) {
+      if (commit.parents.length === 0) {
+        return fail(
+          'bad-request',
+          'the newest commit is also the first one; undoing it would unmake the branch',
+        )
+      }
+      const outcome = await run(['reset', '--mixed', 'HEAD~1'], root.value, true)
+      if (!outcome.ok) return outcome
+      // §5.5's audit trail: which commit, where, and which way it went.
+      ports.log('info', `git-panel: undid ${commit.shortOid} in ${root.value} via reset: ${commit.subject}`)
+      return { ok: true, value: { mode: 'reset', shortOid: commit.shortOid, subject: commit.subject } }
+    }
+
+    if (commit.parents.length > 1) {
+      return fail(
+        'bad-request',
+        'the newest commit is a published merge; reverting it needs a mainline choice (git revert -m), which is a terminal’s business',
+      )
+    }
+    const outcome = await run(['revert', '--no-edit', headOid], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: undid ${commit.shortOid} in ${root.value} via revert: ${commit.subject}`)
+    return { ok: true, value: { mode: 'revert', shortOid: commit.shortOid, subject: commit.subject } }
+  }
+
   return {
     status: readStatus,
     diff: diffPath,
@@ -993,6 +1096,7 @@ export function createGitService(
     abortMerge,
     generateCommitMessage,
     showCommit,
+    undoCommit,
 
     async branches(sessionId: string): Promise<Result<readonly BranchRef[]>> {
       const root = await repoRoot(sessionId)

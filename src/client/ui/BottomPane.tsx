@@ -57,7 +57,7 @@ import type { ReactNode } from 'react'
 
 import { pathParts } from '../../core/format.ts'
 import type { GitRemoteClient } from '../../core/ports.ts'
-import type { DiffArea } from '../../core/types.ts'
+import type { CommitInfo, DiffArea } from '../../core/types.ts'
 import { readBottomPane, writeBottomPane } from './bottom-view.ts'
 import { DOCK_MIN_HEIGHT, DOCK_RESERVED } from './panel-layout.ts'
 import { DiffPane } from './DiffView.tsx'
@@ -94,6 +94,11 @@ export interface BottomPaneProps {
   readonly openFile: OpenFile | null
   /** Drop the diff tab and fold the pane back to its strip. */
   readonly onCloseDiff: () => void
+  /**
+   * Open a commit row's menu (FR-3.8), owned by the panel above: the armed
+   * confirmation and the action feedback both live there.
+   */
+  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
 }
 
 /**
@@ -108,6 +113,7 @@ export function BottomPane({
   signal,
   openFile,
   onCloseDiff,
+  onCommitMenu,
 }: BottomPaneProps): ReactNode {
   /**
    * The active tab, which is also whether the pane is open: `null` is the strip.
@@ -251,6 +257,7 @@ export function BottomPane({
               locale={locale}
               signal={signal}
               active={expanded && shown === 'history'}
+              onCommitMenu={onCommitMenu}
             />
           </div>
           {openFile !== null && (

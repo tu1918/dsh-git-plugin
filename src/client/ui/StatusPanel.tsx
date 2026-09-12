@@ -126,6 +126,7 @@ type ActionOp =
   | 'mergeContinue'
   | 'mergeAbort'
   | 'generate'
+  | 'undo'
 
 /**
  * What the panel is doing, or last did, at the operation level.
@@ -139,8 +140,9 @@ type ActionState =
   | { readonly kind: 'done'; readonly op: ActionOp; readonly label: string; readonly summary: string }
   | { readonly kind: 'failed'; readonly op: ActionOp; readonly label: string; readonly error: GitPanelError }
 
-/** The row whose menu is open, and the element its layer hangs from. */
-interface RowMenu {
+/** The change-list row whose menu is open, and the element its layer hangs from. */
+interface FileRowMenu {
+  readonly kind: 'file'
   /** The row element: the layer is measured from its bottom (or top) edge. */
   readonly anchor: HTMLElement
   /** The file the menu acts on. */
@@ -148,6 +150,23 @@ interface RowMenu {
   /** The group the row was opened in, which decides what the row can do. */
   readonly area: ChangeArea
 }
+
+/**
+ * The commit whose menu is open (FR-3.8's undo entry), and its anchor row.
+ *
+ * The panel never checks whether the commit is STILL the newest: the history is
+ * the bottom pane's reading, not this snapshot's, and the host re-resolves HEAD
+ * at execution time — a stale row is refused there, with the reason beside the
+ * list the way every other refusal lands.
+ */
+interface CommitRowMenu {
+  readonly kind: 'commit'
+  readonly anchor: HTMLElement
+  readonly commit: CommitInfo
+}
+
+/** One open row menu, of either kind the panel has. */
+type RowMenu = FileRowMenu | CommitRowMenu
 
 /**
  * Reduce a mutation's report to the one line the panel shows.
@@ -485,6 +504,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /** Whether the branch picker is unfolded (FR-4.1). */
   const [pickerOpen, setPickerOpen] = useState(false)
   /** The change row whose menu is open (§9's file menu), or `null`. */
+  /** The row whose menu is open (§9's file menu, or FR-3.8's commit menu), or `null`. */
   const [menu, setMenu] = useState<RowMenu | null>(null)
   /** The rail the picker's layer is measured from, and the id that names it. */
   const railRef = useRef<HTMLDivElement | null>(null)
@@ -592,9 +612,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
 
   // The same rule for an open menu: the row it hangs from can leave the list
   // under it — another window commits or discards the file — and a menu over a
-  // row that is gone would act on a path the panel no longer lists.
+  // row that is gone would act on a path the panel no longer lists. A commit
+  // menu has no such check here (the history is the bottom pane's reading, not
+  // this snapshot's); its stale case is the host's refusal, which FR-3.8's
+  // re-verification exists to produce.
   useEffect(() => {
-    if (menu === null || busy || snapshot === null || snapshot.kind !== 'ready') return
+    if (menu === null || menu.kind !== 'file' || busy || snapshot === null || snapshot.kind !== 'ready') return
     const { groups } = snapshot.status
     const listed = CHANGE_AREAS.some((area) =>
       groups[area].some((entry) => entry.path === menu.entry.path),
@@ -846,7 +869,44 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     // Shift+F10 reaches here without a press, so the branch list would otherwise
     // stay open behind the menu: two layers, one panel.
     setPickerOpen(false)
-    setMenu({ anchor, entry, area })
+    setMenu({ kind: 'file', anchor, entry, area })
+  }
+
+  /**
+   * Undo the newest commit (FR-3.8).
+   *
+   * Which undo happens — `reset --mixed` or `revert` — is the host's decision,
+   * re-verified at execution time; the notice names the commit because after a
+   * reset its row is gone from the history and this sentence is the only record
+   * of what was acted on.
+   * @param commit - The row the menu acted on.
+   */
+  const undoCommit = (commit: CommitInfo): void => {
+    // The armed state was this click's whole reason to exist; disarm so a later
+    // click on another row cannot inherit it.
+    disarm()
+    void perform('undo', t('action.undoCommit'), async () => {
+      const result = await git.undoCommit(sessionId, commit.oid, signal)
+      if (!result.ok) return result
+      return {
+        ok: true,
+        value:
+          result.value.mode === 'reset'
+            ? t('undo.doneReset', { subject: result.value.subject })
+            : t('undo.doneRevert', { subject: result.value.subject }),
+      }
+    })
+  }
+
+  /**
+   * Open one commit row's menu (FR-3.8), anchored on the row that asked for it.
+   * @param commit - The commit the menu acts on.
+   * @param anchor - The row element, which the layer is measured from.
+   */
+  const openCommitMenu = (commit: CommitInfo, anchor: HTMLElement): void => {
+    // Same one-layer rule as the file menu: Shift+F10 arrives without a press.
+    setPickerOpen(false)
+    setMenu({ kind: 'commit', anchor, commit })
   }
 
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
@@ -856,7 +916,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     `discard:${area}:${entry.path}`
 
   /**
-   * The entries of one row's menu (§9's file menu).
+   * The entries of one file row's menu (§9's file menu).
    *
    * The row's own staging action comes first — `git add` under the name that fits
    * the row (`mark resolved` for a conflict, FR-9.2) — and the destructive entry
@@ -868,7 +928,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * arms it and the menu stays up for the second — §4.3's two-click confirmation,
    * with the entry itself becoming the confirmation.
    */
-  const rowMenuEntries = (row: RowMenu): readonly MenuEntry[] => {
+  const fileMenuEntries = (row: FileRowMenu): readonly MenuEntry[] => {
     const staging: MenuEntry =
       row.area === 'staged'
         ? {
@@ -913,8 +973,53 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     ]
   }
 
-  const menuLabel = menu === null ? '' : t('menu.fileRow', { path: menu.entry.path })
-  const menuEntries: readonly MenuEntry[] = menu === null ? [] : rowMenuEntries(menu)
+  /**
+   * The entries of one commit row's menu (FR-3.8).
+   *
+   * One entry today, and it is armed: undo is in §4.3's irreversible class (the
+   * revert of a published commit, explicitly), and the entry itself becomes the
+   * confirmation between the two clicks. Which sentence it arms with follows the
+   * row's own pushed marker — the client's last reading, and the same upstream
+   * basis the host re-asks at execution time, so the two cannot disagree about
+   * which undo is coming. Copying and revert/cherry-pick entries for OTHER rows
+   * arrive with §10.2 orders 6 and 9.
+   */
+  const commitMenuEntries = (row: CommitRowMenu): readonly MenuEntry[] => {
+    const key = `undo:${row.commit.oid}`
+    const armedHere = armedKey === key
+    return [
+      {
+        kind: 'item',
+        id: 'undo',
+        label: armedHere
+          ? row.commit.pushed === true
+            ? t('action.undoCommitArmedRevert')
+            : t('action.undoCommitArmedReset')
+          : t('action.undoCommit'),
+        danger: true,
+        stayOpen: true,
+        disabled: pending,
+        onSelect: () => {
+          if (!armedHere) {
+            // §4.3's first click: arm, and leave the menu up for the second one.
+            armKey(key)
+            return
+          }
+          setMenu(null)
+          undoCommit(row.commit)
+        },
+      },
+    ]
+  }
+
+  const menuLabel =
+    menu === null
+      ? ''
+      : menu.kind === 'file'
+        ? t('menu.fileRow', { path: menu.entry.path })
+        : t('menu.commitRow', { hash: menu.commit.shortOid })
+  const menuEntries: readonly MenuEntry[] =
+    menu === null ? [] : menu.kind === 'file' ? fileMenuEntries(menu) : commitMenuEntries(menu)
 
   return (
     // The provider renders nothing; it is how a pane below hears that the
@@ -1174,6 +1279,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           signal={signal}
           openFile={openFile}
           onCloseDiff={() => setOpenFile(null)}
+          onCommitMenu={openCommitMenu}
         />
       </div>
     </RepoChangeProvider>

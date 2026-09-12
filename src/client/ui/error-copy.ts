@@ -43,7 +43,12 @@ export function errorCopy(
     case 'too-large':
       return { title: t('error.tooLarge'), detail: undefined }
     case 'bad-request':
-      return { title: t('error.badRequest'), detail: undefined }
+      // §5.5's shape failures (a bad path, a bad hash) are unreachable from an
+      // honest panel, but an undoCommit refusal is a reachable STATE — a stale
+      // row, a first commit, a published merge — and its sentence is the answer
+      // to "why did nothing happen". The message is the host's own one-liner in
+      // every case, so it is the title; git's output, when any, is the detail.
+      return { title: error.message, detail: error.detail }
     case 'nothing-to-commit':
       return { title: t('error.nothingToCommit'), detail: undefined }
     case 'non-fast-forward':

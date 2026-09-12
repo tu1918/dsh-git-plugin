@@ -87,6 +87,7 @@ import type {
   GeneratedMessage,
   OperationReport,
   RepoStatus,
+  UndoResult,
 } from '../src/core/types.ts'
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
 import type { MenuEntry } from '../src/client/ui/menu.tsx'
@@ -244,6 +245,8 @@ function stubGit(options: {
   deleteBranch?: Result<OperationReport>
   /** What `discard` answers, for the refusal path. */
   discard?: Result<OperationReport>
+  /** What `undoCommit` answers; a reset of the newest commit by default. */
+  undoCommit?: Result<UndoResult>
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -329,6 +332,15 @@ function stubGit(options: {
             commit: { ...commitFixture(), oid: hash, shortOid: hash.slice(0, 7) },
             files: [],
           },
+        },
+      )
+    },
+    undoCommit: (_sessionId, hash) => {
+      note(`undoCommit:${hash}`)
+      return Promise.resolve(
+        options.undoCommit ?? {
+          ok: true,
+          value: { mode: 'reset' as const, shortOid: hash.slice(0, 7), subject: 'a commit subject' },
         },
       )
     },
@@ -2894,6 +2906,164 @@ describe('discarding a change from its row (FR-6.1, §4.3)', () => {
     const box = must(container, '[data-action-error="discard"]')
     assert.match(box.textContent ?? '', /nope/u)
     assert.ok(container.querySelector(`[data-group="unstaged"] .${cls.row}`), 'the list survives')
+  })
+})
+
+/* ── M5a order 3: undoing the newest commit from its history row (FR-3.8) ── */
+
+/** Right-click the history row at `index` (0 = newest), and return the menu it opened. */
+async function openHistoryMenu(container: HTMLElement, index = 0): Promise<HTMLElement> {
+  const row = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRow}`)][index]
+  if (row === undefined) throw new Error(`expected a commit row at index ${index}`)
+  await act(async () => {
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  })
+  await settle()
+  return must<HTMLElement>(container, '[data-menu="true"]')
+}
+
+describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () => {
+  it('opens a one-entry danger menu on the newest commit, and nowhere else', async () => {
+    const older = { ...commitFixture(), oid: 'e'.repeat(40), shortOid: 'eeeeeee' }
+    const container = await render(
+      // Newest first, as `git log` reports it.
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [commitFixture(), older] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openHistoryMenu(container)
+    // A menu, named for the commit it belongs to.
+    assert.equal(menu.getAttribute('role'), 'menu')
+    assert.match(menu.getAttribute('aria-label') ?? '', /bbbbbbb/)
+    const items = [...menu.querySelectorAll('[role="menuitem"]')]
+    assert.equal(items.length, 1, 'undo is the only entry so far')
+    assert.equal(items[0]?.textContent, 'Undo this commit')
+    assert.equal(items[0]?.getAttribute('data-danger'), 'true')
+
+    // The older row has no menu at all: FR-3.8 undoes the newest commit, so a
+    // row with no entries gets no empty menu.
+    await keyDown(menu, { key: 'Escape' })
+    const rows = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRow}`)]
+    await act(async () => {
+      rows[1]?.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    await settle()
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+  })
+
+  it('arms first with the reset sentence for an unpushed commit; only the second click undoes', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      // commitFixture().pushed is false: the row's marker says "not pushed yet".
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, log: [commitFixture()] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    let menu = await openHistoryMenu(container)
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+    await click(must(menu, '[role="menuitem"]'))
+
+    // §4.3's first click: armed, and the entry itself says what the second click
+    // does — for an unpublished commit, the changes return to the working tree.
+    assert.deepEqual(calls.entries, [])
+    menu = must<HTMLElement>(container, '[data-menu="true"]')
+    assert.equal(must(container, '[data-popover="true"]'), layer, 'the menu never closed')
+    const armed = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    assert.match(armed.textContent ?? '', /changes return to the working tree/)
+
+    await click(armed)
+    // The host is handed the commit's FULL object id; it re-verifies the rest.
+    assert.deepEqual(calls.entries, [`undoCommit:${'b'.repeat(40)}`])
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+    const done = must(container, '[data-action-done="undo"]')
+    // The notice names the commit, because its row is gone from the history.
+    assert.match(done.textContent ?? '', /a commit subject/)
+    assert.match(done.textContent ?? '', /back in the working tree/)
+  })
+
+  it('arms with the revert sentence for a published commit, and reports the new commit', async () => {
+    const calls: ActionLog = { entries: [] }
+    const published = { ...commitFixture(), pushed: true }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          log: [published],
+          undoCommit: {
+            ok: true,
+            value: { mode: 'revert', shortOid: 'bbbbbbb', subject: 'a commit subject' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const menu = await openHistoryMenu(container)
+    await click(must(menu, '[role="menuitem"]'))
+    const armed = must<HTMLElement>(container, '[role="menuitem"][data-danger="true"]')
+    // Published history is not rewritten: the confirmation says a NEW commit
+    // undoes the old one.
+    assert.match(armed.textContent ?? '', /a revert commit is created/)
+
+    await click(armed)
+    assert.deepEqual(calls.entries, [`undoCommit:${'b'.repeat(40)}`])
+    assert.match(must(container, '[data-action-done="undo"]').textContent ?? '', /revert commit undoing/)
+  })
+
+  it('opens from the keyboard, and Enter arms then executes', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, log: [commitFixture()] }), t, locale: 'en' }),
+    )
+    await settle()
+    const row = must<HTMLElement>(container, `.${cls.commitRow}`)
+    row.focus()
+
+    // Shift+F10 is what a keyboard without a menu key sends.
+    await keyDown(row, { key: 'F10', shiftKey: true })
+    const menu = must<HTMLElement>(container, '[data-menu="true"]')
+    assert.equal(document.activeElement, menu)
+    assert.equal(must<HTMLElement>(menu, '[role="menuitem"]').dataset.active, 'true')
+
+    await keyDown(menu, { key: 'Enter' })
+    assert.deepEqual(calls.entries, [], 'the first activation only arms')
+    assert.ok(container.querySelector('[data-menu="true"]'), 'the menu stays up for the second click')
+
+    await keyDown(menu, { key: 'Enter' })
+    assert.deepEqual(calls.entries, [`undoCommit:${'b'.repeat(40)}`])
+    assert.equal(container.querySelector('[data-menu="true"]'), null)
+  })
+
+  it('lands a refusal beside the list, with the host’s own sentence', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          log: [commitFixture()],
+          undoCommit: {
+            ok: false,
+            error: { code: 'bad-request', message: 'that commit is no longer the newest one' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const menu = await openHistoryMenu(container)
+    await click(must(menu, '[role="menuitem"]'))
+    await click(must(container, '[role="menuitem"][data-danger="true"]'))
+
+    // The refusal is a reachable state (the history moved under the row), and
+    // its sentence is the answer — shown where the operation was (§4.3), with
+    // the history list exactly as it was.
+    const box = must(container, '[data-action-error="undo"]')
+    assert.match(box.textContent ?? '', /no longer the newest one/)
+    assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 1)
   })
 })
 

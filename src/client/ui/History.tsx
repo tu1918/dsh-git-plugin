@@ -182,6 +182,7 @@ function CommitRow({
   locale,
   selected,
   onSelect,
+  onMenu,
 }: {
   readonly commit: CommitInfo
   readonly now: number
@@ -190,6 +191,13 @@ function CommitRow({
   /** Whether this commit is the one showing in the detail column. */
   readonly selected: boolean
   readonly onSelect: () => void
+  /**
+   * Open the row's menu, anchored on the row element (FR-3.8).
+   *
+   * Present only on the NEWEST commit — undo is FR-3.8's "仅最新一条", and a row
+   * with no entries gets no menu rather than an empty one.
+   */
+  readonly onMenu?: (anchor: HTMLElement) => void
 }): ReactNode {
   const age = relativeTimeParts(commit.committedAt, now)
   const format = useMemo(() => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }), [locale])
@@ -208,6 +216,24 @@ function CommitRow({
         aria-label={t('history.open', { hash: commit.shortOid })}
         title={commit.subject}
         onClick={onSelect}
+        onContextMenu={
+          onMenu === undefined
+            ? undefined
+            : (event) => {
+                event.preventDefault()
+                onMenu(event.currentTarget)
+              }
+        }
+        onKeyDown={
+          onMenu === undefined
+            ? undefined
+            : (event) => {
+                // Shift+F10 is what a keyboard without a menu key sends.
+                if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return
+                event.preventDefault()
+                onMenu(event.currentTarget)
+              }
+        }
       >
         <span className={cls.commitTop}>
           <span className={cls.commitHash}>{commit.shortOid}</span>
@@ -246,6 +272,15 @@ export interface HistoryPanelProps {
   readonly signal?: AbortSignal
   /** Whether this panel is the one on screen, which is what starts the read. */
   readonly active: boolean
+  /**
+   * Open a commit row's menu (FR-3.8's undo entry).
+   *
+   * The menu itself — its layer, its entries, its armed confirmation — belongs
+   * to the panel, which owns the action feedback this operation reports through;
+   * this panel only decides WHICH rows carry one: the newest commit, because
+   * FR-3.8 undoes exactly that one.
+   */
+  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
 }
 
 /**
@@ -260,6 +295,7 @@ export function HistoryPanel({
   locale,
   signal,
   active,
+  onCommitMenu,
 }: HistoryPanelProps): ReactNode {
   const [commits, setCommits] = useState<readonly CommitInfo[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -367,6 +403,8 @@ export function HistoryPanel({
   )
 
   const selected = commits.find((commit) => commit.oid === openOid) ?? null
+  /** FR-3.8 undoes the NEWEST commit, so only that row carries a menu. */
+  const newestOid = commits[0]?.oid
 
   return (
     // The list is the first child and the detail the second, which is what makes
@@ -384,6 +422,11 @@ export function HistoryPanel({
             locale={locale}
             selected={commit.oid === openOid}
             onSelect={() => select(commit.oid)}
+            onMenu={
+              onCommitMenu === undefined || commit.oid !== newestOid
+                ? undefined
+                : (anchor) => onCommitMenu(commit, anchor)
+            }
           />
         ))}
         {hasMore && (

@@ -738,6 +738,36 @@ describe('the mutation routes', () => {
     }
   })
 
+  it('undoes the newest commit over POST, and refuses the same operation over GET', async () => {
+    const repo = makeRepo('routes-undo')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await post(harness, '/git-panel/undoCommit', { session: 's1', hash: second })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; value: { mode: string; subject: string } }
+      assert.equal(body.ok, true)
+      assert.equal(body.value.mode, 'reset')
+      assert.equal(body.value.subject, 'second')
+      // The branch really moved back: the route reaches git, not a stub.
+      assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+
+      // A mutation reachable by GET would be reachable by an <img> tag.
+      const viaGet = await fetch(`${harness.origin}/git-panel/undoCommit?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('runs the widening commit only when the body asks for it', async () => {
     const repo = repoWithChange('routes-commit')
     const harness = await startHarness({ s1: repo })
