@@ -261,6 +261,32 @@ export interface UndoResult {
   readonly subject: string
 }
 
+/**
+ * One stash entry, as `git stash list` reports it (FR-6.2).
+ *
+ * `selector` is what git printed (`stash@{0}`) and what the row shows, but it is
+ * deliberately NOT what the panel sends back: a selector is a position in the
+ * stack, so a stash created in another window shifts every entry behind it. The
+ * panel addresses an entry by {@link oid} and the host re-resolves that against
+ * its own reading at execution time — the same "the row may be stale" rule
+ * FR-3.8's undo follows.
+ */
+export interface StashEntry {
+  /** Full object id of the stash commit. */
+  readonly oid: string
+  /** Abbreviated object id, as the row shows it. */
+  readonly shortOid: string
+  /** The selector git currently gives this entry, such as `stash@{0}`. */
+  readonly selector: string
+  /**
+   * The stash's own subject: `WIP on main: <short oid> <subject>` when git wrote
+   * it, or `On main: <message>` when the user gave one.
+   */
+  readonly subject: string
+  /** Committer date, ISO-8601. */
+  readonly createdAt: string
+}
+
 /** Log levels the panel reports through the host port. */
 export type LogLevel = 'info' | 'warn' | 'error'
 

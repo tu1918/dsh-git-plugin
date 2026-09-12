@@ -22,6 +22,7 @@ import {
   parseBranches,
   parseLog,
   parseNumstat,
+  parseStashList,
   parseStatusV2,
 } from '../src/core/git-parse.ts'
 import type { CommitInfo, FileChange } from '../src/core/types.ts'
@@ -321,5 +322,70 @@ describe('parseNumstat (FR-3.6)', () => {
   it('answers an empty list for a commit with no changes of its own', () => {
     // A merge read against `--first-parent` can legitimately be empty.
     assert.deepEqual(parseNumstat(''), [])
+  })
+})
+
+describe('parseStashList (FR-6.2)', () => {
+  /**
+   * One record, byte-for-byte as `git stash list
+   * --format='%gd%x00%H%x00%h%x00%s%x00%cI%x1e'` prints it: NUL between the
+   * fields, a record separator and a newline after each entry.
+   */
+  const record = (...fields: readonly string[]): string => `${fields.join('\x00')}\x1e\n`
+
+  const LIST =
+    record(
+      'stash@{0}',
+      'c052d9131ac5cfdd081f03154398527de218aa28',
+      'c052d91',
+      'On main: my stash',
+      '2026-09-12T17:44:57+08:00',
+    ) +
+    record(
+      'stash@{1}',
+      'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00',
+      'aa11bb2',
+      'WIP on main: 3f2a1b0 first',
+      '2026-09-12T17:40:03+08:00',
+    )
+
+  it('reads git’s selector, both ids, the subject and the date of each entry', () => {
+    assert.deepEqual(parseStashList(LIST), [
+      {
+        selector: 'stash@{0}',
+        oid: 'c052d9131ac5cfdd081f03154398527de218aa28',
+        shortOid: 'c052d91',
+        subject: 'On main: my stash',
+        createdAt: '2026-09-12T17:44:57+08:00',
+      },
+      {
+        selector: 'stash@{1}',
+        oid: 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00',
+        shortOid: 'aa11bb2',
+        subject: 'WIP on main: 3f2a1b0 first',
+        createdAt: '2026-09-12T17:40:03+08:00',
+      },
+    ])
+  })
+
+  it('answers an empty list for a repository that has never stashed', () => {
+    // `git stash list` exits 0 and prints nothing there — and on an unborn
+    // branch too, where there is nothing to stash from in the first place.
+    assert.deepEqual(parseStashList(''), [])
+  })
+
+  it('keeps a subject that holds a newline, and skips a record it cannot read', () => {
+    // Only the record separator ends a record, so a multi-line message stays one
+    // entry; a truncated record is dropped rather than guessed at.
+    const raw = `stash@{2}\x00${'a'.repeat(40)}\x00aaaaaaa\x00On main: one\n\n  and more\x002026-09-12T09:00:00+08:00\x1estash@{3}\x00short\x1e`
+    assert.deepEqual(parseStashList(raw), [
+      {
+        selector: 'stash@{2}',
+        oid: 'a'.repeat(40),
+        shortOid: 'aaaaaaa',
+        subject: 'On main: one\n\n  and more',
+        createdAt: '2026-09-12T09:00:00+08:00',
+      },
+    ])
   })
 })

@@ -63,6 +63,7 @@ const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'log',
   'diff',
   'showCommit',
+  'stashes',
 ])
 
 /**
@@ -87,6 +88,9 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'abortMerge',
   'generateCommitMessage',
   'undoCommit',
+  'stashSave',
+  'stashApply',
+  'stashDrop',
 ])
 
 /**
@@ -383,6 +387,33 @@ export function registerGitPanelRoutes(
         const hash = stringOf(body, 'hash')
         if (!hash.ok) return hash
         return await service.undoCommit(sessionId, hash.value)
+      }
+      case 'stashes':
+        return await service.stashes(sessionId)
+      case 'stashSave': {
+        // The message is optional: an absent, null, or blank one means "let git
+        // write the label", which is FR-6.2's "可带消息" read the other way round.
+        // Anything else must be a string, so `message: 7` is refused here rather
+        // than becoming the label "7".
+        const raw = body['message']
+        if (raw !== undefined && raw !== null && typeof raw !== 'string') {
+          return fail('bad-request', 'message must be a string when it is given')
+        }
+        return await service.stashSave(
+          sessionId,
+          typeof raw === 'string' ? raw : null,
+          body['untracked'] === true,
+        )
+      }
+      case 'stashApply': {
+        const oid = stringOf(body, 'oid')
+        if (!oid.ok) return oid
+        return await service.stashApply(sessionId, oid.value, body['pop'] === true)
+      }
+      case 'stashDrop': {
+        const oid = stringOf(body, 'oid')
+        if (!oid.ok) return oid
+        return await service.stashDrop(sessionId, oid.value)
       }
       case 'checkout': {
         const name = stringOf(body, 'name')

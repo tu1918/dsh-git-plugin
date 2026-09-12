@@ -8,10 +8,11 @@
  * parsers are the file the doc's M0 gate ("解析器测试全绿") is really about.
  *
  * The output formats parsed here are porcelain v2 (`--porcelain=v2 --branch -z`)
- * for status, `for-each-ref --format` for branches, and a `%x00`/`%x1e`
- * delimited `log --format` for history. Each parser is written against `-z`
- * output, where git emits paths raw — no C-style quoting and no truncation — so
- * this module never unescapes a pathname.
+ * for status, `for-each-ref --format` for branches, a `%x00`/`%x1e`
+ * delimited `log --format` for history, and the same delimiters again for
+ * `stash list --format`. Each parser is written against `-z` output, where git
+ * emits paths raw — no C-style quoting and no truncation — so this module never
+ * unescapes a pathname.
  *
  * @module dsh-git-panel/core/git-parse
  */
@@ -24,6 +25,7 @@ import type {
   CommitInfo,
   FileChange,
   LogPage,
+  StashEntry,
   StatusCode,
   StatusGroups,
 } from './types.ts'
@@ -480,6 +482,43 @@ export function markPushed(
   unpushed: ReadonlySet<string>,
 ): readonly CommitInfo[] {
   return commits.map((commit) => ({ ...commit, pushed: !unpushed.has(commit.oid) }))
+}
+
+/**
+ * Parse `git stash list` output written with `%x00` field and `%x1e` record
+ * separators (FR-6.2).
+ *
+ * The expected field order is `%gd`, `%H`, `%h`, `%s`, `%cI`: git's own selector
+ * for the entry, the stash commit's full and short ids, its subject, and its
+ * committer date. `git stash list` walks `refs/stash`'s reflog, so `%gd` is always
+ * `stash@{n}` and `n` is the position in the stack — the order the records arrive
+ * in, newest first.
+ *
+ * An unborn branch prints nothing at all rather than failing, and a stash whose
+ * subject holds a newline still occupies one record: only `%x1e` ends a record.
+ * A record that does not carry all five fields is skipped rather than guessed at,
+ * the same rule {@link parseLog} follows.
+ * @param raw - Raw stdout of the matching `stash list` call.
+ * @returns One entry per stash, newest first.
+ */
+export function parseStashList(raw: string): readonly StashEntry[] {
+  const stashes: StashEntry[] = []
+  for (const record of raw.split('\x1e')) {
+    const trimmed = record.replace(/^\n+/, '')
+    if (trimmed === '') continue
+    const fields = trimmed.split('\x00')
+    if (fields.length < 5) continue
+    const [selector, oid, shortOid, subject, createdAt] = fields as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    if (oid === '') continue
+    stashes.push({ oid, shortOid, selector, subject, createdAt })
+  }
+  return stashes
 }
 
 /**

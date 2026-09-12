@@ -829,3 +829,290 @@ describe('undoing the newest commit (FR-3.8)', () => {
     assert.match(audit ?? '', new RegExp(second.slice(0, 7), 'u'))
   })
 })
+
+describe('stashing (FR-6.2)', () => {
+  /** A repository with one commit and one unstaged edit to `a.txt`. */
+  function repoWithChange(prefix: string): string {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+    return repo
+  }
+
+  it('saves the worktree under the caller’s label, and lists it by id and selector', async () => {
+    const repo = repoWithChange('stash-save')
+    const service = serviceFor({ s1: repo })
+
+    const saved = await service.stashSave('s1', 'half-done work', false)
+    assert.ok(saved.ok, saved.ok ? '' : JSON.stringify(saved.error))
+
+    // The edit left the worktree and went onto the stack: that is what a stash
+    // IS, and the change list is empty afterwards.
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\n')
+    assert.equal(gitTry(repo, ['diff', '--quiet']).code, 0)
+
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    assert.equal(listed.value.length, 1)
+    const entry = listed.value[0]
+    assert.equal(entry?.selector, 'stash@{0}')
+    assert.match(entry?.subject ?? '', /half-done work/u)
+    assert.equal(entry?.oid, git(repo, ['rev-parse', 'stash@{0}']).trim())
+    // The full id is what the panel sends back; it is a real commit either way.
+    assert.equal(entry?.oid.length, 40)
+    assert.equal(entry?.shortOid, entry?.oid.slice(0, 7))
+  })
+
+  it('includes untracked files only when the caller asks for them', async () => {
+    const repo = makeRepo('stash-untracked')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'scratch.txt', 'scratch\n')
+
+    // Tracked-only, and there is none of that: `git stash push` would answer
+    // "No local changes to save" and exit 0, which is why the host asks the
+    // worktree first and refuses with a sentence instead.
+    const refused = await serviceFor({ s1: repo }).stashSave('s1', null, false)
+    assert.equal(refused.ok, false)
+    assert.equal(refused.ok ? '' : refused.error.code, 'bad-request')
+    assert.match(refused.ok ? '' : refused.error.message, /untracked/u)
+    assert.equal(gitTry(repo, ['stash', 'list']).stdout.trim(), '')
+
+    const saved = await serviceFor({ s1: repo }).stashSave('s1', null, true)
+    assert.ok(saved.ok, saved.ok ? '' : JSON.stringify(saved.error))
+    // `-u`: the untracked file went with it, so the worktree is clean.
+    assert.equal(existsSync(join(repo, 'scratch.txt')), false)
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.deepEqual(status.value.groups.untracked, [])
+  })
+
+  it('takes staged and unstaged changes alike, and leaves both sides clean', async () => {
+    const repo = makeRepo('stash-both-halves')
+    write(repo, 'a.txt', 'one\n')
+    write(repo, 'b.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    // One half in the index, one in the worktree: `git stash push` takes both and
+    // resets the index, which is the behaviour the panel is reporting on.
+    write(repo, 'a.txt', 'two\n')
+    git(repo, ['add', 'a.txt'])
+    write(repo, 'b.txt', 'two\n')
+
+    const saved = await serviceFor({ s1: repo }).stashSave('s1', null, false)
+    assert.ok(saved.ok, saved.ok ? '' : JSON.stringify(saved.error))
+
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.deepEqual(status.value.groups.staged, [])
+    assert.deepEqual(status.value.groups.unstaged, [])
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\n')
+    assert.equal(readFileSync(join(repo, 'b.txt'), 'utf8'), 'one\n')
+  })
+
+  it('refuses an empty worktree rather than announcing a stash that never happened', async () => {
+    const repo = makeRepo('stash-clean')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const result = await serviceFor({ s1: repo }).stashSave('s1', null, false)
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.match(result.ok ? '' : result.error.message, /nothing to stash/u)
+    assert.equal(gitTry(repo, ['stash', 'list']).stdout.trim(), '')
+  })
+
+  it('lets git refuse a stash mid-merge, and leaves the conflict untouched', async () => {
+    // Probed: `git stash push` with unmerged paths exits 1 printing "a.txt: needs
+    // merge" on STDOUT, and the conflicted index is exactly as it was. The panel
+    // forwards git's sentence rather than inventing a resolution for a merge the
+    // user is in the middle of.
+    const repo = makeRepo('stash-conflicted')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const base = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'side'])
+    write(repo, 'a.txt', 'side\n')
+    stageAll(repo)
+    commit(repo, 'side')
+    git(repo, ['checkout', '-q', base])
+    write(repo, 'a.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const merged = gitTry(repo, ['merge', 'side'])
+    assert.notEqual(merged.code, 0, 'the fixture must conflict for this test to mean anything')
+
+    const result = await serviceFor({ s1: repo }).stashSave('s1', null, false)
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.error.message, /needs merge/u)
+    // The conflict is still there, and no entry was created.
+    assert.equal(gitTry(repo, ['stash', 'list']).stdout.trim(), '')
+    assert.match(readFileSync(join(repo, 'a.txt'), 'utf8'), /<<<<<<< /u)
+  })
+
+  it('applies an entry while keeping it, and drops it only on pop', async () => {
+    const repo = repoWithChange('stash-apply')
+    const service = serviceFor({ s1: repo })
+    await service.stashSave('s1', null, false)
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    const oid = listed.value[0]?.oid ?? ''
+
+    const applied = await service.stashApply('s1', oid, false)
+    assert.ok(applied.ok, applied.ok ? '' : JSON.stringify(applied.error))
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'two\n')
+    const afterApply = await service.stashes('s1')
+    assert.ok(afterApply.ok)
+    assert.equal(afterApply.value.length, 1, 'apply is not pop: the entry stays')
+
+    // Back to a clean worktree, so the pop has something to apply onto.
+    git(repo, ['restore', '--', 'a.txt'])
+    const popped = await service.stashApply('s1', oid, true)
+    assert.ok(popped.ok, popped.ok ? '' : JSON.stringify(popped.error))
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'two\n')
+    const afterPop = await service.stashes('s1')
+    assert.ok(afterPop.ok)
+    assert.deepEqual(afterPop.value, [])
+  })
+
+  it('finds the entry by id, so a shifted stack cannot be applied by position', async () => {
+    const repo = repoWithChange('stash-shift')
+    const service = serviceFor({ s1: repo })
+    await service.stashSave('s1', 'first', false)
+    const first = await service.stashes('s1')
+    assert.ok(first.ok)
+    const oid = first.value[0]?.oid ?? ''
+
+    // A second stash lands on top: the entry that was `stash@{0}` is now
+    // `stash@{1}`, and its content is the older edit.
+    write(repo, 'a.txt', 'three\n')
+    await service.stashSave('s1', 'second', false)
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    assert.deepEqual(
+      listed.value.map((entry) => entry.selector),
+      ['stash@{0}', 'stash@{1}'],
+    )
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\n')
+
+    const applied = await service.stashApply('s1', oid, false)
+    assert.ok(applied.ok, applied.ok ? '' : JSON.stringify(applied.error))
+    // "two" is the FIRST stash; applying by the number the panel once showed
+    // would have put "three" back instead.
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'two\n')
+  })
+
+  it('refuses an id that is no longer in the stack, crediting its own listing', async () => {
+    const repo = repoWithChange('stash-stale')
+    const service = serviceFor({ s1: repo })
+    const stale = 'f'.repeat(40)
+
+    const applied = await service.stashApply('s1', stale, false)
+    assert.equal(applied.ok, false)
+    assert.equal(applied.ok ? '' : applied.error.code, 'bad-request')
+    assert.match(applied.ok ? '' : applied.error.message, /no longer in the list/u)
+
+    const dropped = await service.stashDrop('s1', stale)
+    assert.equal(dropped.ok, false)
+    assert.equal(dropped.ok ? '' : dropped.error.code, 'bad-request')
+  })
+
+  it('refuses to apply over local changes, with the code the panel acts on', async () => {
+    const repo = repoWithChange('stash-dirty-apply')
+    const service = serviceFor({ s1: repo })
+    await service.stashSave('s1', null, false)
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    const oid = listed.value[0]?.oid ?? ''
+
+    // A different edit to the same file: git refuses rather than merging over it.
+    write(repo, 'a.txt', 'three\n')
+    const applied = await service.stashApply('s1', oid, false)
+    assert.equal(applied.ok, false)
+    assert.equal(applied.ok ? '' : applied.error.code, 'dirty-worktree')
+    assert.match(applied.ok ? '' : (applied.error.detail ?? ''), /would be overwritten/u)
+    // Nothing moved, and the entry is still there to try again later.
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'three\n')
+    const after = await service.stashes('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.length, 1)
+  })
+
+  it('keeps the entry when a pop conflicts, exactly as git does', async () => {
+    const repo = makeRepo('stash-conflict')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const service = serviceFor({ s1: repo })
+    write(repo, 'a.txt', 'TWO\n')
+    await service.stashSave('s1', 's2', false)
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    const oid = listed.value[0]?.oid ?? ''
+
+    // A commit moves the same line, so the pop conflicts.
+    write(repo, 'a.txt', 'THREE\n')
+    stageAll(repo)
+    commit(repo, 'third')
+
+    const popped = await service.stashApply('s1', oid, true)
+    assert.equal(popped.ok, false)
+    assert.equal(popped.ok ? '' : popped.error.code, 'conflict')
+    // The conflict markers are in the file and the stash is KEPT — a pop that
+    // did not apply cleanly is not a pop that may drop the entry.
+    assert.match(readFileSync(join(repo, 'a.txt'), 'utf8'), /<<<<<<< /u)
+    const after = await service.stashes('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.length, 1)
+  })
+
+  it('drops an entry, and audits which one went (§5.5)', async () => {
+    const repo = repoWithChange('stash-drop')
+    const lines: string[] = []
+    const service = createGitService(createGitRunner(), resolverFor({ s1: repo }), {
+      log: (_level, message) => lines.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    })
+
+    await service.stashSave('s1', 'labelled', false)
+    const listed = await service.stashes('s1')
+    assert.ok(listed.ok)
+    const entry = listed.value[0]
+    assert.ok(entry)
+
+    const applied = await service.stashApply('s1', entry.oid, false)
+    assert.ok(applied.ok, applied.ok ? '' : JSON.stringify(applied.error))
+    const dropped = await service.stashDrop('s1', entry.oid)
+    assert.ok(dropped.ok, dropped.ok ? '' : JSON.stringify(dropped.error))
+    const after = await service.stashes('s1')
+    assert.ok(after.ok)
+    assert.deepEqual(after.value, [])
+
+    // §7: the log line is the only record once the entry is gone — it names the
+    // selector, the id, the repository and the subject.
+    const saved = lines.find((line) => line.includes('stashed'))
+    assert.match(saved ?? '', /as "labelled"/u)
+    const appliedLine = lines.find((line) => line.includes('applied'))
+    assert.match(appliedLine ?? '', /applied stash@\{0\}/u)
+    assert.match(appliedLine ?? '', new RegExp(entry.oid.slice(0, 7), 'u'))
+    const droppedLine = lines.find((line) => line.includes('dropped'))
+    assert.match(droppedLine ?? '', /dropped stash@\{0\}/u)
+    assert.match(droppedLine ?? '', /labelled/u)
+  })
+
+  it('refuses a malformed id without spawning git at all', async () => {
+    const repo = repoWithChange('stash-badid')
+    for (const oid of ['stash@{0}', 'HEAD', 'ZZZZ', 'abc', 'a'.repeat(41)]) {
+      const applied = await serviceFor({ s1: repo }).stashApply('s1', oid, false)
+      assert.equal(applied.ok, false, `expected ${oid} to be refused`)
+      assert.equal(applied.ok ? '' : applied.error.code, 'bad-request')
+      const dropped = await serviceFor({ s1: repo }).stashDrop('s1', oid)
+      assert.equal(dropped.ok, false, `expected ${oid} to be refused`)
+    }
+  })
+})

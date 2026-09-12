@@ -22,6 +22,7 @@ import {
   parseBranches,
   parseLog,
   parseNumstat,
+  parseStashList,
   parseStatusV2,
 } from '../core/git-parse.ts'
 import type {
@@ -45,6 +46,7 @@ import type {
   LogPage,
   OperationReport,
   RepoStatus,
+  StashEntry,
   UndoResult,
 } from '../core/types.ts'
 import {
@@ -53,6 +55,7 @@ import {
   validateHash,
   validateMessage,
   validatePaths,
+  validateStashMessage,
 } from '../core/validate.ts'
 import { gitDirOf } from './git-dir.ts'
 
@@ -62,6 +65,9 @@ const BRANCH_FORMAT =
 
 /** The `log` format the history parser expects; the two must agree. */
 const LOG_FORMAT = '%H%x00%h%x00%s%x00%an%x00%aI%x00%cI%x00%P%x1e'
+
+/** The `stash list` format the stash parser expects; the two must agree. */
+const STASH_FORMAT = '%gd%x00%H%x00%h%x00%s%x00%cI%x1e'
 
 /** Default page size for the history list (FR-3.7). */
 const DEFAULT_LOG_LIMIT = 30
@@ -162,11 +168,6 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'this directory is not inside a git repository',
   },
   {
-    pattern: /nothing to commit|no changes added to commit/iu,
-    code: 'nothing-to-commit',
-    message: 'there is nothing staged to commit',
-  },
-  {
     pattern: /empty commit message/iu,
     code: 'bad-request',
     message: 'a commit message may not be empty',
@@ -182,11 +183,33 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'the merge left conflicts that must be resolved before committing',
   },
   {
+    // FR-4.4's state, given a code of its own: git refuses a branch switch (and a
+    // stash apply) rather than overwriting local work, and the panel offers the
+    // "stash, then switch" shortcut exactly here — which it can only do if this
+    // refusal is distinguishable from every other one git prints. Both of git's
+    // spellings are covered: "would be overwritten by checkout" for a switch,
+    // "…by merge" for a stash apply.
+    pattern: /would be overwritten by (checkout|merge)/iu,
+    code: 'dirty-worktree',
+    message: 'local changes would be overwritten, so the operation was refused',
+  },
+  {
     // FR-4.3: an unmerged branch needs a second, armed confirmation, so the
     // refusal has to be a code the panel can recognise rather than prose.
     pattern: /not fully merged/iu,
     code: 'not-merged',
     message: 'the branch has commits that are not merged anywhere else',
+  },
+  {
+    // LAST, because its pattern is the loosest thing git prints: a failed
+    // `stash apply`/`pop` prints its own status block to stdout, and that block
+    // ends with "no changes added to commit" even when the real reason is a
+    // conflict or a worktree git refused to overwrite. Put first, it would swallow
+    // both of those states (probed, and caught by the tests below). Nothing else
+    // ever prints it, so nothing is lost by testing it last.
+    pattern: /nothing to commit|no changes added to commit/iu,
+    code: 'nothing-to-commit',
+    message: 'there is nothing staged to commit',
   },
 ]
 
@@ -1078,6 +1101,167 @@ export function createGitService(
     return { ok: true, value: { mode: 'revert', shortOid: commit.shortOid, subject: commit.subject } }
   }
 
+  /**
+   * Read the stash stack, newest first (FR-6.2).
+   *
+   * `git stash list` walks `refs/stash`'s reflog, so a repository that has never
+   * stashed — and an unborn branch, where there is nothing to stash from — answers
+   * with an empty list rather than a failure.
+   * @param root - Repository root.
+   * @returns The entries, or the failure the command hit.
+   */
+  async function readStashes(root: string): Promise<Result<readonly StashEntry[]>> {
+    const outcome = await run(['stash', 'list', `--format=${STASH_FORMAT}`], root)
+    if (!outcome.ok) return outcome
+    return { ok: true, value: parseStashList(outcome.value.stdout) }
+  }
+
+  /**
+   * Resolve an object id to the stash entry it names.
+   *
+   * This is the other half of {@link validateHash}: the browser sends the id of the
+   * entry its row stood for, and the host answers from its OWN reading. A selector
+   * is a position in a stack that another window can shift — `stash@{0}` is a
+   * different stash after one more `git stash push` — so the id is what identifies
+   * the entry, and the selector used to act on it is read here rather than taken
+   * from the request.
+   * @param root - Repository root.
+   * @param oid - The full object id the browser sent, already validated.
+   * @returns The entry, or the refusal that it is no longer there.
+   */
+  async function findStash(root: string, oid: string): Promise<Result<StashEntry>> {
+    const listed = await readStashes(root)
+    if (!listed.ok) return listed
+    const found = listed.value.find((entry) => entry.oid === oid)
+    if (found === undefined) {
+      return fail('bad-request', 'that stash is no longer in the list')
+    }
+    return { ok: true, value: found }
+  }
+
+  /**
+   * Push the working tree onto the stash (FR-6.2).
+   *
+   * Whether there is anything to stash is asked of the REPOSITORY, not of the
+   * browser: `git stash push` answers "No local changes to save" on an empty
+   * worktree and still exits 0, which would let the panel announce a stash that
+   * never happened. One `status` read decides it, by the same rule the two commands
+   * split on — and the rule is the flag's: untracked files count only when this
+   * call was asked to include them.
+   * @param sessionId - Session whose repository to act on.
+   * @param message - Optional label, already accepted as a string or `null`.
+   * @param untracked - Whether untracked files are stashed too (`-u`).
+   */
+  async function stashSave(
+    sessionId: string,
+    message: string | null,
+    untracked: boolean,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateStashMessage(message)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    const status = await run(['status', '--porcelain=v2', '--branch', '-z'], root.value)
+    if (!status.ok) return status
+    const groups = groupsOf(parseStatusV2(status.value.stdout).entries)
+    const tracked = groups.staged.length + groups.unstaged.length + groups.conflicted.length
+    if (tracked === 0 && !(untracked && groups.untracked.length > 0)) {
+      return fail(
+        'bad-request',
+        untracked
+          ? 'there is nothing to stash'
+          : 'there is nothing to stash: only untracked files, which this stash does not include',
+      )
+    }
+
+    const outcome = await run(
+      [
+        'stash',
+        'push',
+        ...(untracked ? ['-u'] : []),
+        ...(valid.value === null ? [] : ['-m', valid.value]),
+      ],
+      root.value,
+      true,
+    )
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: where, with which label, and whether untracked files went
+    // with it — the entry itself is in `refs/stash`, but which click put it there
+    // is not.
+    ports.log(
+      'info',
+      `git-panel: stashed${untracked ? ' (untracked included)' : ''} in ${root.value}${
+        valid.value === null ? '' : ` as "${valid.value}"`
+      }`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Apply one stash, optionally dropping it (FR-6.2).
+   *
+   * The entry is found again at execution time ({@link findStash}), so a row the
+   * panel drew before another window stashed something is refused rather than
+   * applied by position. `pop` removes the entry only when git did apply it: a
+   * conflicting pop leaves the stash in place, which is git's own answer and the
+   * reason `pop` is not the same promise as `drop`.
+   * @param sessionId - Session whose repository to act on.
+   * @param oid - The stash commit the browser believes it is acting on.
+   * @param pop - Whether to drop the entry once it applied cleanly.
+   */
+  async function stashApply(
+    sessionId: string,
+    oid: string,
+    pop: boolean,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateHash(oid)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const entry = await findStash(root.value, valid.value)
+    if (!entry.ok) return entry
+    const outcome = await run(
+      ['stash', pop ? 'pop' : 'apply', entry.value.selector],
+      root.value,
+      true,
+    )
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: which entry, by id, and which of the two ways it went.
+    ports.log(
+      'info',
+      `git-panel: ${pop ? 'popped' : 'applied'} ${entry.value.selector} (${entry.value.shortOid}) in ${root.value}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Drop one stash entry without applying it (FR-6.2).
+   *
+   * Destructive: the stashed commits lose their only ref and are garbage once the
+   * reflog expires, so the panel arms it behind §4.3's two clicks and this records
+   * which entry went — by selector, id, and subject, since the row is gone from the
+   * list afterwards.
+   * @param sessionId - Session whose repository to act on.
+   * @param oid - The stash commit the browser believes it is acting on.
+   */
+  async function stashDrop(sessionId: string, oid: string): Promise<Result<OperationReport>> {
+    const valid = validateHash(oid)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const entry = await findStash(root.value, valid.value)
+    if (!entry.ok) return entry
+    const outcome = await run(['stash', 'drop', entry.value.selector], root.value, true)
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: the log line is the only record of what was dropped.
+    ports.log(
+      'info',
+      `git-panel: dropped ${entry.value.selector} (${entry.value.shortOid}) in ${root.value}: ${entry.value.subject}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
   return {
     status: readStatus,
     diff: diffPath,
@@ -1097,6 +1281,14 @@ export function createGitService(
     generateCommitMessage,
     showCommit,
     undoCommit,
+    stashes: async (sessionId: string): Promise<Result<readonly StashEntry[]>> => {
+      const root = await repoRoot(sessionId)
+      if (!root.ok) return root
+      return readStashes(root.value)
+    },
+    stashSave,
+    stashApply,
+    stashDrop,
 
     async branches(sessionId: string): Promise<Result<readonly BranchRef[]>> {
       const root = await repoRoot(sessionId)

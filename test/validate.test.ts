@@ -18,6 +18,7 @@ import {
   validateHash,
   validateMessage,
   validatePaths,
+  validateStashMessage,
 } from '../src/core/validate.ts'
 
 describe('path validation', () => {
@@ -211,6 +212,32 @@ describe('branch base validation (FR-4.2)', () => {
     for (const base of ['HEAD~1', 'main^{commit}', 'origin/main..HEAD', '']) {
       const result = validateBranchBase(base)
       assert.equal(result.ok, false, `expected ${JSON.stringify(base)} to be refused`)
+    }
+  })
+})
+
+describe('stash message validation (FR-6.2)', () => {
+  it('answers "no message" for an absent, null, or blank one', () => {
+    // FR-6.2 makes the message optional, so an empty box is a choice rather than
+    // a malformed request; git writes its own `WIP on <branch>` label for it.
+    for (const message of [undefined, null, '', '   ', '\n']) {
+      const result = validateStashMessage(message)
+      assert.ok(result.ok, `expected ${JSON.stringify(message)} to be accepted`)
+      assert.equal(result.ok ? result.value : 'rejected', null)
+    }
+  })
+
+  it('returns a message as sent, without trimming it', () => {
+    const result = validateStashMessage('  half-done work  ')
+    assert.ok(result.ok)
+    assert.equal(result.value, '  half-done work  ')
+  })
+
+  it('refuses a non-string, a NUL, and a message that is too long', () => {
+    for (const message of [7, { text: 'x' }, 'a\u0000b', 'x'.repeat(4097)]) {
+      const result = validateStashMessage(message)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(message)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
     }
   })
 })

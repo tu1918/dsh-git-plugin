@@ -22,6 +22,7 @@ import type {
   LogPage,
   OperationReport,
   RepoStatus,
+  StashEntry,
   UndoResult,
 } from './types.ts'
 
@@ -65,6 +66,16 @@ export type GitErrorCode =
   | 'non-fast-forward'
   /** The operation left the repository mid-merge with unmerged paths (FR-5.3). */
   | 'conflict'
+  /**
+   * Local changes stand in the way: `git checkout` refused to overwrite them
+   * (FR-4.4), or a `git stash apply` refused to merge over them.
+   *
+   * A code of its own because the panel does something specific with it: the
+   * blocked-branch-switch case is exactly where FR-4.4's "stash, then switch"
+   * shortcut belongs, and the panel can only offer it if it can tell this refusal
+   * apart from every other one git prints.
+   */
+  | 'dirty-worktree'
   /** `git branch -d` refused because the branch holds commits nothing else reaches (FR-4.3). */
   | 'not-merged'
   /** No language model is available in this composition, so FR-3.5 cannot run. */
@@ -407,6 +418,63 @@ export interface WorkspaceGitService {
     hash: string,
     signal?: AbortSignal,
   ): Promise<Result<UndoResult>>
+  /**
+   * List the stash entries, newest first (FR-6.2).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashes(sessionId: string, signal?: AbortSignal): Promise<Result<readonly StashEntry[]>>
+  /**
+   * Push the working tree onto the stash (FR-6.2).
+   *
+   * Which files go is git's decision, not the browser's: tracked changes always
+   * do, and untracked ones only when `untracked` asks for them — the same choice
+   * `git stash push -u` spells. A worktree with nothing to stash is refused
+   * rather than answered with git's "No local changes to save", so the panel's
+   * notice can always say that something was stashed.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param message - Optional label for the entry, or `null` for git's own.
+   * @param untracked - Whether untracked files are stashed too (`-u`).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashSave(
+    sessionId: string,
+    message: string | null,
+    untracked: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Apply one stash to the working tree, optionally dropping it (FR-6.2).
+   *
+   * `pop` is `git stash pop` — apply, then remove the entry on success. A conflict
+   * leaves the entry in place, which is git's own behaviour and the reason `pop`
+   * is not the same promise as `drop`.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param oid - The stash commit the browser believes it is acting on; the host
+   *   re-resolves it against its own listing and refuses a stale one.
+   * @param pop - Whether to drop the entry once it applied cleanly.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashApply(
+    sessionId: string,
+    oid: string,
+    pop: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Drop one stash entry without applying it (FR-6.2).
+   *
+   * Destructive — the commits become unreachable — so the panel arms it behind
+   * the §4.3 two-click confirmation and the host audits it (§5.5).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param oid - The stash commit the browser believes it is acting on.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashDrop(
+    sessionId: string,
+    oid: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
 }
 
 /**

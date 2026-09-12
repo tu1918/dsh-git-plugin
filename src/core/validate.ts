@@ -15,7 +15,10 @@
  * Later milestones' parameters arrive with their own validators, added when the
  * operation that needs them lands (see D7). M4 brought the branch name for
  * `checkout`/`createBranch`/`deleteBranch`, the base for a new branch, and the
- * commit hash for `showCommit`; M5a's `undoCommit` reuses that hash validator.
+ * commit hash for `showCommit`; M5a's `undoCommit` reuses that hash validator,
+ * and M5a's stash reuses it again (an entry is addressed by its commit id) while
+ * adding {@link validateStashMessage}, whose "no message" case is a legal answer
+ * rather than a rejection.
  *
  * @module dsh-git-panel/core/validate
  */
@@ -151,6 +154,45 @@ export function validateHash(hash: unknown): Result<string> {
     return reject(`a commit hash must be 4 to 40 lowercase hex characters: ${hash}`)
   }
   return { ok: true, value: hash }
+}
+
+/**
+ * Longest stash message accepted, in UTF-16 code units.
+ *
+ * A stash message is a one-line label on a stack entry, not a document: git keeps
+ * it in the stash commit's subject, and a kilobyte is already past what a list row
+ * can show. It is bounded at all because the wire body is (1 MiB), and a message
+ * that size would land in the reflog of every entry it accompanies.
+ */
+const MAX_STASH_MESSAGE_LENGTH = 4 * 1024
+
+/**
+ * Validate the optional message of `git stash push` (FR-6.2).
+ *
+ * Absent, `null`, and blank all mean the same thing — stash without a message —
+ * and come back as `null` rather than as a rejection: the panel offers a message
+ * box, and leaving it empty is a choice, not a malformed request. Anything
+ * present must still be a string of a sane length with no NUL, for the reason
+ * every other validator here exists (§5.5): it reaches git as an argument.
+ * @param message - Whatever the request carried for `message`.
+ * @returns The accepted message or `null` for "none", or the reason to refuse.
+ */
+export function validateStashMessage(message: unknown): Result<string | null> {
+  if (message === undefined || message === null) return { ok: true, value: null }
+  if (typeof message !== 'string') {
+    return reject('a stash message must be a string when it is given')
+  }
+  if (message.includes('\u0000')) {
+    return reject('a stash message may not contain a NUL character')
+  }
+  if (message.trim() === '') return { ok: true, value: null }
+  if (message.length > MAX_STASH_MESSAGE_LENGTH) {
+    return reject('the stash message is too long')
+  }
+  // Returned as sent, not trimmed, for the same reason `validateMessage` is: git
+  // does its own cleanup, and rewriting the text here would be this plugin
+  // editing what the user typed.
+  return { ok: true, value: message }
 }
 
 /**

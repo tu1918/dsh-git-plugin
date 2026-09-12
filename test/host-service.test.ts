@@ -1134,9 +1134,10 @@ describe('branch management (FR-4)', () => {
 
     const result = await serviceFor({ s1: repo }).checkout('s1', 'other')
     assert.equal(result.ok, false)
-    assert.equal(result.ok ? '' : result.error.code, 'git-failed')
-    // FR-4.4: the full output survives, not just its first line. D20 says the
-    // "stash, then switch" shortcut is NOT offered in M4.
+    // A code of its own, because the panel does something specific with it: this
+    // is the refusal FR-4.4's "stash, then switch" belongs beside (D30).
+    assert.equal(result.ok ? '' : result.error.code, 'dirty-worktree')
+    // FR-4.4: the full output survives, not just its first line.
     assert.match(result.ok ? '' : (result.error.detail ?? ''), /would be overwritten/u)
     assert.equal(currentBranch(repo), base)
   })
@@ -1563,6 +1564,109 @@ describe('the M4 mutation routes', () => {
       // Spending the deployment's model budget must not be reachable by a link.
       const viaGet = await fetch(`${harness.origin}/git-panel/generateCommitMessage?session=s1`)
       assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+})
+
+describe('the stash routes (FR-6.2)', () => {
+  /** POST one mutation and decode the envelope. */
+  async function post(
+    harness: Harness,
+    path: string,
+    body: unknown,
+  ): Promise<{ ok: boolean; error?: { code: string }; value?: unknown }> {
+    const response = await fetch(`${harness.origin}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: harness.origin },
+      body: JSON.stringify(body),
+    })
+    return (await response.json()) as { ok: boolean; error?: { code: string }; value?: unknown }
+  }
+
+  it('reads the stack over GET, and refuses a POST to it', async () => {
+    const repo = makeRepo('routes-stash-list')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      write(repo, 'a.txt', 'two\n')
+      git(repo, ['stash', 'push', '-q', '-m', 'over the wire'])
+
+      const response = await fetch(`${harness.origin}/git-panel/stashes?session=s1`)
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as {
+        ok: boolean
+        value?: readonly { selector: string; subject: string }[]
+      }
+      assert.equal(body.ok, true)
+      assert.equal(body.value?.length, 1)
+      assert.equal(body.value?.[0]?.selector, 'stash@{0}')
+      assert.match(body.value?.[0]?.subject ?? '', /over the wire/u)
+
+      // A read answered over POST would be a mutation's shape with a read's
+      // effect; the two sets stay disjoint by method.
+      const viaPost = await fetch(`${harness.origin}/git-panel/stashes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ session: 's1' }),
+      })
+      assert.equal(viaPost.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('saves, applies and drops over POST, and refuses each over GET', async () => {
+    const repo = makeRepo('routes-stash-write')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'two\n')
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const saved = await post(harness, '/git-panel/stashSave', {
+        session: 's1',
+        message: 'from the route',
+        untracked: false,
+      })
+      assert.equal(saved.ok, true, JSON.stringify(saved.error))
+      // The route reaches git, not a stub: the worktree is clean and the stack
+      // holds the edit under the label that came over the wire. (The branch name
+      // in git's own subject is the fixture's, so only the label is asserted.)
+      assert.match(git(repo, ['stash', 'list', '--format=%s']), /from the route/u)
+
+      const listed = (await (
+        await fetch(`${harness.origin}/git-panel/stashes?session=s1`)
+      ).json()) as { value?: readonly { oid: string }[] }
+      const oid = listed.value?.[0]?.oid ?? ''
+      assert.equal(oid.length, 40)
+
+      const applied = await post(harness, '/git-panel/stashApply', { session: 's1', oid, pop: true })
+      assert.equal(applied.ok, true, JSON.stringify(applied.error))
+      assert.equal(gitTry(repo, ['stash', 'list']).stdout.trim(), '', 'pop dropped the entry')
+
+      // Dropping the now-empty stack is a refusal the caller can read, not a
+      // crash: the row the browser sent is stale.
+      const dropped = await post(harness, '/git-panel/stashDrop', { session: 's1', oid })
+      assert.equal(dropped.ok, false)
+      assert.equal(dropped.error?.code, 'bad-request')
+
+      // Every stash mutation is a POST; a GET would make it reachable by a link.
+      for (const path of ['/git-panel/stashSave', '/git-panel/stashApply', '/git-panel/stashDrop']) {
+        const viaGet = await fetch(`${harness.origin}${path}?session=s1`)
+        assert.equal(viaGet.status, 405, `${path} must not answer GET`)
+      }
+
+      // A missing id is the operation-failure envelope, the same convention
+      // every other mutation follows (D10).
+      const missing = await post(harness, '/git-panel/stashDrop', { session: 's1' })
+      assert.equal(missing.ok, false)
+      assert.equal(missing.error?.code, 'bad-request')
     } finally {
       await harness.close()
     }
