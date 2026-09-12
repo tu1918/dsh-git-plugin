@@ -10,9 +10,12 @@ foundation, a read-only panel, the commit loop (stage → commit → push), the 
 view, branch management with the merge state, an AI-written commit message, a
 commit detail — then M5a's discard / undo / stash and M5b's commit-file
 drill-down, copy entries, and the commit graph, alongside fetch, a read-only
-remote-branch list, and HTTPS credentials. What remains of M5b: rewriting a
-commit (drop / squash / reset), multi-repository scanning, and the v1.0 release
-pass.
+remote-branch list, and HTTPS credentials. What remains: rewriting a commit
+(drop / squash / reset) and the v1.0 release pass. **Multi-repository scanning
+(FR-8) is deliberately deferred** — the requirements document marks it P2, the
+workaround is to point the workspace at the repository you want, and doing it
+properly would mean letting the browser name which repository, which is the one
+kind of input this plugin's whole security posture avoids (`docs/plan.md` D46).
 
 ## Docs
 
