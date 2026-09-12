@@ -380,6 +380,7 @@ export function Group({
   busy,
   batch,
   emptyNote,
+  resident,
   collapsed,
   view,
   onToggle,
@@ -396,12 +397,24 @@ export function Group({
   readonly busy: boolean
   readonly batch?: GroupBatch
   /**
-   * Copy to show when the group has no rows, which also keeps the group on
-   * screen. Without it an empty group renders nothing at all — right for a list
-   * that comes and goes, wrong for the staged drawer, which is the anchor of the
-   * commit box above it and should not vanish the moment the index is empty.
+   * Copy to show when the group has no rows, under its header.
+   *
+   * Only the staged drawer has one: its header alone does not say why it is empty,
+   * and it is the anchor of the commit box above it. The working-tree sections
+   * answer the same question with their count, which is why they are
+   * {@link resident} without a note.
    */
   readonly emptyNote?: string
+  /**
+   * Whether the group stays on screen with no rows.
+   *
+   * A resident group is a section of the panel's furniture: its header and count
+   * are how the panel says "there is nothing here", and keeping them means the
+   * list does not re-flow the moment the first file appears. A group that comes
+   * and goes is the other kind of thing — the conflict section exists while a
+   * merge is open and not for one minute longer.
+   */
+  readonly resident?: boolean
   /** Whether the group's rows are folded away. */
   readonly collapsed: boolean
   /** FR-1.3: which shape the rows take, and which directories are folded. */
@@ -414,7 +427,10 @@ export function Group({
   readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
-  if (entries.length === 0 && emptyNote === undefined) return null
+  // An empty group is drawn when the caller says it is furniture, or when it has
+  // an empty note to show — the note is what a resident group says INSTEAD of
+  // rows, so a caller that asked for one gets the band it belongs to.
+  if (entries.length === 0 && resident !== true && emptyNote === undefined) return null
   // Built once per render, and only when it will be drawn: the flat list is a
   // direct map, so a mode switch is the only thing that pays for the tree, and a
   // folded group pays for nothing at all.
@@ -433,32 +449,35 @@ export function Group({
           <span className={cls.groupLabel}>{label}</span>
           <span className={cls.count}>{entries.length}</span>
         </button>
-        {batch !== undefined && (
-          <span className={cls.groupActions}>
-            <button
-              type="button"
-              className={cls.ghost}
-              // A group with no rows has nothing to move, so the bulk action is
-              // unavailable rather than a round trip that comes back as a refused
-              // request. The staged drawer is why this matters in practice: it is
-              // the one group that stays on screen while empty, so its "unstage
-              // all" was a button that could only ever fail.
-              disabled={busy || entries.length === 0}
-              // The label alone ("Unstage all") would leave a greyed-out button
-              // unexplained, so the group's own empty note completes the sentence.
-              title={
-                entries.length === 0 && emptyNote !== undefined
-                  ? `${batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')} · ${emptyNote}`
-                  : undefined
-              }
-              onClick={batch.run}
-            >
-              {batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')}
-            </button>
-          </span>
-        )}
+        {/* The bulk action follows the rows: an empty section offers nothing to
+            move, so its button would be a disabled control with nothing to explain
+            it. The staged drawer is the exception, and it is the caller's to make:
+            it passes an empty note, and the note is the explanation. */}
+        {batch !== undefined &&
+          (entries.length > 0 || emptyNote !== undefined) && (
+            <span className={cls.groupActions}>
+              <button
+                type="button"
+                className={cls.ghost}
+                // A group with no rows has nothing to move, so the bulk action is
+                // unavailable rather than a round trip that comes back as a refused
+                // request. The staged drawer is why this matters in practice: it is
+                // the one group that keeps its button while empty, and its own empty
+                // note is what explains the grey.
+                disabled={busy || entries.length === 0}
+                title={
+                  entries.length === 0 && emptyNote !== undefined
+                    ? `${batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')} · ${emptyNote}`
+                    : undefined
+                }
+                onClick={batch.run}
+              >
+                {batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')}
+              </button>
+            </span>
+          )}
       </div>
-      {!collapsed && entries.length === 0 && (
+      {!collapsed && entries.length === 0 && emptyNote !== undefined && (
         <p className={cls.groupEmpty}>{emptyNote}</p>
       )}
       {!collapsed &&

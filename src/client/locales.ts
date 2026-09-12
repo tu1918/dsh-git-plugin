@@ -112,8 +112,6 @@ export const zh = {
   'view.tree': '切换为文件树',
   'view.list': '切换为平铺列表',
 
-  'clean.title': '没有未提交的更改',
-  'clean.hint': '工作区与 HEAD 一致。',
 
   'noRepo.title': '这里不是 Git 仓库',
   'noRepo.hint': '在会话的工作区里运行 git init，再回到这里。',
@@ -262,8 +260,6 @@ export const en: Record<GitPanelKey, string> = {
   'view.tree': 'Show as a file tree',
   'view.list': 'Show as a flat list',
 
-  'clean.title': 'No uncommitted changes',
-  'clean.hint': 'The working tree matches HEAD.',
 
   'noRepo.title': 'This is not a git repository',
   'noRepo.hint': 'Run git init in the session’s workspace, then come back.',

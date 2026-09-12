@@ -677,12 +677,6 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // The branch listing is the only source that distinguishes a gone upstream
   // from a branch that simply has no counts.
   const upstreamGone = branches.find((branch) => branch.current)?.upstreamGone ?? false
-  const clean =
-    staged.length === 0 &&
-    unstaged.length === 0 &&
-    untracked.length === 0 &&
-    conflicted.length === 0
-
   const pending = action.kind === 'running'
   const onBranch = status.branch.head === 'branch' && status.branch.name !== null
   const hasUpstream = status.branch.upstream !== null
@@ -1067,6 +1061,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             entries={staged}
             t={t}
             busy={busy || pending}
+            resident
             batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
             emptyNote={t('group.stagedEmpty')}
             collapsed={collapsedGroups.has('staged')}
@@ -1097,76 +1092,75 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           t={t}
         />
         <div className={cls.body}>
-          {clean ? (
-            <div className={cls.status} data-git-panel-state="clean">
-              <p className={cls.statusTitle}>{t('clean.title')}</p>
-              <p className={cls.statusHint}>{t('clean.hint')}</p>
-            </div>
-          ) : (
-            <>
-              {/* Conflicts keep the top of the list, where VS Code puts them: while
-                  a merge is open, nothing in the panel matters more. They get a
-                  group and a `+` per row, but no bulk action — the conflict UI
-                  proper (FR-9) is a later milestone, and "stage all" over a
-                  half-resolved merge is not a shortcut worth offering — and no
-                  drawer either: a group that exists for one afternoon is not height
-                  anyone wants to take back from the list for good. */}
-              <Group
-                label={t('group.conflicted')}
-                area="conflicted"
-                entries={conflicted}
-                t={t}
-                busy={busy || pending}
-                collapsed={collapsedGroups.has('conflicted')}
-                view={view}
-                onToggle={() => toggleGroup('conflicted')}
-                onStage={stage}
-                onUnstage={unstage}
-                onOpen={openDiff}
-                onMenu={openMenu}
-                onDiscard={discard}
-              />
-              {/* The working tree as two more sections of this one list. They do not
-                  size themselves: the body scrolls, and its groups flow into it —
-                  which is what the comparable sidebar's source-control view does, and
-                  the reason the panel needs no grip per group. They are not resident:
-                  a group with no rows is not a section worth keeping an empty note in,
-                  which is exactly what the staged list above is for. */}
-              <Group
-                label={t('group.unstaged')}
-                area="unstaged"
-                entries={unstaged}
-                t={t}
-                busy={busy || pending}
-                batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
-                collapsed={collapsedGroups.has('unstaged')}
-                view={view}
-                onToggle={() => toggleGroup('unstaged')}
-                onStage={stage}
-                onUnstage={unstage}
-                onOpen={openDiff}
-                onMenu={openMenu}
-                onDiscard={discard}
-              />
-              <Group
-                label={t('group.untracked')}
-                area="untracked"
-                entries={untracked}
-                t={t}
-                busy={busy || pending}
-                batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
-                collapsed={collapsedGroups.has('untracked')}
-                view={view}
-                onToggle={() => toggleGroup('untracked')}
-                onStage={stage}
-                onUnstage={unstage}
-                onOpen={openDiff}
-                onMenu={openMenu}
-                onDiscard={discard}
-              />
-              {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
-            </>
-          )}
+          {/* Nothing replaces the list when the repository is clean: the three
+              sections are resident, and their counts ARE the clean state — one
+              header saying 0 is a shorter way to say "no uncommitted changes" than
+              a paragraph, and it does not re-flow the list the moment a file
+              appears. The commit box says the same thing where it matters, beside
+              the button that would do the committing. */}
+          {/* Conflicts keep the top of the list, where VS Code puts them: while
+              a merge is open, nothing in the panel matters more. They get a
+              group and a `+` per row, but no bulk action — the conflict UI
+              proper (FR-9) is a later milestone, and "stage all" over a
+              half-resolved merge is not a shortcut worth offering — and they are
+              NOT resident: a group that exists for one afternoon is not height
+              anyone wants to take back from the list for good. */}
+          <Group
+            label={t('group.conflicted')}
+            area="conflicted"
+            entries={conflicted}
+            t={t}
+            busy={busy || pending}
+            collapsed={collapsedGroups.has('conflicted')}
+            view={view}
+            onToggle={() => toggleGroup('conflicted')}
+            onStage={stage}
+            onUnstage={unstage}
+            onOpen={openDiff}
+            onMenu={openMenu}
+            onDiscard={discard}
+          />
+          {/* The working tree as two more sections of this one list. They do not
+              size themselves: the body scrolls, and its groups flow into it —
+              which is what the comparable sidebar's source-control view does, and
+              the reason the panel needs no grip per group. Both are resident: an
+              empty section keeps its header and its 0, which is the whole of what
+              the panel has to say about a clean working tree. */}
+          <Group
+            label={t('group.unstaged')}
+            area="unstaged"
+            entries={unstaged}
+            t={t}
+            busy={busy || pending}
+            resident
+            batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
+            collapsed={collapsedGroups.has('unstaged')}
+            view={view}
+            onToggle={() => toggleGroup('unstaged')}
+            onStage={stage}
+            onUnstage={unstage}
+            onOpen={openDiff}
+            onMenu={openMenu}
+            onDiscard={discard}
+          />
+          <Group
+            label={t('group.untracked')}
+            area="untracked"
+            entries={untracked}
+            t={t}
+            busy={busy || pending}
+            resident
+            batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
+            collapsed={collapsedGroups.has('untracked')}
+            view={view}
+            onToggle={() => toggleGroup('untracked')}
+            onStage={stage}
+            onUnstage={unstage}
+            onOpen={openDiff}
+            onMenu={openMenu}
+            onDiscard={discard}
+          />
+          {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
         </div>
         {/* One region for everything that is not the change list: the recent
             commits and the diff of the row that was clicked share it as two tabs

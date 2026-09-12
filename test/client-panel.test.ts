@@ -447,6 +447,18 @@ async function typeInto(node: HTMLTextAreaElement, value: string): Promise<void>
   await settle()
 }
 
+/**
+ * What each group header counts, in the order the panel draws them.
+ *
+ * Scoped to the headers on purpose: `.dgp-count` is also the badge a directory row
+ * carries in the tree, so a bare query would mix the two.
+ */
+function groupCounts(container: HTMLElement): (string | null)[] {
+  return [...container.querySelectorAll(`.${cls.groupHead} .${cls.count}`)].map(
+    (node) => node.textContent,
+  )
+}
+
 /** Query one element, failing loudly rather than returning `null`. */
 function must<T extends Element>(container: ParentNode, selector: string): T {
   const found = container.querySelector<T>(selector)
@@ -671,11 +683,16 @@ describe('StatusPanel rendering', () => {
       }),
     )
     await settle()
-    assert.equal(container.querySelector('[data-git-panel-state="clean"]') !== null, true)
-    assert.match(container.textContent ?? '', /No uncommitted changes/)
-    // The staged drawer is a fixture of the panel rather than a list that comes
-    // and goes with its content: it is the commit box's anchor, and its own empty
-    // state says so in words.
+    // There is no "clean" paragraph any more: the three sections are resident, and
+    // their counts are the clean state (asked for from the running panel — the
+    // message said what the headers either side of it already said).
+    assert.deepEqual(groupCounts(container), ['0', '0', '0'], 'every section stays, counting zero')
+    assert.equal(container.querySelector('[data-git-panel-state="clean"]'), null)
+    // The conflict section is the one that comes and goes: a merge is an afternoon,
+    // not furniture.
+    assert.equal(container.querySelector('[data-group="conflicted"]'), null)
+    // The staged drawer is a fixture of the panel for the same reason: it is the
+    // commit box's anchor, and its own empty state says so in words.
     const drawer = must(container, `[data-group="staged"]`)
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
@@ -879,20 +896,53 @@ describe('StatusPanel rendering', () => {
     )
     await settle()
 
-    // No clean state here — there are unstaged changes — but the drawer is still
-    // there, counting zero, with its note instead of rows.
-    assert.equal(container.querySelector('[data-git-panel-state="clean"]'), null)
+    // The drawer is still there, counting zero, with its note instead of rows.
     const drawer = must(container, `[data-group="staged"]`)
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
     assert.equal(drawer.querySelectorAll(`.${cls.row}`).length, 0)
-    // A group whose content is genuinely optional still comes and goes.
-    assert.equal(container.querySelector('[data-group="untracked"]') !== null, true)
+    // The two working-tree sections are resident for the same reason, so they are
+    // there too (this fixture still has one change and one untracked file) — the
+    // conflict section is the only one that comes and goes.
+    assert.deepEqual(groupCounts(container), ['0', '1', '1'])
 
     // Folding it leaves the header and the count: the anchor survives the fold.
     await click(must(drawer, `.${cls.groupToggle}`))
     assert.equal(drawer.querySelector(`.${cls.groupEmpty}`), null)
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
+  })
+
+  it('keeps the working-tree sections on screen when they are empty, without a note', async () => {
+    // The other half of the same decision: "Changes" and "Untracked" are the
+    // panel's furniture too, so a section with no rows keeps its header and its 0 —
+    // that count is what the panel now says about a clean working tree — while
+    // taking no space for a note, and without a bulk action (an empty section has
+    // nothing to move, and a greyed-out button with no note to explain it is the
+    // thing the staged drawer's own note exists to avoid).
+    const status = statusFixture()
+    const onlyUntracked = {
+      ...status,
+      groups: { staged: [], unstaged: [], conflicted: [], untracked: status.groups.untracked },
+    }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status: { ok: true, value: onlyUntracked } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const empty = must(container, `[data-group="unstaged"]`)
+    assert.equal(must(empty, `.${cls.groupHead} .${cls.count}`).textContent, '0')
+    assert.equal(empty.querySelector(`.${cls.row}`), null)
+    assert.equal(empty.querySelector(`.${cls.groupEmpty}`), null, 'the count is the whole message')
+    assert.equal(empty.querySelector(`.${cls.groupActions}`), null, 'nothing to stage all')
+
+    const full = must(container, `[data-group="untracked"]`)
+    assert.equal(must(full, `.${cls.groupHead} .${cls.count}`).textContent, '1')
+    assert.notEqual(full.querySelector(`.${cls.groupActions}`), null, 'rows bring their bulk action')
   })
 
   it('renders a git failure in the panel’s own words, with git’s text as detail', async () => {
@@ -2152,7 +2202,11 @@ describe('the diff view (FR-2)', () => {
     await flush()
 
     assert.equal(container.querySelector(`.${cls.diffView}`), null)
-    assert.equal(container.querySelector(`[data-git-panel-state="clean"]`) !== null, true)
+    assert.deepEqual(
+      groupCounts(container),
+      ['0', '0', '0'],
+      'the panel is showing a clean working tree',
+    )
   })
 })
 

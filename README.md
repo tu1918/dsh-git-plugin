@@ -35,8 +35,9 @@ message, and a commit detail.
 | UI in zh + en | ✅ |
 | Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
 | A resident staged drawer directly above the commit box: it is what that box commits, and its empty state says so | ✅ |
-| Changes and Untracked are drawers of the same shape — own grip, own cap, own scroller — so each partition's height is its own, and a long group cannot push the others off screen | ✅ |
-| A group with no rows keeps its bulk action on screen but disabled, and says why — an empty group has nothing to stage, so it never becomes a refused request | ✅ |
+| Changes and Untracked are sections of ONE scrolling list rather than drawers of their own: the panel has a single resize grip (the dock's), and each section's header pins itself to the top of that scroller, so a partially scrolled list still says which section you are in | ✅ |
+| A clean working tree is stated by the sections themselves: Changes and Untracked stay on screen counting zero (the paragraph that used to say "no uncommitted changes" is gone), and only the staged drawer needs a note, because its header alone does not say why it is empty | ✅ |
+| A group with no rows offers no bulk action — except the staged drawer, which keeps its button on screen, disabled, with the empty note as the explanation | ✅ |
 | One bottom pane, two tabs — recent commits and the selected file's diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping both tabs' content loaded; the fold and the height are remembered | ✅ |
 | Diff view: click a change row → the diff opens as the bottom pane's second tab (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
@@ -105,7 +106,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 339 tests && build
+npm run check      # tsc --noEmit && 340 tests && build
 ```
 
 ## Install
