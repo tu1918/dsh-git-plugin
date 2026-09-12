@@ -30,6 +30,7 @@ import {
   COMMIT_MIN_HEIGHT,
   DOCK_MIN_HEIGHT,
   DOCK_RESERVED,
+  RAIL_HEIGHT,
   STAGED_MAX_HEIGHT,
   STAGED_RESERVED_HEIGHT,
 } from './panel-layout.ts'
@@ -112,10 +113,13 @@ export const cls = {
   commitFoot: `${P}-commit-foot`,
   commitScope: `${P}-commit-scope`,
   commitButton: `${P}-commit-button`,
-  actionBox: `${P}-action-box`,
-  actionHead: `${P}-action-head`,
   actionLabel: `${P}-action-label`,
-  actionNotice: `${P}-action-notice`,
+  notice: `${P}-notice`,
+  noticeHead: `${P}-notice-head`,
+  noticeLines: `${P}-notice-lines`,
+  noticeLine: `${P}-notice-line`,
+  noticeBody: `${P}-notice-body`,
+  noticeDetail: `${P}-notice-detail`,
   status: `${P}-status`,
   statusTitle: `${P}-status-title`,
   statusHint: `${P}-status-hint`,
@@ -1298,37 +1302,81 @@ export const css = `
 
 /* ── operation feedback ─────────────────────────────────────────────────── */
 
-/* Errors land beside the list rather than replacing it: §4.3 asks for the
-   failure where the operation was, and the change list is still the user's. */
-.${cls.actionBox} {
-  flex: none;
-  padding: 7px 12px 8px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-bg-layer-2);
-}
-
-.${cls.actionHead} {
+/* The feedback floats over the column instead of taking rows in it: §4.3 asks
+   for the failure where the operation was, and the change list is still the
+   user's. It hangs under the rail — the region the operation came from — and
+   covers the top of the list rather than pushing it down. Nothing below is
+   blocked: the layer is absolute, and only its own × (or the success clock)
+   takes it away. */
+.${cls.notice} {
+  position: absolute;
+  top: ${RAIL_HEIGHT + 8}px;
+  right: 8px;
+  left: 8px;
+  z-index: 4;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100% - ${RAIL_HEIGHT + 16}px);
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 6px 16px var(--dsw-alias-bg-mask-2);
 }
 
-.${cls.actionLabel} {
+/* A failure wears the error ink on its edge as well as its kicker, so the two
+   kinds are told apart before any word is read. */
+.${cls.notice}[data-notice='error'] {
+  border-color: var(--dsw-alias-state-error-primary);
+}
+
+.${cls.noticeHead} {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: none;
+  padding: 8px 8px 8px 12px;
+}
+
+.${cls.noticeLines} {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
   flex: auto;
+}
+
+.${cls.noticeLine} {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  word-break: break-word;
+}
+
+/* The failure's kicker — "Pull · failed" — which says which operation the reason
+   below belongs to. */
+.${cls.actionLabel} {
+  margin: 0;
+  min-width: 0;
   color: var(--dsw-alias-state-error-primary);
   font-size: 11px;
   font-weight: 500;
 }
 
-.${cls.actionNotice} {
-  flex: none;
-  margin: 0;
-  padding: 6px 12px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 11px;
-  word-break: break-word;
+/* The scrolling half: git's multi-line output can be long, and the × above it
+   must stay reachable. */
+.${cls.noticeBody} {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  flex: auto;
+  min-height: 0;
+  padding: 0 8px 8px 12px;
+}
+
+.${cls.notice} .${cls.noticeDetail} {
+  padding: 0;
 }
 
 /* ── states ─────────────────────────────────────────────────────────────── */

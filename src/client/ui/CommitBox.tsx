@@ -21,7 +21,7 @@ import type { ReactNode } from 'react'
 import { commitPlanOf } from '../../core/commit-scope.ts'
 import type { CommitScope } from '../../core/commit-scope.ts'
 import { cls } from './styles.ts'
-import type { Translate } from './translate.ts'
+import { sentence, type Sentence, type Translate } from './translate.ts'
 import { SparkleGlyph } from './icons.tsx'
 
 /** Everything the box renders from. */
@@ -49,7 +49,7 @@ export interface CommitBoxProps {
   /** True while a generation is running. */
   readonly generating: boolean
   /** A note about the last generation, e.g. that the diff was truncated. */
-  readonly aiNote?: string
+  readonly aiNote?: Sentence
   /** Start a generation. */
   readonly onGenerate: () => void
   /** The panel's translator. */
@@ -174,9 +174,9 @@ export function CommitBox({
           {error}
         </p>
       )}
-      {aiNote !== undefined && aiNote !== '' && (
+      {aiNote !== undefined && (
         <p className={cls.statusHint} data-ai-note="true">
-          {aiNote}
+          {sentence(t, aiNote)}
         </p>
       )}
     </div>

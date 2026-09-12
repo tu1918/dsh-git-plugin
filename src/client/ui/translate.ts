@@ -16,3 +16,53 @@ export type Translate = (
   key: GitPanelKey,
   vars?: Readonly<Record<string, string | number>>,
 ) => string
+
+/**
+ * One sentence the panel has decided to say, before it is drawn.
+ *
+ * The action feedback keeps SENTENCES rather than translated strings, and that is
+ * the whole point of this type: the translator reads the active dictionary when it
+ * is CALLED (`client/adapter/locale.ts`), so a notice stored as text would stay in
+ * whatever language was active when the operation finished while every other word
+ * on screen followed a language switch. A key stored in the notice re-renders with
+ * it.
+ *
+ * `raw` is the other half: a line that is already words and must not be looked up —
+ * git's own `master -> master`, which belongs to git's locale, not this panel's.
+ */
+export type Sentence =
+  | {
+      readonly kind: 'key'
+      readonly key: GitPanelKey
+      readonly vars?: Readonly<Record<string, string | number>>
+    }
+  | { readonly kind: 'raw'; readonly text: string }
+
+/**
+ * A sentence this panel wrote, to be translated when it is drawn.
+ * @param key - The dictionary key.
+ * @param vars - Values for the key's `{name}` placeholders.
+ */
+export function say(
+  key: GitPanelKey,
+  vars?: Readonly<Record<string, string | number>>,
+): Sentence {
+  return { kind: 'key', key, vars }
+}
+
+/**
+ * A sentence already in words, which is looked up by nobody.
+ * @param text - The text, verbatim.
+ */
+export function verbatim(text: string): Sentence {
+  return { kind: 'raw', text }
+}
+
+/**
+ * Render one sentence with the current dictionary.
+ * @param t - The live translator.
+ * @param value - The sentence to render.
+ */
+export function sentence(t: Translate, value: Sentence): string {
+  return value.kind === 'raw' ? value.text : t(value.key, value.vars)
+}

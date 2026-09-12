@@ -62,13 +62,13 @@ import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './r
 import { canDiscard } from './row-actions.ts'
 import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
-import type { Translate } from './translate.ts'
+import { say, sentence, verbatim, type Sentence, type Translate } from './translate.ts'
+import { NOTICE_DURATION_MS, Notice } from './notice.tsx'
 import {
   ArrowDownGlyph,
   ArrowUpGlyph,
   BranchGlyph,
   CaretGlyph,
-  CloseGlyph,
   ListGlyph,
   PlusGlyph,
   RefreshGlyph,
@@ -140,12 +140,22 @@ type ActionOp =
  *
  * One value rather than three flags: a new operation should clear the previous
  * result, and a union makes that impossible to forget.
+ *
+ * `label` and `summary` are {@link Sentence}s, not strings: the feedback outlives
+ * the language it was written in — a notice stored as text kept the old locale
+ * after a language switch, which is the bug `translate.ts` explains.
  */
 type ActionState =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'running'; readonly op: ActionOp; readonly label: string }
-  | { readonly kind: 'done'; readonly op: ActionOp; readonly label: string; readonly summary: string }
-  | { readonly kind: 'failed'; readonly op: ActionOp; readonly label: string; readonly error: GitPanelError }
+  | { readonly kind: 'running'; readonly op: ActionOp; readonly label: Sentence }
+  | {
+      readonly kind: 'done'
+      readonly op: ActionOp
+      readonly label: Sentence
+      /** git's own line, or `null` when the command printed nothing. */
+      readonly summary: Sentence | null
+    }
+  | { readonly kind: 'failed'; readonly op: ActionOp; readonly label: Sentence; readonly error: GitPanelError }
 
 /** The change-list row whose menu is open, and the element its layer hangs from. */
 interface FileRowMenu {
@@ -180,12 +190,15 @@ type RowMenu = FileRowMenu | CommitRowMenu
  *
  * `git add` prints nothing, so the summary is often empty; the caller then shows
  * the operation's own name as the confirmation, which is enough because the
- * change list has already moved.
+ * change list has already moved. git's line is kept verbatim — it is git's own
+ * `master -> master`, in git's locale, not a key in this panel's dictionary.
  * @param result - The mutation's outcome.
- * @returns The summary line, or the failure as it was.
+ * @returns The summary sentence (`null` when git printed nothing), or the failure as it was.
  */
-function reportOf(result: Result<OperationReport>): Result<string> {
-  return result.ok ? { ok: true, value: result.value.summary } : result
+function reportOf(result: Result<OperationReport>): Result<Sentence | null> {
+  return result.ok
+    ? { ok: true, value: result.value.summary === '' ? null : verbatim(result.value.summary) }
+    : result
 }
 
 /**
@@ -610,7 +623,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /** True while a commit message is being generated (FR-3.5). */
   const [generating, setGenerating] = useState(false)
   /** A note about the last generation, such as a truncated diff. */
-  const [aiNote, setAiNote] = useState<string | null>(null)
+  const [aiNote, setAiNote] = useState<Sentence | null>(null)
   /** The two-click confirmation shared by every irreversible control here (§4.3). */
   const {
     armed: armedKey,
@@ -739,6 +752,19 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     })
   }, [])
 
+  /**
+   * Take the feedback away.
+   *
+   * Declared with the other hooks rather than beside the notice it serves,
+   * because the render path returns early while the first read is in flight and
+   * the hook count must not change between those two renders.
+   *
+   * Stable on purpose: `Notice`'s clock is keyed on its dismisser, so a new
+   * function on every render would restart the timer on every render — and the
+   * panel re-renders whenever the repository moves, which is always.
+   */
+  const dismissNotice = useCallback((): void => setAction({ kind: 'idle' }), [])
+
   // A different session is a different repository, so neither the draft nor the
   // last operation's result belongs to it — and neither do the open diffs, which
   // describe files in the old repository. The dock itself stays where it was: a
@@ -813,13 +839,17 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * Run one mutation, then report it or re-read the repository.
    * @param op - Which operation, for the feedback's placement.
-   * @param label - The operation's name, for the feedback's heading.
+   * @param label - The operation's name, held as a sentence so it follows the language.
    * @param operation - The call to make.
    */
   const perform = useCallback(
-    async (op: ActionOp, label: string, operation: () => Promise<Result<string>>): Promise<void> => {
+    async (
+      op: ActionOp,
+      label: Sentence,
+      operation: () => Promise<Result<Sentence | null>>,
+    ): Promise<void> => {
       setAction({ kind: 'running', op, label })
-      let result: Result<string>
+      let result: Result<Sentence | null>
       try {
         result = await operation()
       } catch (error: unknown) {
@@ -874,7 +904,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       const result = await git.stashes(sessionId, signal)
       if (cancelled) return
       if (!result.ok) {
-        setAction({ kind: 'failed', op: 'stash', label: t('action.stash'), error: result.error })
+        setAction({ kind: 'failed', op: 'stash', label: say('action.stash'), error: result.error })
         setStashes([])
         return
       }
@@ -973,13 +1003,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // too, so this is the belt to its braces.
   const stage = (paths: readonly string[]): void => {
     if (paths.length === 0) return
-    void perform('stage', t('action.stage'), async () =>
+    void perform('stage', say('action.stage'), async () =>
       reportOf(await git.stage(sessionId, paths, signal)),
     )
   }
   const unstage = (paths: readonly string[]): void => {
     if (paths.length === 0) return
-    void perform('unstage', t('action.unstage'), async () =>
+    void perform('unstage', say('action.unstage'), async () =>
       reportOf(await git.unstage(sessionId, paths, signal)),
     )
   }
@@ -997,10 +1027,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     // click on another row cannot inherit it. (The row's own inline button keeps
     // its own arming; see `ChangeRow`.)
     disarm()
-    void perform('discard', t('action.discard'), async () => {
+    void perform('discard', say('action.discard'), async () => {
       const result = await git.discard(sessionId, [entry.path], signal)
       if (!result.ok) return result
-      return { ok: true, value: t('discard.done', { path: entry.path }) }
+      return { ok: true, value: say('discard.done', { path: entry.path }) }
     })
   }
 
@@ -1015,16 +1045,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    */
   const discardSelected = (paths: readonly string[]): void => {
     disarm()
-    void perform('discard', t('action.discard'), async () => {
+    void perform('discard', say('action.discard'), async () => {
       const result = await git.discard(sessionId, paths, signal)
       if (!result.ok) return result
-      return { ok: true, value: t('discard.doneSelected', { count: paths.length }) }
+      return { ok: true, value: say('discard.doneSelected', { count: paths.length }) }
     })
   }
 
   const commitNow = (): void => {
     const widening = scope.kind === 'all-tracked'
-    const label = widening ? t('commit.allTracked') : t('commit.button')
+    const label = say(widening ? 'commit.allTracked' : 'commit.button')
     void perform('commit', label, async () => {
       const result = widening
         ? await git.commitAll(sessionId, message, signal)
@@ -1034,18 +1064,21 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       setMessage('')
       return {
         ok: true,
-        value: t('commit.done', { hash: result.value.shortOid, subject: result.value.subject }),
+        value: say('commit.done', {
+          hash: result.value.shortOid,
+          subject: result.value.subject,
+        }),
       }
     })
   }
   const pull = (): void => {
-    void perform('pull', t('action.pull'), async () => reportOf(await git.pull(sessionId, signal)))
+    void perform('pull', say('action.pull'), async () => reportOf(await git.pull(sessionId, signal)))
   }
   const push = (): void => {
-    void perform('push', t('action.push'), async () => reportOf(await git.push(sessionId, signal)))
+    void perform('push', say('action.push'), async () => reportOf(await git.push(sessionId, signal)))
   }
   const sync = (): void => {
-    void perform('sync', t('action.sync'), async () => reportOf(await git.sync(sessionId, signal)))
+    void perform('sync', say('action.sync'), async () => reportOf(await git.sync(sessionId, signal)))
   }
 
   /**
@@ -1058,7 +1091,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param untracked - Whether untracked files went with it (`-u`).
    */
   const stashSave = (message: string | null, untracked: boolean): void => {
-    void perform('stash', t('action.stash'), async () => {
+    void perform('stash', say('action.stash'), async () => {
       const result = await git.stashSave(sessionId, message, untracked, signal)
       if (!result.ok) return result
       refreshStashes()
@@ -1066,8 +1099,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         ok: true,
         value:
           message === null
-            ? t('stash.saveDone')
-            : t('stash.saveDoneNamed', { message }),
+            ? say('stash.saveDone')
+            : say('stash.saveDoneNamed', { message }),
       }
     })
   }
@@ -1083,15 +1116,15 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param pop - Whether to drop the entry once it applied cleanly.
    */
   const stashApply = (entry: StashEntry, pop: boolean): void => {
-    void perform('stash', t('action.stash'), async () => {
+    void perform('stash', say('action.stash'), async () => {
       const result = await git.stashApply(sessionId, entry.oid, pop, signal)
       if (!result.ok) return result
       refreshStashes()
       return {
         ok: true,
         value: pop
-          ? t('stash.popDone', { selector: entry.selector })
-          : t('stash.applyDone', { selector: entry.selector }),
+          ? say('stash.popDone', { selector: entry.selector })
+          : say('stash.applyDone', { selector: entry.selector }),
       }
     })
   }
@@ -1104,11 +1137,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param entry - The row whose armed button was confirmed.
    */
   const stashDrop = (entry: StashEntry): void => {
-    void perform('stash', t('action.stash'), async () => {
+    void perform('stash', say('action.stash'), async () => {
       const result = await git.stashDrop(sessionId, entry.oid, signal)
       if (!result.ok) return result
       refreshStashes()
-      return { ok: true, value: t('stash.dropDone', { selector: entry.selector }) }
+      return { ok: true, value: say('stash.dropDone', { selector: entry.selector }) }
     })
   }
 
@@ -1128,7 +1161,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setStashSwitch(null)
     // The label is the whole action, not its first half: if the RETRY is what
     // fails, the box's heading has to name the thing the user clicked.
-    void perform('stash', t('stash.andSwitch', { name }), async () => {
+    void perform('stash', say('stash.andSwitch', { name }), async () => {
       const saved = await git.stashSave(sessionId, null, true, signal)
       if (!saved.ok) return saved
       refreshStashes()
@@ -1140,7 +1173,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         setStashSwitch(switched.error.code === 'dirty-worktree' ? name : null)
         return switched
       }
-      return { ok: true, value: t('stash.switched', { name }) }
+      return { ok: true, value: say('stash.switched', { name }) }
     })
   }
 
@@ -1157,7 +1190,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const checkout = (name: string): void => {
     setPickerOpen(false)
     setStashSwitch(null)
-    void perform('checkout', t('action.checkout'), async () => {
+    void perform('checkout', say('action.checkout'), async () => {
       const result = await git.checkout(sessionId, name, signal)
       if (!result.ok) {
         // The code is what makes the shortcut possible: `dirty-worktree` is the
@@ -1171,7 +1204,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
   const createBranch = (name: string, base: string | null): void => {
     setPickerOpen(false)
-    void perform('createBranch', t('action.createBranch'), async () =>
+    void perform('createBranch', say('action.createBranch'), async () =>
       reportOf(await git.createBranch(sessionId, name, base, signal)),
     )
   }
@@ -1183,7 +1216,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * second click is the "未合并需强制确认" the doc asks for.
    */
   const deleteBranch = (name: string, force: boolean): void => {
-    void perform('deleteBranch', t('action.deleteBranch'), async () => {
+    void perform('deleteBranch', say('action.deleteBranch'), async () => {
       const result = await git.deleteBranch(sessionId, name, force, signal)
       if (!result.ok) {
         setBranchRefusal({ name, code: result.error.code })
@@ -1194,13 +1227,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     })
   }
   const continueMerge = (): void => {
-    void perform('mergeContinue', t('merge.continue'), async () =>
+    void perform('mergeContinue', say('merge.continue'), async () =>
       reportOf(await git.continueMerge(sessionId, signal)),
     )
   }
   const abortMerge = (): void => {
     disarm()
-    void perform('mergeAbort', t('merge.abort'), async () =>
+    void perform('mergeAbort', say('merge.abort'), async () =>
       reportOf(await git.abortMerge(sessionId, signal)),
     )
   }
@@ -1219,11 +1252,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       const result = await git.generateCommitMessage(sessionId, locale, signal)
       setGenerating(false)
       if (!result.ok) {
-        setAction({ kind: 'failed', op: 'generate', label: t('commit.ai'), error: result.error })
+        setAction({ kind: 'failed', op: 'generate', label: say('commit.ai'), error: result.error })
         return
       }
       setMessage(result.value.message)
-      if (result.value.truncated) setAiNote(t('commit.aiTruncated'))
+      if (result.value.truncated) setAiNote(say('commit.aiTruncated'))
     })()
   }
 
@@ -1318,15 +1351,15 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     // The armed state was this click's whole reason to exist; disarm so a later
     // click on another row cannot inherit it.
     disarm()
-    void perform('undo', t('action.undoCommit'), async () => {
+    void perform('undo', say('action.undoCommit'), async () => {
       const result = await git.undoCommit(sessionId, commit.oid, signal)
       if (!result.ok) return result
       return {
         ok: true,
         value:
           result.value.mode === 'reset'
-            ? t('undo.doneReset', { subject: result.value.subject })
-            : t('undo.doneRevert', { subject: result.value.subject }),
+            ? say('undo.doneReset', { subject: result.value.subject })
+            : say('undo.doneRevert', { subject: result.value.subject }),
       }
     })
   }
@@ -1355,7 +1388,6 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * The row's own staging action comes first — `git add` under the name that fits
    * the row (`mark resolved` for a conflict, FR-9.2) — and the destructive entry
    * last, after a hairline, which is the shape §9's registered menus already have.
-   * The copying entries §9 also lists arrive with §10.2 order 6.
    *
    * Discard appears exactly where `ui/row-actions.ts` says the row has a button for
    * it: the working-tree rows. It is an armed entry (`stayOpen`), so the first click
@@ -1415,8 +1447,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * confirmation between the two clicks. Which sentence it arms with follows the
    * row's own pushed marker — the client's last reading, and the same upstream
    * basis the host re-asks at execution time, so the two cannot disagree about
-   * which undo is coming. Copying and revert/cherry-pick entries for OTHER rows
-   * arrive with §10.2 orders 6 and 9.
+   * which undo is coming. Drop/squash/reset and revert/cherry-pick for other rows
+   * arrive with §10.2 orders 9.
    */
   const commitMenuEntries = (row: CommitRowMenu): readonly MenuEntry[] => {
     const key = `undo:${row.commit.oid}`
@@ -1582,21 +1614,19 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           </div>
         )}
         {action.kind === 'failed' && failure !== null && (
-          <div className={cls.actionBox} data-action-error={action.op}>
-            <div className={cls.actionHead}>
-              <span className={cls.actionLabel}>
-                {action.label} · {t('action.failed')}
-              </span>
-              <ToolButton label={t('action.dismiss')} onClick={() => setAction({ kind: 'idle' })}>
-                <CloseGlyph />
-              </ToolButton>
-            </div>
-            <p className={cls.statusHint}>{failure.title}</p>
-            {failure.detail !== undefined && failure.detail !== '' && (
-              <p className={cls.note} data-multiline={String(lineCount(failure.detail) > 1)}>
-                {failure.detail}
-              </p>
-            )}
+          <Notice
+            kind="error"
+            op={action.op}
+            label={`${sentence(t, action.label)} · ${t('action.failed')}`}
+            title={failure.title}
+            detail={failure.detail}
+            // `null`: a refusal waits to be read and dismissed. It carries git's
+            // multi-line words (FR-4.4) and may carry a control below them, and
+            // neither may vanish from under the pointer.
+            durationMs={null}
+            onDismiss={dismissNotice}
+            dismissLabel={t('action.dismiss')}
+          >
             {/* FR-4.4's shortcut, restored now that FR-6.2 exists (D20). It sits
                 beside the refusal it answers — the multi-line list of files git
                 would have overwritten — and appears whenever a switch is known to
@@ -1616,12 +1646,17 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 {t('stash.andSwitch', { name: stashSwitch })}
               </button>
             )}
-          </div>
+          </Notice>
         )}
         {action.kind === 'done' && (
-          <p className={cls.actionNotice} data-action-done={action.op}>
-            {action.summary === '' ? action.label : action.summary}
-          </p>
+          <Notice
+            kind="success"
+            op={action.op}
+            title={action.summary === null ? sentence(t, action.label) : sentence(t, action.summary)}
+            durationMs={NOTICE_DURATION_MS}
+            onDismiss={dismissNotice}
+            dismissLabel={t('action.dismiss')}
+          />
         )}
         {/* The column: the staged drawer, the message box, the working-tree
             drawers, the conflict group, then the bottom pane. The first two are

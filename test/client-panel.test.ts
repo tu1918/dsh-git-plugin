@@ -57,6 +57,7 @@ const { act } = await import('react')
 const { StatusPanel } = await import('../src/client/ui/StatusPanel.tsx')
 const { placeLayer } = await import('../src/client/ui/popover.tsx')
 const { Menu } = await import('../src/client/ui/menu.tsx')
+const { NOTICE_DURATION_MS } = await import('../src/client/ui/notice.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
 const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
 const { BOTTOM_PANE_KEY } = await import('../src/client/ui/bottom-view.ts')
@@ -96,12 +97,26 @@ import type {
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
 import type { MenuEntry } from '../src/client/ui/menu.tsx'
 
-/** A translator over the real English dictionary. */
-const t = (key: keyof typeof en, vars?: Readonly<Record<string, string | number>>): string => {
-  const template = en[key]
-  if (vars === undefined) return template
-  return template.replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? `{${name}}`))
+/** A translator over one of the real dictionaries, with `{name}` substitution. */
+function translator(dict: Readonly<Record<string, string>>) {
+  return (key: string, vars?: Readonly<Record<string, string | number>>): string => {
+    const template = dict[key] ?? key
+    if (vars === undefined) return template
+    return template.replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? `{${name}}`))
+  }
 }
+
+/** A translator over the real English dictionary. */
+const t = translator(en) as (key: keyof typeof en, vars?: Readonly<Record<string, string | number>>) => string
+
+/**
+ * A translator over the real Chinese dictionary.
+ *
+ * The panel's `t` is a prop rather than a module import precisely so a language
+ * switch is a re-render with another translator; this is the other half of that
+ * test (`the operation feedback` → the locale-switch case).
+ */
+const tZh = translator(zh) as (key: keyof typeof zh, vars?: Readonly<Record<string, string | number>>) => string
 
 /** A status reading with one file in each area. */
 function statusFixture(): RepoStatus {
@@ -2450,6 +2465,129 @@ describe('operation failures (§4.3)', () => {
 
     const notice = must(container, '[data-action-done="unstage"]')
     assert.equal(notice.textContent, 'Unstage')
+  })
+})
+
+describe('the operation feedback (§4.3)', () => {
+  /**
+   * Press a button without {@link click}'s trailing `flush`.
+   *
+   * `flush` waits on a real timer, and the two tests below mock `setTimeout` to
+   * drive the notice's own clock — a flushed wait would never resolve under them.
+   * @param node - The button to press.
+   */
+  async function pressNow(node: Element): Promise<void> {
+    await act(async () => {
+      node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  it('re-renders a notice in the new language after a locale switch', async () => {
+    // The regression this guards: the action feedback used to hold a translated
+    // STRING, so a notice written under one dictionary kept that language while
+    // every other word on screen followed the switch. The panel's `t` is a prop,
+    // so switching is a re-render with the other translator — exactly this.
+    //
+    // `unstage` prints nothing, so the notice is the operation's own name, which
+    // is the clearest thing to watch change language.
+    const git = stubGit({})
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    rendered.push(root)
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    })
+    await settle()
+
+    await click(
+      must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
+    )
+    assert.equal(must(container, '[data-action-done="unstage"]').textContent, 'Unstage')
+
+    // The same notice, re-rendered from its key in the other dictionary.
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's1', git, t: tZh, locale: 'zh' }))
+    })
+    await settle()
+    assert.equal(must(container, '[data-action-done="unstage"]').textContent, '取消暂存')
+  })
+
+  it('hangs over the column, and a success takes itself away after its time', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const container = await render(
+        h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+      )
+      await settle()
+      await pressNow(
+        must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
+      )
+
+      const notice = must<HTMLElement>(container, '[data-action-done="unstage"]')
+      // A layer over the panel, not a band in the column: it is positioned
+      // against the panel's own box (`position: relative`) and the change list is
+      // still underneath it.
+      assert.equal(window.getComputedStyle(notice).position, 'absolute')
+      assert.ok(container.querySelector(`[data-group="staged"] .${cls.row}`), 'the list survives')
+
+      await act(async () => {
+        mock.timers.tick(NOTICE_DURATION_MS - 1)
+      })
+      assert.ok(container.querySelector('[data-action-done="unstage"]'), 'still there just before its time')
+
+      await act(async () => {
+        mock.timers.tick(1)
+      })
+      assert.equal(container.querySelector('[data-action-done="unstage"]'), null)
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('keeps a refusal until its × is pressed, however long that is', async () => {
+    // FR-4.4: git's refusal is multi-line and the shortcut under it is a control.
+    // A time limit on either would take them away mid-read.
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const container = await render(
+        h(StatusPanel, {
+          sessionId: 's1',
+          git: stubGit({
+            report: {
+              ok: false,
+              error: { code: 'git-failed', message: 'boom', detail: 'line one\nline two' },
+            },
+          }),
+          t,
+          locale: 'en',
+        }),
+      )
+      await settle()
+      await pressNow(must(container, `[data-group="untracked"] .${cls.rowActions} button`))
+
+      const notice = must<HTMLElement>(container, '[data-action-error="stage"]')
+      assert.equal(window.getComputedStyle(notice).position, 'absolute')
+      assert.equal(
+        must(notice, `.${cls.note}`).getAttribute('data-multiline'),
+        'true',
+        'git’s own lines reach the layer',
+      )
+
+      await act(async () => {
+        mock.timers.tick(NOTICE_DURATION_MS * 10)
+      })
+      assert.ok(container.querySelector('[data-action-error="stage"]'), 'a refusal waits to be read')
+
+      // The × is the only way out, and it is on the layer itself.
+      await act(async () => {
+        must(notice, `.${cls.tool}`).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      })
+      assert.equal(container.querySelector('[data-action-error="stage"]'), null)
+    } finally {
+      mock.timers.reset()
+    }
   })
 })
 
