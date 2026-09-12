@@ -12,6 +12,8 @@
 
 import type { ReactNode } from 'react'
 
+import type { FileKind } from '../../core/file-kind.ts'
+
 /** Props every glyph here accepts. */
 export interface GlyphProps {
   /** Rendered size in CSS pixels; the glyph is square. */
@@ -313,6 +315,96 @@ export function StashGlyph({ size = 14, className }: GlyphProps): ReactNode {
       <path d="M2.4 3.4h11.2v2.4H2.4z" />
       <path d="M3.6 5.8v6.8h8.8V5.8" />
       <path d="M6.4 8.4h3.2" />
+    </>,
+  )
+}
+
+/**
+ * The page every file-kind glyph is drawn on: the body and its folded corner.
+ *
+ * One outline, one mark per kind — the shape a reader learns once and then reads
+ * at a glance, the way an editor's file-icon theme works. The mark always lives in
+ * the lower half (x 5–11, y 8–13) so the kinds line up as a column.
+ */
+const FILE_PAGE = (
+  <>
+    <path d="M3.8 2.2h5.1l3.3 3.3v8.3H3.8z" />
+    <path d="M8.9 2.2v3.3h3.3" />
+  </>
+)
+
+/** What each kind draws on that page; `file` deliberately draws nothing. */
+const FILE_MARKS: Readonly<Record<FileKind, ReactNode>> = {
+  // The two brackets a language is read through.
+  code: (
+    <>
+      <path d="M7.2 8.4 5.8 10.4l1.4 2" />
+      <path d="M8.8 8.4l1.4 2-1.4 2" />
+    </>
+  ),
+  // A tag: what the file IS, rather than what it is written in. Kept clear of the
+  // page's own right edge (12.2) so the two outlines never read as one stroke.
+  markup: (
+    <>
+      <path d="M7.6 8.8h2.6l1.2 1.6-1.2 1.6H7.6l-1.2-1.6z" />
+      <circle cx="7.8" cy="10.4" r=".6" />
+    </>
+  ),
+  // A hash: the selector a stylesheet is addressed by.
+  style: <path d="M6.6 8.2l-.7 4.4M10.1 8.2l-.7 4.4M5.2 9.6h5.6M4.9 11.4h5.6" />,
+  // A grid: the shape of anything structured.
+  data: (
+    <>
+      <path d="M5.4 8.6h5.2v4.6H5.4z" />
+      <path d="M5.4 10.9h5.2M8 8.6v4.6" />
+    </>
+  ),
+  // A horizon and a sun, in no frame: the frame is what the data grid already is.
+  image: (
+    <>
+      <path d="M5 12.8l2-2.4 1.4 1.5 1.1-1.1 1.5 2z" />
+      <circle cx="6.6" cy="9.1" r=".9" />
+    </>
+  ),
+  // Prose: three lines, the last one short.
+  doc: <path d="M5.6 8.8h4.8M5.6 10.6h4.8M5.6 12.4h2.8" />,
+  // A prompt and a cursor.
+  shell: (
+    <>
+      <path d="M5.8 8.8 7.4 10.4l-1.6 1.6" />
+      <path d="M8.8 12.2h2.4" />
+    </>
+  ),
+  // Sliders: the settings the file holds, rather than data it holds.
+  config: (
+    <>
+      <path d="M5.2 9h5.6M5.2 12h5.6" />
+      <circle cx="7" cy="9" r=".9" />
+      <circle cx="9.6" cy="12" r=".9" />
+    </>
+  ),
+  // Nothing: "I do not know" should look like a plain file, not like a guess.
+  file: null,
+}
+
+/** Props for {@link FileKindGlyph}. */
+export interface FileKindGlyphProps extends GlyphProps {
+  /** Which file kind to draw. */
+  readonly kind: FileKind
+}
+
+/**
+ * The glyph for one changed file's kind, drawn where the row's badge used to sit.
+ *
+ * @param props - The kind, the size, and an extra class.
+ */
+export function FileKindGlyph({ kind, size = 14, className }: FileKindGlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      {FILE_PAGE}
+      {FILE_MARKS[kind]}
     </>,
   )
 }

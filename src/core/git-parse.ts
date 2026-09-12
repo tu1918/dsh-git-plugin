@@ -327,25 +327,41 @@ export function changedPathCount(entries: readonly FileChange[]): number {
 }
 
 /**
+ * The letter a change row's badge shows.
+ *
+ * The panel's own vocabulary rather than git's: every letter is the English
+ * initial of the state it reports, which is why an untracked file reads `U` and not
+ * git's `?`. A conflict has no initial left to take — `C` is copied, `M` modified,
+ * `U` untracked — so it takes `!`, the same choice VS Code's own source-control
+ * view makes (`getStatusLetter` in its git extension returns `!` for every
+ * unmerged state). One letter, one state: the badge never needs the row's group to
+ * be read correctly.
+ */
+export type BadgeLetter = 'M' | 'T' | 'A' | 'D' | 'R' | 'C' | 'U' | '!'
+
+/**
  * The status letter a badge shows for one entry in one group.
  *
- * A rename or copy in the worktree column reads `R`, matching what the file row
- * means there; untracked and unmerged paths have their own letters whatever the
- * raw pair said.
+ * Which area is drawing the row decides which half of the status pair the badge
+ * reports — the index side in "Staged changes", the worktree side in "Changes" —
+ * the same split VS Code's SCM view makes.
  * @param entry - The entry being drawn.
  * @param area - Which group is drawing it.
  * @returns The letter for the badge.
  */
-export function badgeFor(entry: FileChange, area: ChangeArea): StatusCode {
+export function badgeFor(entry: FileChange, area: ChangeArea): BadgeLetter {
   switch (area) {
     case 'untracked':
-      return '?'
-    case 'conflicted':
       return 'U'
+    case 'conflicted':
+      return '!'
     case 'staged':
       return entry.index === '.' || entry.index === '?' ? 'M' : entry.index
     case 'unstaged':
-      return entry.worktree === '.' ? 'M' : entry.worktree
+      // `?` cannot reach this branch (`groupsOf` sends an untracked entry to its
+      // own group), but the pair's type allows it, and a badge reading `?` would
+      // contradict the letter set above.
+      return entry.worktree === '.' || entry.worktree === '?' ? 'M' : entry.worktree
   }
 }
 

@@ -24,15 +24,46 @@
 import type { ReactNode } from 'react'
 
 import { changeTreeOf, filesUnder, type ChangeTreeNode } from '../../core/change-tree.ts'
+import { fileKindOf } from '../../core/file-kind.ts'
 import { pathParts } from '../../core/format.ts'
-import { badgeFor } from '../../core/git-parse.ts'
+import { badgeFor, type BadgeLetter } from '../../core/git-parse.ts'
 import type { ChangeArea, FileChange } from '../../core/types.ts'
+import type { GitPanelKey } from '../locales.ts'
 import type { Translate } from './translate.ts'
 import { cls } from './styles.ts'
 import { useArmedKey } from './armed.ts'
 import { dirKey, type ChangeView } from './change-view.ts'
 import { canDiscard } from './row-actions.ts'
-import { CaretGlyph, CheckGlyph, DiscardGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
+import {
+  CaretGlyph,
+  CheckGlyph,
+  DiscardGlyph,
+  FileKindGlyph,
+  MinusGlyph,
+  PlusGlyph,
+} from './icons.tsx'
+
+/**
+ * What each badge letter says, in words, for its tooltip.
+ *
+ * The badge is a letter at the far right of the row — it used to sit at the front,
+ * where the file-kind glyph is now — and a lone `M` is not something a reader
+ * should have to decode, so the letter carries its meaning in a tooltip. One
+ * letter, one sentence: the set is the panel's own (see {@link BadgeLetter}), so
+ * nothing here needs the row's group to be read correctly. Typed as translation
+ * KEYS, so a letter whose sentence is missing from the dictionaries is a compile
+ * error rather than an empty tooltip.
+ */
+const STATUS_COPY: Readonly<Record<BadgeLetter, GitPanelKey>> = {
+  M: 'status.modified',
+  T: 'status.typeChanged',
+  A: 'status.added',
+  D: 'status.deleted',
+  R: 'status.renamed',
+  C: 'status.copied',
+  U: 'status.untracked',
+  '!': 'status.unmerged',
+}
 
 /** One glyph button with a tooltip and an accessible name. */
 export function ToolButton({
@@ -174,6 +205,7 @@ export function ChangeRow({
 }): ReactNode {
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
+  const kind = fileKindOf(entry.path)
   // A rename is the one case where the row cannot stand alone: the new path is
   // only half the story, so the original joins the tooltip.
   const tooltip =
@@ -234,8 +266,11 @@ export function ChangeRow({
         }
         onToggle={() => onToggleSelect(entry.path)}
       />
-      <span className={cls.badge} data-status={badge}>
-        {badge}
+      {/* The leading column says WHAT the file is; the far right is the change
+          STATUS column. The two used to be one `M`/`A`/`?` letter at the front,
+          which a reader had to decode before they knew what they were looking at. */}
+      <span className={cls.fileIcon} data-kind={kind} aria-hidden="true">
+        <FileKindGlyph kind={kind} />
       </span>
       <span className={cls.path}>
         {showDirectory && directory !== '' && <span className={cls.pathDir}>{directory}</span>}
@@ -290,6 +325,13 @@ export function ChangeRow({
             {t('action.discardArmed')}
           </button>
         )}
+      </span>
+      {/* The change STATUS column: the row's own far right, to the right of the
+          actions, so the letter is in the same place down the whole list whatever
+          the file and whatever the row's controls are doing. The tooltip carries
+          the meaning, because a lone `M` is not a sentence. */}
+      <span className={cls.badge} data-status={badge} title={t(STATUS_COPY[badge])}>
+        {badge}
       </span>
     </div>
   )

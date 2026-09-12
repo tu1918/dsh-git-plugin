@@ -74,6 +74,8 @@ const {
   STAGED_RESERVED_HEIGHT,
 } = await import('../src/client/ui/panel-layout.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
+const { FILE_KINDS } = await import('../src/core/file-kind.ts')
+const { FileKindGlyph } = await import('../src/client/ui/icons.tsx')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
 )
@@ -700,7 +702,7 @@ describe('StatusPanel rendering', () => {
     assert.equal(container.querySelectorAll(`.${cls.track}`).length, 2)
   })
 
-  it('groups the changes and gives each row its area’s badge letter', async () => {
+  it('gives each row its area’s badge letter', async () => {
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
     )
@@ -716,14 +718,84 @@ describe('StatusPanel rendering', () => {
       node.textContent,
     ])
     // The staged rows come first, because their drawer sits above the commit box;
-    // then a conflict (`U` in its own group, the same file never listed twice),
-    // then the working tree, then what git does not track yet.
+    // then a conflict in its own group (the same file never listed twice), then the
+    // working tree, then what git does not track yet. One letter, one state: the
+    // conflict is `!` — `U` is untracked, and `C`/`M` were taken — which is the
+    // letter VS Code's own SCM view uses for an unmerged path.
     assert.deepEqual(badges, [
       ['M', 'M'],
-      ['U', 'U'],
+      ['!', '!'],
       ['M', 'M'],
-      ['?', '?'],
+      ['U', 'U'],
     ])
+  })
+
+  it('leads a row with a file-kind glyph and ends it with the status letter', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(fileNode(container, 'unstaged', 'deep/nested/dir/changed.ts'), `.${cls.row}`)
+    // One row, one order: the box, what the file IS, the path, the hover actions,
+    // and the change-status column at the far right — where the letter stays put
+    // down the whole list. The status used to open the row, which meant a reader
+    // met an `M` before knowing what the file was.
+    assert.deepEqual(
+      [...row.children].map((child) => child.className),
+      [cls.selectBoxWrap, cls.fileIcon, cls.path, cls.rowActions, cls.badge],
+    )
+    // It really is the last thing in the row, so nothing can push it off the edge.
+    assert.equal(row.lastElementChild?.className, cls.badge)
+    // The glyph is a hint, not content: it says nothing to a screen reader, and
+    // the row's own name already carries the truth.
+    assert.equal(must(row, `.${cls.fileIcon}`).getAttribute('aria-hidden'), 'true')
+    assert.equal(must(row, `.${cls.fileIcon}`).getAttribute('data-kind'), 'code')
+
+    // A different file, a different kind — and the same row shape.
+    const notes = must(fileNode(container, 'untracked', 'notes.md'), `.${cls.row}`)
+    assert.equal(must(notes, `.${cls.fileIcon}`).getAttribute('data-kind'), 'doc')
+    assert.equal(
+      must(notes, `.${cls.fileIcon}`).querySelector('svg')?.getAttribute('viewBox'),
+      '0 0 16 16',
+    )
+  })
+
+  it('gives the status letter its meaning as a tooltip', async () => {
+    // The letter is at the end of the row now, away from the name, and a lone `M`
+    // is not something a reader should have to decode.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const badgeOf = (area: string, path: string): string | null =>
+      must(must(fileNode(container, area, path), `.${cls.row}`), `.${cls.badge}`).getAttribute(
+        'title',
+      )
+    assert.equal(badgeOf('staged', 'src/staged.ts'), 'Modified')
+    assert.equal(badgeOf('conflicted', 'both.txt'), 'Unmerged')
+    assert.equal(badgeOf('untracked', 'notes.md'), 'Untracked')
+  })
+
+  it('draws every file kind as its own mark on the one page', async () => {
+    // The kinds are the whole point of the icon: two that render the same drawing
+    // would be a copy-paste a reader pays for. `FILE_KINDS` is the single list, so
+    // a tenth kind is covered here the moment it is added to core.
+    const drawn = new Map<string, string>()
+    for (const kind of FILE_KINDS) {
+      const container = await render(h(FileKindGlyph, { kind }))
+      const svg = must(container, 'svg')
+      assert.equal(svg.getAttribute('viewBox'), '0 0 16 16', kind)
+      const shapes = [...svg.querySelectorAll('path, circle')]
+      if (kind === 'file') {
+        assert.equal(shapes.length, 2, 'the plain file is the page and its fold, nothing else')
+      } else {
+        assert.ok(shapes.length >= 3, `${kind}: the page plus its own mark`)
+      }
+      drawn.set(kind, svg.innerHTML)
+    }
+    assert.equal(new Set(drawn.values()).size, FILE_KINDS.length, 'no two kinds share a drawing')
   })
 
   it('splits a path in the flat list, so the file name survives and the directory can clip', async () => {

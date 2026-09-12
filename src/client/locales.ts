@@ -64,6 +64,16 @@ export const zh = {
   'select.checkDir': '选中「{path}」中的全部文件',
   'select.uncheckDir': '取消选中「{path}」中的全部文件',
 
+  'status.modified': '已修改',
+  'status.typeChanged': '类型改变',
+  'status.added': '新增',
+  'status.deleted': '已删除',
+  'status.renamed': '重命名',
+  'status.copied': '已复制',
+  'status.unmerged': '未合并',
+  'status.untracked': '未跟踪',
+  'status.unchanged': '无变化',
+
   'action.undoCommit': '撤销此提交',
   'action.undoCommitArmedReset': '再点一次：改动退回工作区',
   'action.undoCommitArmedRevert': '再点一次：创建反转提交（原历史保留）',
@@ -254,6 +264,16 @@ export const en: Record<GitPanelKey, string> = {
   'select.uncheck': 'Unselect {path}',
   'select.checkDir': 'Select every file in {path}',
   'select.uncheckDir': 'Unselect every file in {path}',
+
+  'status.modified': 'Modified',
+  'status.typeChanged': 'Type changed',
+  'status.added': 'Added',
+  'status.deleted': 'Deleted',
+  'status.renamed': 'Renamed',
+  'status.copied': 'Copied',
+  'status.unmerged': 'Unmerged',
+  'status.untracked': 'Untracked',
+  'status.unchanged': 'Unchanged',
 
   'action.undoCommit': 'Undo this commit',
   'action.undoCommitArmedReset': 'Click again: the changes return to the working tree',

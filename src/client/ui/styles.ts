@@ -59,6 +59,7 @@ export const cls = {
   branchSelect: `${P}-branch-select`,
   branchFormActions: `${P}-branch-form-actions`,
   branchFooter: `${P}-branch-footer`,
+  fileIcon: `${P}-file-icon`,
   stashPicker: `${P}-stash-picker`,
   stashRow: `${P}-stash-row`,
   stashHead: `${P}-stash-head`,
@@ -810,9 +811,12 @@ export const css = `
   min-width: 0;
   align-items: center;
   gap: 6px;
-  /* 12px on the trailing side to match the row: the group's bulk action and the
-     rows' '+'/'−' are the same column of controls and should read as one. */
-  padding: 5px 12px 4px 12px;
+  /* 12px of trailing gutter, plus the width of a row's status column and the gap
+     before it (12px + 8px): the group's bulk action and the rows' '+'/'−' are the
+     same column of controls and should read as one. The header has no change
+     status to show, so the extra 20px is empty space — the price of the rows
+     having a status column at their own right edge. */
+  padding: 5px 32px 4px 12px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   background: var(--dsw-alias-bg-layer-1);
 }
@@ -908,13 +912,13 @@ export const css = `
   color: var(--dsw-alias-label-secondary);
 }
 
-/* The empty state of a resident group. Indented to the rows' text column
-   (12px of row padding, a 14px checkbox, the 8px gap, a 12px badge, and the
-   8px gap again) so it reads as "this group has no rows" rather than as a
+/* The empty state of a resident group. Indented to the rows' text column — 12px
+   of row padding, the 14px checkbox, the 8px gap, the 14px file glyph, the 8px
+   gap again = 56px — so it reads as "this group has no rows" rather than as a
    stray sentence. */
 .${cls.groupEmpty} {
   margin: 0;
-  padding: 4px 12px 6px 54px;
+  padding: 4px 12px 6px 56px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
 }
@@ -1028,10 +1032,12 @@ export const css = `
   box-sizing: border-box;
   align-items: center;
   gap: 8px;
-  /* The trailing 12px is the group header's own trailing padding, so a row's
-     '+'/'−' and its header's "stage all" line up down the right edge. It is also
-     what keeps the button off the wall: the row's right edge is a button, so the
-     row's padding is what decides whether it reads as inside the list. */
+  /* The trailing 12px is the status column's gutter: the status letter is the
+     row's last element, so this padding is what holds it off the wall. The group
+     header keeps its bulk action in the same column as the row's '+'/'−' by
+     adding the status column's width to its own trailing padding (see the
+     group-head rule below): the header has no status of its own, but the two
+     control columns still have to line up. */
   padding: 4px 12px;
   border: 0;
   background: transparent;
@@ -1045,6 +1051,22 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* The file-kind glyph: the row's leading column after the checkbox, where the
+   status letter used to be. Quiet on purpose — it is a hint about what the file
+   IS, and the row already carries the name and the status; a loud icon would
+   out-shout both. Fixed at 14px so the column is a column. */
+.${cls.fileIcon} {
+  display: inline-flex;
+  width: 14px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The status letter is the row's last element, to the right of the actions: the
+   change STATUS column, in one place down the whole list. Its ink is the theme's
+   semantic state per letter (below), and its tooltip says what the letter means. */
 .${cls.badge} {
   width: 12px;
   flex: none;
@@ -1054,15 +1076,19 @@ export const css = `
   text-align: center;
 }
 
-/* Git's own status letters, mapped onto the theme's semantic states. */
+/* The badge letters, mapped onto the theme's semantic states. One letter, one
+   state — the panel's own set (see BadgeLetter in core/git-parse.ts), so nothing
+   here needs the row's group: U is untracked (a new file, the success colour) and
+   ! is a conflict (the error colour), which is how VS Code's own SCM view spells
+   the same two states. */
 .${cls.badge}[data-status='M'],
-.${cls.badge}[data-status='T'] { color: var(--dsw-alias-state-business-primary); }
-.${cls.badge}[data-status='A'],
-.${cls.badge}[data-status='?'] { color: var(--dsw-alias-state-success-primary); }
-.${cls.badge}[data-status='D'] { color: var(--dsw-alias-state-error-primary); }
+.${cls.badge}[data-status='T'],
 .${cls.badge}[data-status='R'],
 .${cls.badge}[data-status='C'] { color: var(--dsw-alias-state-business-primary); }
-.${cls.badge}[data-status='U'] { color: var(--dsw-alias-state-error-primary); }
+.${cls.badge}[data-status='A'],
+.${cls.badge}[data-status='U'] { color: var(--dsw-alias-state-success-primary); }
+.${cls.badge}[data-status='D'],
+.${cls.badge}[data-status='!'] { color: var(--dsw-alias-state-error-primary); }
 
 .${cls.path} {
   display: flex;

@@ -184,14 +184,45 @@ describe('badgeFor', () => {
     const added = entries[0] as FileChange
     assert.equal(badgeFor(added, 'staged'), 'A')
     assert.equal(badgeFor(added, 'unstaged'), 'M')
-    assert.equal(badgeFor(entries[3] as FileChange, 'untracked'), '?')
+    // The English initial of the state, not git's own `?` for an untracked path.
+    assert.equal(badgeFor(entries[3] as FileChange, 'untracked'), 'U')
+  })
+
+  it('gives a conflict an exclamation mark, so U means untracked alone', () => {
+    // The letters are initials and a conflict has none left to take — C is copied,
+    // M modified, U (now) untracked — so it takes `!`, the same letter VS Code's
+    // own source-control view uses for every unmerged state. One letter, one
+    // state: the badge never needs the row's group to be read correctly.
     assert.equal(
       badgeFor(
         { path: 'c', index: 'U', worktree: 'U', staged: true, untracked: false, conflicted: true },
         'conflicted',
       ),
-      'U',
+      '!',
     )
+    assert.equal(
+      badgeFor(
+        { path: 'c', index: 'A', worktree: 'U', staged: true, untracked: false, conflicted: true },
+        'conflicted',
+      ),
+      '!',
+      'every unmerged pair spells the same letter',
+    )
+  })
+
+  it('never lets git’s own `?` reach a badge', () => {
+    // `groupsOf` sends an untracked entry to its own group, so the worktree branch
+    // never sees one — but the pair's type allows it, and a badge reading `?`
+    // would contradict the letter set.
+    const untracked: FileChange = {
+      path: 'n',
+      index: '?',
+      worktree: '.',
+      staged: false,
+      untracked: true,
+      conflicted: false,
+    }
+    assert.equal(badgeFor(untracked, 'unstaged'), 'M')
   })
 })
 
