@@ -57,6 +57,11 @@ export function errorCopy(
       return { title: t('error.nonFastForward'), detail: error.detail }
     case 'conflict':
       return { title: t('error.conflict'), detail: error.detail }
+    case 'dirty-worktree':
+      // FR-4.4: git's own sentence names the files it would overwrite, and that
+      // list is the detail; the title says what the state means and that stashing
+      // is the way on (the shortcut beside this box is that way).
+      return { title: t('error.dirtyWorktree'), detail: error.detail }
     case 'not-merged':
       // FR-4.3: git's own words are "the branch ... is not fully merged", which
       // says what is true but not what to do. The picker has already armed the

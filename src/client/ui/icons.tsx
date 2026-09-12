@@ -296,6 +296,28 @@ export function ListGlyph({ size = 13, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * A box with its lid open and a slot in front: the stash (FR-6.2).
+ *
+ * Drawn as a container rather than as a stack of papers, because what the control
+ * does is put work AWAY and keep it — a "documents" glyph would read as the file
+ * list right below it. It is deliberately not the bin {@link TrashGlyph}: the
+ * stash's own destructive action is dropping one entry, and that is the entry's
+ * button, not this one.
+ * @param props - Size and class.
+ */
+export function StashGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M2.4 3.4h11.2v2.4H2.4z" />
+      <path d="M3.6 5.8v6.8h8.8V5.8" />
+      <path d="M6.4 8.4h3.2" />
+    </>,
+  )
+}
+
+/**
  * The panel's spinner, as an inline SVG.
  *
  * The CSS spinner is a styled `span`; this one exists for places that need the

@@ -59,6 +59,16 @@ export const cls = {
   branchSelect: `${P}-branch-select`,
   branchFormActions: `${P}-branch-form-actions`,
   branchFooter: `${P}-branch-footer`,
+  stashPicker: `${P}-stash-picker`,
+  stashRow: `${P}-stash-row`,
+  stashHead: `${P}-stash-head`,
+  stashSelector: `${P}-stash-selector`,
+  stashSubject: `${P}-stash-subject`,
+  stashActions: `${P}-stash-actions`,
+  stashCreate: `${P}-stash-create`,
+  stashForm: `${P}-stash-form`,
+  stashInput: `${P}-stash-input`,
+  stashCheck: `${P}-stash-check`,
   popover: `${P}-popover`,
   menu: `${P}-menu`,
   menuItem: `${P}-menu-item`,
@@ -408,6 +418,7 @@ export const css = `
 }
 
 .${cls.branchInput},
+.${cls.stashInput},
 .${cls.branchSelect} {
   box-sizing: border-box;
   padding: 3px 6px;
@@ -420,6 +431,10 @@ export const css = `
 }
 
 .${cls.branchInput} {
+  font-family: var(--dsh-font-mono);
+}
+
+.${cls.stashInput} {
   font-family: var(--dsh-font-mono);
 }
 
@@ -446,6 +461,85 @@ export const css = `
   display: flex;
   justify-content: flex-end;
   padding-top: 2px;
+}
+
+/* ── stash list (FR-6.2) ────────────────────────────────────────────────── */
+
+/* Same shape as the branch picker — this is the content of the same kind of
+   floating layer — but each entry is two lines, because a stash has both a
+   selector and a sentence, and the panel is too narrow to put four controls and
+   a subject on one row. */
+.${cls.stashPicker} {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 8px;
+}
+
+.${cls.stashRow} {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.${cls.stashRow}:hover {
+  background: var(--dsw-alias-fill-l2);
+}
+
+.${cls.stashHead} {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* git's own selector (stash@{0}) is a git-typed value, so it is monospaced and
+   quiet; the subject beside it is a sentence and takes the ordinary face. */
+.${cls.stashSelector} {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--dsh-font-mono);
+  font-size: 11px;
+}
+
+.${cls.stashSubject} {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row's controls wrap rather than overflow: apply, pop and the bin together
+   are wider than a narrow sidebar, and a wrapped second line is readable where a
+   clipped button is not. */
+.${cls.stashActions} {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.${cls.stashCreate} {
+  padding-top: 4px;
+}
+
+.${cls.stashForm} {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.${cls.stashCheck} {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
 }
 
 /* The armed variant of a destructive control (§4.3): the second click is

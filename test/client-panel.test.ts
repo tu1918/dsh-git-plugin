@@ -87,6 +87,7 @@ import type {
   GeneratedMessage,
   OperationReport,
   RepoStatus,
+  StashEntry,
   UndoResult,
 } from '../src/core/types.ts'
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
@@ -165,6 +166,18 @@ function commitFixture(): CommitInfo {
 /** Every mutating call the panel made, in order, as a readable string. */
 interface ActionLog {
   readonly entries: string[]
+}
+
+/** One stash entry for the stash list (FR-6.2). */
+function stashFixture(overrides: Partial<StashEntry> = {}): StashEntry {
+  return {
+    oid: 'd'.repeat(40),
+    shortOid: 'ddddddd',
+    selector: 'stash@{0}',
+    subject: 'WIP on main: aaaa111 first',
+    createdAt: '2026-09-11T10:00:00+08:00',
+    ...overrides,
+  }
 }
 
 /**
@@ -247,6 +260,17 @@ function stubGit(options: {
   discard?: Result<OperationReport>
   /** What `undoCommit` answers; a reset of the newest commit by default. */
   undoCommit?: Result<UndoResult>
+  /** What the stash listing answers; one entry by default (FR-6.2). */
+  stashes?: readonly StashEntry[]
+  /** What `stashSave` answers, for the refusal path. */
+  stashSave?: Result<OperationReport>
+  /** What `stashApply` answers, for the conflict path. */
+  stashApply?: Result<OperationReport>
+  /** What `stashDrop` answers, for the stale-row path. */
+  stashDrop?: Result<OperationReport>
+  /** What `checkout` answers: a value, or a function for the tests that need the
+   *  first attempt refused and the retry accepted (FR-4.4's shortcut). */
+  checkout?: Result<OperationReport> | (() => Result<OperationReport>)
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -299,7 +323,10 @@ function stubGit(options: {
     },
     checkout: (_sessionId, name) => {
       note(`checkout:${name}`)
-      return Promise.resolve(report)
+      const answer = options.checkout
+      return Promise.resolve(
+        typeof answer === 'function' ? answer() : (answer ?? report),
+      )
     },
     createBranch: (_sessionId, name, base) => {
       note(`createBranch:${name}@${base ?? ''}`)
@@ -343,6 +370,22 @@ function stubGit(options: {
           value: { mode: 'reset' as const, shortOid: hash.slice(0, 7), subject: 'a commit subject' },
         },
       )
+    },
+    stashes: () => {
+      note('stashes')
+      return Promise.resolve({ ok: true, value: options.stashes ?? [stashFixture()] })
+    },
+    stashSave: (_sessionId, message, untracked) => {
+      note(`stashSave:${message ?? ''}${untracked ? ':untracked' : ''}`)
+      return Promise.resolve(options.stashSave ?? report)
+    },
+    stashApply: (_sessionId, oid, pop) => {
+      note(`stashApply:${oid}${pop ? ':pop' : ''}`)
+      return Promise.resolve(options.stashApply ?? report)
+    },
+    stashDrop: (_sessionId, oid) => {
+      note(`stashDrop:${oid}`)
+      return Promise.resolve(options.stashDrop ?? report)
     },
     watch: options.watch ?? (() => () => undefined),
   }
@@ -1115,7 +1158,7 @@ describe('StatusPanel rendering', () => {
     // many). Clicking the tab that is showing puts the pane away — the gesture the
     // chevron used to carry — and clicking it again brings it back.
     assert.equal(
-      container.querySelectorAll(`.${cls.tool}[aria-expanded]`).length,
+      pane.querySelectorAll(`.${cls.tool}[aria-expanded]`).length,
       0,
       'the strip carries no separate fold control',
     )
@@ -3368,6 +3411,310 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
     const box = must(container, '[data-action-error="undo"]')
     assert.match(box.textContent ?? '', /no longer the newest one/)
     assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 1)
+  })
+})
+
+/* ── M5a order 4: the stash, and FR-4.4's way out of a blocked switch ───── */
+
+/**
+ * Open the stash layer from the rail, and return it.
+ *
+ * The rail's icon buttons carry their accessible name as the tooltip, so the
+ * stash one is found by the dictionary rather than by position — which is what
+ * keeps this helper working when the rail gains another button.
+ * @param container - The rendered panel.
+ * @returns The stash list's content element.
+ */
+async function openStashes(container: HTMLElement): Promise<HTMLElement> {
+  const stash = [...container.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].find(
+    (button) => button.getAttribute('aria-label') === en['stash.open'],
+  )
+  if (stash === undefined) throw new Error('expected the rail to offer a stash button')
+  await click(stash)
+  return must<HTMLElement>(container, '[data-stash-picker="true"]')
+}
+
+/** Click a native checkbox, the way a pointer does: the default action toggles it. */
+async function toggleCheckbox(node: HTMLInputElement): Promise<void> {
+  await act(async () => {
+    node.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+  await settle()
+}
+
+describe('the stash list (FR-6.2, §4.3)', () => {
+  it('opens from the rail and lists the stack newest first, by git’s own selectors', async () => {
+    const older = stashFixture({
+      oid: 'e'.repeat(40),
+      shortOid: 'eeeeeee',
+      selector: 'stash@{1}',
+      subject: 'On main: older work',
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ stashes: [stashFixture(), older] }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // Folded until the rail's button is pressed: the stack is read on purpose,
+    // not on every panel mount.
+    assert.equal(container.querySelector('[data-stash-picker]'), null)
+
+    const picker = await openStashes(container)
+    const selectors = [...picker.querySelectorAll(`.${cls.stashSelector}`)].map(
+      (node) => node.textContent,
+    )
+    assert.deepEqual(selectors, ['stash@{0}', 'stash@{1}'])
+    assert.match(picker.textContent ?? '', /WIP on main: aaaa111 first/)
+    assert.match(picker.textContent ?? '', /On main: older work/)
+    // Each entry offers both ways to bring it back, and the destructive one is
+    // not one of them.
+    const labels = [...picker.querySelectorAll(`.${cls.ghost}`)].map((button) => button.textContent)
+    assert.deepEqual(labels.slice(0, 4), ['Apply', 'Pop', 'Apply', 'Pop'])
+  })
+
+  it('stashes the message the user typed, with untracked files only when asked', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openStashes(container)
+    const save = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.ghost}`)].find(
+      (button) => button.textContent === 'Stash current changes…',
+    )
+    assert.ok(save, 'the list offers a way to stash the worktree')
+    await click(save)
+    await typeIntoInput(must<HTMLInputElement>(picker, `.${cls.stashInput}`), 'half-done work')
+    await toggleCheckbox(must<HTMLInputElement>(picker, 'input[type="checkbox"]'))
+    await click(must(picker, 'button[type="submit"]'))
+
+    // Untracked files are git's `-u`, and the panel asks for them only because
+    // the box was ticked; the label goes with it. (Reading the stack is a call of
+    // its own and is not what this test is about.)
+    assert.deepEqual(
+      calls.entries.filter((entry) => entry !== 'stashes').slice(0, 1),
+      ['stashSave:half-done work:untracked'],
+    )
+    const notice = must(container, '[data-action-done="stash"]')
+    assert.equal(notice.textContent, 'Stashed the current changes: half-done work')
+  })
+
+  it('applies and pops by the entry’s id, never by the position it is shown at', async () => {
+    const calls: ActionLog = { entries: [] }
+    const older = stashFixture({ oid: 'e'.repeat(40), selector: 'stash@{1}' })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, stashes: [stashFixture(), older] }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openStashes(container)
+    const rows = [...picker.querySelectorAll<HTMLElement>(`.${cls.stashRow}`)]
+    await click(must(rows[0] as Element, `.${cls.ghost}`))
+
+    // A selector is a position another window can shift; the id is what the
+    // panel sends, and the host resolves it again.
+    const acts = (): string[] => calls.entries.filter((entry) => entry !== 'stashes')
+    assert.deepEqual(acts().slice(0, 1), [`stashApply:${'d'.repeat(40)}`])
+    assert.equal(
+      must(container, '[data-action-done="stash"]').textContent,
+      'Applied stash@{0}',
+    )
+
+    const pops = [...rows[1]!.querySelectorAll<HTMLButtonElement>(`.${cls.ghost}`)]
+    await click(pops[1] as Element)
+    assert.equal(acts()[1], `stashApply:${'e'.repeat(40)}:pop`)
+    assert.equal(
+      must(container, '[data-action-done="stash"]').textContent,
+      'Popped stash@{1}',
+    )
+  })
+
+  it('drops an entry only after its own button arms, and keeps the list up in between', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openStashes(container)
+    const trash = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].find(
+      (button) => button.getAttribute('aria-label') === 'Drop stash stash@{0} (cannot be undone)',
+    )
+    assert.ok(trash, 'the entry offers a way to drop it')
+    await click(trash)
+
+    // §4.3's first click: armed, visibly a different button, nothing dropped.
+    assert.deepEqual(
+      calls.entries.filter((entry) => entry !== 'stashes'),
+      [],
+    )
+    const armed = must<HTMLElement>(picker, `.${cls.danger}`)
+    assert.equal(armed.textContent, 'Click again: drop')
+    assert.ok(container.querySelector('[data-stash-picker="true"]'), 'the layer stays up')
+
+    await click(armed)
+    assert.deepEqual(
+      calls.entries.filter((entry) => entry !== 'stashes').slice(0, 1),
+      [`stashDrop:${'d'.repeat(40)}`],
+    )
+    assert.equal(
+      must(container, '[data-action-done="stash"]').textContent,
+      'Dropped stash@{0}',
+    )
+  })
+
+  it('says the stack is empty rather than showing nothing at all', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ stashes: [] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openStashes(container)
+    assert.equal(
+      must(picker, '[data-stash-empty="true"]').textContent,
+      'There are no stashes yet.',
+    )
+  })
+})
+
+describe('stashing, then switching (FR-4.4, D20)', () => {
+  /** The refusal git prints when a switch would overwrite local work. */
+  function blockedSwitch(): Result<OperationReport> {
+    return {
+      ok: false,
+      error: {
+        code: 'dirty-worktree',
+        message: 'local changes would be overwritten, so the operation was refused',
+        detail:
+          'error: Your local changes to the following files would be overwritten by checkout:\n\ta.txt\nPlease commit your changes or stash them before you switch branches.\nAborting\n',
+      },
+    }
+  }
+
+  it('shows git’s own refusal, then stashes and retries the very switch it blocked', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ branches: twoBranches(), calls, checkout: blockedSwitch() }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    const picks = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.branchPick}`)]
+    await click(picks[1] as Element)
+
+    // FR-4.4's first half, unchanged since M4: the multi-line output survives to
+    // the screen, verbatim.
+    const box = must(container, '[data-action-error="checkout"]')
+    assert.match(box.textContent ?? '', /Aborting/)
+    assert.match(box.textContent ?? '', /a\.txt/)
+
+    const shortcut = [...box.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Stash, then switch to feature/x',
+    )
+    assert.ok(shortcut, 'the blocked switch offers the way on')
+
+    // The stub answers the retry the same way, so the click proves the ORDER:
+    // stash first, then the switch it unblocks. The switch is still blocked, so
+    // the shortcut is still the answer and stays on screen.
+    await click(shortcut)
+    assert.deepEqual(calls.entries, [
+      'checkout:feature/x',
+      'stashSave::untracked',
+      'checkout:feature/x',
+    ])
+    assert.ok(
+      [...container.querySelectorAll('button')].some((button) =>
+        (button.textContent ?? '').startsWith('Stash, then switch'),
+      ),
+      'a still-blocked switch keeps its way out',
+    )
+  })
+
+  it('reports a clean switch after stashing, naming the branch', async () => {
+    const calls: ActionLog = { entries: [] }
+    let attempt = 0
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          branches: twoBranches(),
+          calls,
+          // Refused once, as the blocked state, then accepted: the shortcut's
+          // whole promise is that the second attempt succeeds.
+          checkout: () =>
+            attempt++ === 0
+              ? blockedSwitch()
+              : { ok: true, value: { summary: '', detail: '' } },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    await click([...picker.querySelectorAll<HTMLButtonElement>(`.${cls.branchPick}`)][1] as Element)
+    const box = must(container, '[data-action-error="checkout"]')
+    const shortcut = [...box.querySelectorAll('button')].find((button) =>
+      (button.textContent ?? '').startsWith('Stash, then switch'),
+    )
+    await click(shortcut as Element)
+
+    assert.equal(
+      must(container, '[data-action-done="stash"]').textContent,
+      'Stashed the current changes and switched to feature/x',
+    )
+    // The switch happened, so the way out it was offering is gone.
+    assert.equal(container.querySelector('[data-action-error]'), null)
+    assert.equal(
+      [...container.querySelectorAll('button')].some((button) =>
+        (button.textContent ?? '').startsWith('Stash, then switch'),
+      ),
+      false,
+    )
+  })
+
+  it('offers no shortcut for a switch that a stash would not fix', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          branches: twoBranches(),
+          checkout: { ok: false, error: { code: 'bad-request', message: 'there is no such branch' } },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    await click([...picker.querySelectorAll<HTMLButtonElement>(`.${cls.branchPick}`)][1] as Element)
+
+    const box = must(container, '[data-action-error="checkout"]')
+    assert.match(box.textContent ?? '', /no such branch/)
+    assert.equal(
+      [...box.querySelectorAll('button')].some((button) =>
+        (button.textContent ?? '').startsWith('Stash, then switch'),
+      ),
+      false,
+    )
   })
 })
 

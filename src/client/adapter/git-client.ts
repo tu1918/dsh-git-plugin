@@ -35,6 +35,7 @@ import type {
   OperationReport,
   RepoStatus,
   FileDiff,
+  StashEntry,
   UndoResult,
 } from '../../core/types.ts'
 
@@ -194,6 +195,20 @@ export function createGitRemoteClient(): GitRemoteClient {
       request<CommitDetail>('/showCommit', { session: sessionId, hash }, signal),
     undoCommit: (sessionId, hash, signal) =>
       mutate<UndoResult>('/undoCommit', { session: sessionId, hash }, signal),
+
+    stashes: (sessionId, signal) =>
+      request<readonly StashEntry[]>('/stashes', { session: sessionId }, signal),
+    // `untracked` and `pop` are sent as booleans, and the host reads absent as
+    // false: one argument, two spellings of the same intent, exactly as `base:
+    // null` is for `createBranch`.
+    stashSave: (sessionId, message, untracked, signal) =>
+      mutate<OperationReport>('/stashSave', { session: sessionId, message, untracked }, signal),
+    stashApply: (sessionId, oid, pop, signal) =>
+      mutate<OperationReport>('/stashApply', { session: sessionId, oid, pop }, signal),
+    // The entry is addressed by commit id, never by `stash@{n}`: a selector is a
+    // position another window can shift, and the host resolves the id itself.
+    stashDrop: (sessionId, oid, signal) =>
+      mutate<OperationReport>('/stashDrop', { session: sessionId, oid }, signal),
 
     watch(sessionId, onChange) {
       /** Every kind: the guesses this transport makes on its own. */

@@ -35,9 +35,11 @@ import type {
   FileChange,
   OperationReport,
   RepoStatus,
+  StashEntry,
 } from '../../core/types.ts'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
+import { StashPicker } from './StashPicker.tsx'
 import { Menu, type MenuEntry } from './menu.tsx'
 import { Popover } from './popover.tsx'
 import { CommitBox } from './CommitBox.tsx'
@@ -68,6 +70,7 @@ import {
   PlusGlyph,
   RefreshGlyph,
   RingGlyph,
+  StashGlyph,
   SyncGlyph,
   TreeGlyph,
 } from './icons.tsx'
@@ -127,6 +130,7 @@ type ActionOp =
   | 'mergeAbort'
   | 'generate'
   | 'undo'
+  | 'stash'
 
 /**
  * What the panel is doing, or last did, at the operation level.
@@ -349,6 +353,8 @@ function BranchRail({
   onTogglePicker,
   railRef,
   pickerId,
+  stashOpen,
+  onToggleStash,
   mode,
   onToggleMode,
 }: {
@@ -386,6 +392,10 @@ function BranchRail({
   readonly railRef: Ref<HTMLDivElement>
   /** Id of the picker's layer, which the branch button points at. */
   readonly pickerId: string
+  /** Whether the stash list is unfolded (FR-6.2). */
+  readonly stashOpen: boolean
+  /** Fold or unfold the stash list. */
+  readonly onToggleStash: () => void
   /** FR-1.3: which shape the change list is drawn in. */
   readonly mode: ViewMode
   /** Switch between the flat list and the file tree. */
@@ -461,6 +471,22 @@ function BranchRail({
       >
         <ArrowUpGlyph size={13} />
       </ToolButton>
+      {/* FR-6.2's stack, opened from the rail like the branch list: both are
+          statements about the worktree this rail describes, and neither should
+          push the change list out of the way to be read. Hand-written rather than
+          a `ToolButton` for the same reason the branch button is: what it opens is
+          a layer, and `aria-expanded` is the state a disclosure has. */}
+      <button
+        type="button"
+        className={cls.tool}
+        title={t('stash.open')}
+        aria-label={t('stash.open')}
+        aria-expanded={stashOpen}
+        aria-haspopup="dialog"
+        onClick={onToggleStash}
+      >
+        <StashGlyph />
+      </button>
       {/* FR-1.3's mode switch, at the end of the rail the way VS Code puts its
           view actions in the view's title bar. The glyph draws the mode it would
           switch TO, which is what makes a single button read as a toggle. */}
@@ -503,6 +529,27 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
   /** Whether the branch picker is unfolded (FR-4.1). */
   const [pickerOpen, setPickerOpen] = useState(false)
+  /** Whether the stash list is unfolded (FR-6.2). */
+  const [stashOpen, setStashOpen] = useState(false)
+  /**
+   * The stash stack, newest first, or `null` before the first read.
+   *
+   * Read when the layer opens and after every stash operation that changes it,
+   * rather than kept live: the stack is a thing the user looks at on purpose, and
+   * the git probe's `refs` report already tells the panel when something else
+   * moved `refs/stash`.
+   */
+  const [stashes, setStashes] = useState<readonly StashEntry[] | null>(null)
+  /** Bumped to re-read the stack after an operation the panel itself performed. */
+  const [stashReads, setStashReads] = useState(0)
+  /**
+   * The branch a blocked switch was trying to reach (FR-4.4).
+   *
+   * Kept because the shortcut beside the failure box has to retry the SAME
+   * switch: git's refusal is reported with its own multi-line output, and
+   * "stash, then switch" is only meaningful next to the switch it would unblock.
+   */
+  const [stashSwitch, setStashSwitch] = useState<string | null>(null)
   /** The change row whose menu is open (§9's file menu), or `null`. */
   /** The row whose menu is open (§9's file menu, or FR-3.8's commit menu), or `null`. */
   const [menu, setMenu] = useState<RowMenu | null>(null)
@@ -655,6 +702,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setBranchRefusal(null)
     setGenerating(false)
     setAiNote(null)
+    // The stash stack belongs to the old repository's `refs/stash`, and the
+    // blocked switch it was offering to unblock no longer exists here.
+    setStashOpen(false)
+    setStashes(null)
+    setStashSwitch(null)
     // The checked rows die with the session too: they were a statement about the
     // old repository's list, and this one has never been read.
     setSelected(new Map())
@@ -733,6 +785,43 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     },
     [reload],
   )
+
+  /**
+   * Re-read the stash stack (FR-6.2).
+   *
+   * Called after every stash operation the panel performs, and it does nothing
+   * while the layer is closed: the only reader of this state is the list itself,
+   * and the probe's `refs` report re-reads it the next time the layer opens.
+   */
+  const refreshStashes = useCallback(() => setStashReads((count) => count + 1), [])
+
+  // The stack is read when the layer opens, and again after any operation the
+  // panel ran while it was open. A read that fails is reported the way every other
+  // failure here is — beside the list — and leaves an empty stack rather than a
+  // spinner that never stops.
+  //
+  // `t` is deliberately NOT a dependency, although the failure path uses it: the
+  // translator the slot hands down is namespace-bound once and reads the live
+  // locale when it is CALLED, so a rename cannot make this copy stale — while a
+  // dependency on its identity would re-read the stack on every render that
+  // produced a new function, which is a loop rather than a refresh.
+  useEffect(() => {
+    if (!stashOpen) return
+    let cancelled = false
+    void (async () => {
+      const result = await git.stashes(sessionId, signal)
+      if (cancelled) return
+      if (!result.ok) {
+        setAction({ kind: 'failed', op: 'stash', label: t('action.stash'), error: result.error })
+        setStashes([])
+        return
+      }
+      setStashes(result.value)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [git, sessionId, signal, stashOpen, stashReads])
 
   if (snapshot === null) {
     return (
@@ -898,19 +987,125 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
+   * Stash the working tree (FR-6.2).
+   *
+   * The notice is the panel's own sentence rather than git's: git's line is
+   * `Saved working directory and index state …`, and what the user needs to hear
+   * is that the stack now holds what the worktree just lost.
+   * @param message - The label the user typed, or `null` for git's own.
+   * @param untracked - Whether untracked files went with it (`-u`).
+   */
+  const stashSave = (message: string | null, untracked: boolean): void => {
+    void perform('stash', t('action.stash'), async () => {
+      const result = await git.stashSave(sessionId, message, untracked, signal)
+      if (!result.ok) return result
+      refreshStashes()
+      return {
+        ok: true,
+        value:
+          message === null
+            ? t('stash.saveDone')
+            : t('stash.saveDoneNamed', { message }),
+      }
+    })
+  }
+
+  /**
+   * Apply one stash entry, dropping it when `pop` (FR-6.2).
+   *
+   * The row is addressed by the entry's object id, and the host resolves it again
+   * at execution time: `stash@{0}` is a position, and another window's stash would
+   * have moved it. A conflict is a failure here like any other, and git keeps the
+   * entry — which the re-read below then shows.
+   * @param entry - The row the click came from.
+   * @param pop - Whether to drop the entry once it applied cleanly.
+   */
+  const stashApply = (entry: StashEntry, pop: boolean): void => {
+    void perform('stash', t('action.stash'), async () => {
+      const result = await git.stashApply(sessionId, entry.oid, pop, signal)
+      if (!result.ok) return result
+      refreshStashes()
+      return {
+        ok: true,
+        value: pop
+          ? t('stash.popDone', { selector: entry.selector })
+          : t('stash.applyDone', { selector: entry.selector }),
+      }
+    })
+  }
+
+  /**
+   * Drop one stash entry without applying it (FR-6.2).
+   *
+   * The arming happened in the picker (its own `useArmedKey`), so the second click
+   * arrives here ready to run; the notice names the selector the user clicked.
+   * @param entry - The row whose armed button was confirmed.
+   */
+  const stashDrop = (entry: StashEntry): void => {
+    void perform('stash', t('action.stash'), async () => {
+      const result = await git.stashDrop(sessionId, entry.oid, signal)
+      if (!result.ok) return result
+      refreshStashes()
+      return { ok: true, value: t('stash.dropDone', { selector: entry.selector }) }
+    })
+  }
+
+  /**
+   * Stash, then retry the switch git refused (FR-4.4's shortcut, restored in M5a
+   * by D20).
+   *
+   * Untracked files go with it (`-u`) — deliberately, and unlike the form's own
+   * default: git's refusal names files it would overwrite, and those can be
+   * untracked ones, so a stash that left them behind would leave the switch
+   * blocked and the click looking broken. Nothing is lost either way: the entry
+   * lands in the stack this panel lists. A second refusal is reported like the
+   * first, and the shortcut stays where it was so the user can decide again.
+   * @param name - The branch the blocked switch was going to.
+   */
+  const stashAndSwitch = (name: string): void => {
+    setStashSwitch(null)
+    // The label is the whole action, not its first half: if the RETRY is what
+    // fails, the box's heading has to name the thing the user clicked.
+    void perform('stash', t('stash.andSwitch', { name }), async () => {
+      const saved = await git.stashSave(sessionId, null, true, signal)
+      if (!saved.ok) return saved
+      refreshStashes()
+      const switched = await git.checkout(sessionId, name, signal)
+      if (!switched.ok) {
+        // Still blocked by local work (an edit that arrived between the two
+        // clicks, say): keep the shortcut on screen, because it is still the
+        // answer. Any other reason clears it — a stash has nothing to offer.
+        setStashSwitch(switched.error.code === 'dirty-worktree' ? name : null)
+        return switched
+      }
+      return { ok: true, value: t('stash.switched', { name }) }
+    })
+  }
+
+  /**
    * Switch to another branch (FR-4.1).
    *
    * A refusal here is the interesting case, not an edge: git answers a dirty
    * working tree with several lines naming the files it would overwrite, and
-   * `perform` renders them verbatim (FR-4.4). What M4 deliberately does NOT
-   * offer is the doc's "stash, then switch" shortcut — stash is FR-6.2, and it
-   * stays in M5 (D20).
+   * `perform` renders them verbatim (FR-4.4). What M4 deliberately did not offer
+   * was the doc's "stash, then switch" shortcut — stash is FR-6.2, and it lives in
+   * M5a; the refusal now remembers which switch it blocked so that shortcut can
+   * retry it (D20).
    */
   const checkout = (name: string): void => {
     setPickerOpen(false)
-    void perform('checkout', t('action.checkout'), async () =>
-      reportOf(await git.checkout(sessionId, name, signal)),
-    )
+    setStashSwitch(null)
+    void perform('checkout', t('action.checkout'), async () => {
+      const result = await git.checkout(sessionId, name, signal)
+      if (!result.ok) {
+        // The code is what makes the shortcut possible: `dirty-worktree` is the
+        // one refusal a stash would clear, and every other failure of a switch
+        // (a typo, a missing branch) is not.
+        if (result.error.code === 'dirty-worktree') setStashSwitch(name)
+        return result
+      }
+      return reportOf(result)
+    })
   }
   const createBranch = (name: string, base: string | null): void => {
     setPickerOpen(false)
@@ -977,8 +1172,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const openDiff = (entry: FileChange, area: ChangeArea): void => {
     // The row IS the open menu's anchor, and a press on the anchor is not an
     // "outside" press — so without this the menu would stay up over the diff it
-    // just opened.
+    // just opened. The same goes for the two layers the rail opens: a row can be
+    // activated by Enter, which the layer's pointerdown listener never sees.
     setMenu(null)
+    setPickerOpen(false)
+    setStashOpen(false)
     setOpenFile({ path: entry.path, area: diffAreaOf(area) })
   }
 
@@ -989,9 +1187,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param anchor - The row element, which the layer is measured from.
    */
   const openMenu = (entry: FileChange, area: ChangeArea, anchor: HTMLElement): void => {
-    // Shift+F10 reaches here without a press, so the branch list would otherwise
-    // stay open behind the menu: two layers, one panel.
+    // Shift+F10 reaches here without a press, so the branch list or the stash stack
+    // would otherwise stay open behind the menu: two layers, one panel.
     setPickerOpen(false)
+    setStashOpen(false)
     setMenu({ kind: 'file', anchor, entry, area })
   }
 
@@ -1029,6 +1228,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const openCommitMenu = (commit: CommitInfo, anchor: HTMLElement): void => {
     // Same one-layer rule as the file menu: Shift+F10 arrives without a press.
     setPickerOpen(false)
+    setStashOpen(false)
     setMenu({ kind: 'commit', anchor, commit })
   }
 
@@ -1162,9 +1362,20 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           onPush={push}
           onSync={sync}
           pickerOpen={pickerOpen}
-          onTogglePicker={() => setPickerOpen((open) => !open)}
+          onTogglePicker={() => {
+            // The rail has two layers and one row to hang them from: opening one
+            // closes the other, which is the same rule the row menus follow.
+            setStashOpen(false)
+            setPickerOpen((open) => !open)
+          }}
           railRef={railRef}
           pickerId={pickerId}
+          stashOpen={stashOpen}
+          onToggleStash={() => {
+            setMenu(null)
+            setPickerOpen(false)
+            setStashOpen((open) => !open)
+          }}
           mode={mode}
           onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
         />
@@ -1187,6 +1398,25 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               onDelete={deleteBranch}
               refusal={branchRefusal}
               onClose={() => setPickerOpen(false)}
+            />
+          </Popover>
+        )}
+        {/* The stash stack (FR-6.2): the same layer again, anchored on the rail
+            that opened it, so reading the stack never moves the change list. */}
+        {stashOpen && (
+          <Popover
+            anchor={railRef.current}
+            label={t('stash.title')}
+            onClose={() => setStashOpen(false)}
+          >
+            <StashPicker
+              stashes={stashes}
+              t={t}
+              busy={busy || pending}
+              onSave={stashSave}
+              onApply={stashApply}
+              onDrop={stashDrop}
+              onClose={() => setStashOpen(false)}
             />
           </Popover>
         )}
@@ -1255,6 +1485,23 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               <p className={cls.note} data-multiline={String(lineCount(failure.detail) > 1)}>
                 {failure.detail}
               </p>
+            )}
+            {/* FR-4.4's shortcut, restored now that FR-6.2 exists (D20). It sits
+                beside the refusal it answers — the multi-line list of files git
+                would have overwritten — and appears whenever a switch is known to
+                be blocked by local work, which is the one failure a stash clears.
+                Not armed: the work it removes from the worktree is put on the
+                stack this panel lists, so the same layer's "apply" undoes it. */}
+            {stashSwitch !== null && (
+              <button
+                type="button"
+                className={cls.ghost}
+                disabled={pending}
+                title={t('stash.andSwitchHint', { name: stashSwitch })}
+                onClick={() => stashAndSwitch(stashSwitch)}
+              >
+                {t('stash.andSwitch', { name: stashSwitch })}
+              </button>
             )}
           </div>
         )}

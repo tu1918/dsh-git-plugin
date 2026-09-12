@@ -674,6 +674,49 @@ export interface GitRemoteClient {
     signal?: AbortSignal,
   ): Promise<Result<UndoResult>>
   /**
+   * List the stash entries, newest first (FR-6.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashes(sessionId: string, signal?: AbortSignal): Promise<Result<readonly StashEntry[]>>
+  /**
+   * Push the working tree onto the stash (FR-6.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param message - Optional label for the entry, or `null` for git's own.
+   * @param untracked - Whether untracked files are stashed too (`-u`).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashSave(
+    sessionId: string,
+    message: string | null,
+    untracked: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Apply one stash, optionally dropping the entry once it applied (FR-6.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param oid - The stash commit the row stands for.
+   * @param pop - Whether to drop the entry once it applied cleanly.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashApply(
+    sessionId: string,
+    oid: string,
+    pop: boolean,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Drop one stash entry without applying it (FR-6.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param oid - The stash commit the row stands for.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  stashDrop(
+    sessionId: string,
+    oid: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
    * Subscribe to "the repository changed" notifications.
    *
    * The adapter owns the transport (an SSE stream, or a poll when the stream is
