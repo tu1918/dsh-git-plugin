@@ -131,6 +131,8 @@ export const cls = {
   historyDetailHead: `${P}-history-detail-head`,
   commit: `${P}-commit`,
   commitRow: `${P}-commit-row`,
+  commitGraph: `${P}-commit-graph`,
+  commitLines: `${P}-commit-lines`,
   commitTop: `${P}-commit-top`,
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
@@ -1636,10 +1638,13 @@ export const css = `
   display: flex;
   width: 100%;
   box-sizing: border-box;
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
-  gap: 1px;
-  padding: 4px 12px 5px;
+  /* No VERTICAL padding here: the graph strip stretches to this content box,
+     and any padding would sit outside it and cut a gap into every lane. The
+     row's breathing room lives on the text column instead, so the strip and the
+     rows are exactly the same height and the lines meet. */
+  padding: 0 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -1647,6 +1652,46 @@ export const css = `
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* The graph column (FR-7.1): a fixed-width lane strip down the left of every
+   row. Its width is an inline style, the SAME width on every row — that is what
+   keeps hashes aligned when one row's merge needs more lanes than its
+   neighbours. It stretches the full row height, so a line leaving one row meets
+   the line entering the next with no seam. */
+.${cls.commitGraph} {
+  position: relative;
+  flex: none;
+  align-self: stretch;
+  margin-right: 6px;
+}
+
+/* The SVG is taken OUT OF FLOW on purpose. A percentage height cannot resolve
+   against a flex item whose own height comes from its content, so an in-flow
+   SVG silently uses its intrinsic 300x150 box and stretches the row to it — the
+   bug that made every commit row ~150px tall. Positioned against the strip
+   (whose height IS set, by align-self: stretch), the percentages resolve to the
+   row's real height. Its zero in-flow size also means it contributes nothing to
+   how tall the row is determined to be; the text does that. */
+.${cls.commitGraph} svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The two text lines, which are what the row is really about. The 1px gap that
+   used to sit on the button now sits here, between the title and its metadata. */
+.${cls.commitLines} {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+  /* The row's 4px/5px vertical padding, moved here from the button so the graph
+     strip beside it can span the full row (see the note above). */
+  padding: 4px 0 5px;
 }
 
 .${cls.commitRow}:hover {

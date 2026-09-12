@@ -26,6 +26,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { buildGraph } from '../../core/commit-graph.ts'
+import type { GraphRow } from '../../core/commit-graph.ts'
 import { relativeTimeParts } from '../../core/format.ts'
 import type { GitRemoteClient, Result } from '../../core/ports.ts'
 import type { CommitDetail, CommitInfo } from '../../core/types.ts'
@@ -49,6 +51,107 @@ const MAX_LOG_ROWS = 500
  * difference between it and the polling the panel refuses to do.
  */
 const CLOCK_TICK_MS = 30_000
+
+/** Horizontal pitch of one graph lane, and the node's radius, in pixels. */
+const GRAPH_LANE_W = 10
+const GRAPH_NODE_R = 2.8
+
+/**
+ * The most lanes the strip will reserve width for.
+ *
+ * A pathological history (a many-parent octopus merge) should not push the
+ * commit messages off the pane, so the column stops growing here and any lane
+ * past it is simply clipped. Real histories stay well under it.
+ */
+const GRAPH_MAX_LANES = 8
+
+/**
+ * The ink each lane draws with, cycled by lane number.
+ *
+ * The GUI's token set has no chart palette, so these borrow the semantic colour
+ * aliases — the same colours the state badges and markers use. A lane keeps its
+ * lane number for as long as its line runs, so its colour is stable across rows;
+ * when a freed lane is reused it may take the same colour as the line before it.
+ * (Deliberately not red: an error-red line would read as a warning about the
+ * commit it passes.)
+ */
+const GRAPH_INK = [
+  'var(--dsw-alias-brand-primary)',
+  'var(--dsw-alias-state-business-primary)',
+  'var(--dsw-alias-state-success-primary)',
+  'var(--dsw-alias-state-warn-primary)',
+  'var(--dsw-alias-label-secondary)',
+] as const
+
+/** The ink for one lane. */
+function graphInk(lane: number): string {
+  return GRAPH_INK[lane % GRAPH_INK.length] ?? GRAPH_INK[0]
+}
+
+/** The x centre of one lane inside the strip. */
+function laneX(lane: number): number {
+  return lane * GRAPH_LANE_W + GRAPH_LANE_W / 2
+}
+
+/**
+ * One row's slice of the swimlane diagram (FR-7.1).
+ *
+ * Drawn as SVG lines with percentage y-coordinates rather than a viewBox: the
+ * row's height is whatever its text needs, and a percentage lets a segment reach
+ * from the row's top edge to its middle without the component having to measure
+ * anything. `from` arrives at the node, `to` leaves it, and `edges` are the
+ * parent links that cross into another lane.
+ * @param props - The row's lane arithmetic and the strip's shared width.
+ */
+function GraphCell({ row, width }: { readonly row: GraphRow; readonly width: number }): ReactNode {
+  return (
+    <span className={cls.commitGraph} style={{ width }}>
+      <svg width="100%" height="100%" aria-hidden="true" focusable="false">
+        {row.from.map((lane) => (
+          <line
+            key={`from-${lane}`}
+            x1={laneX(lane)}
+            y1="0%"
+            x2={laneX(lane)}
+            y2="50%"
+            stroke={graphInk(lane)}
+            strokeWidth="1.4"
+          />
+        ))}
+        {/* A lane gets a lower-half vertical only when a line was already there
+            (it passes through) or it is the node's own lane going straight on.
+            A lane the merge OPENS is reached by its diagonal alone: drawing a
+            vertical there as well (it is in `to`) puts a stub from mid-row down
+            beside the diagonal, which reads as a third, phantom lane. */}
+        {row.to
+          .filter((lane) => lane === row.lane || row.from.includes(lane))
+          .map((lane) => (
+            <line
+              key={`to-${lane}`}
+              x1={laneX(lane)}
+              y1="50%"
+              x2={laneX(lane)}
+              y2="100%"
+              stroke={graphInk(lane)}
+              strokeWidth="1.4"
+            />
+          ))}
+        {row.edges.map((edge) => (
+          <line
+            key={`edge-${edge.from}-${edge.to}`}
+            x1={laneX(edge.from)}
+            y1="50%"
+            x2={laneX(edge.to)}
+            y2="100%"
+            stroke={graphInk(edge.to)}
+            strokeWidth="1.4"
+          />
+        ))}
+        <circle cx={laneX(row.lane)} cy="50%" r={GRAPH_NODE_R} fill={graphInk(row.lane)} />
+      </svg>
+    </span>
+  )
+}
 
 /**
  * One file inside a commit (FR-3.6), and the way into its diff (FR-7.2).
@@ -195,6 +298,8 @@ function CommitDetailPane({
  */
 function CommitRow({
   commit,
+  graph,
+  graphWidth,
   now,
   t,
   locale,
@@ -203,6 +308,10 @@ function CommitRow({
   onMenu,
 }: {
   readonly commit: CommitInfo
+  /** This commit's slice of the swimlane diagram (FR-7.1). */
+  readonly graph: GraphRow
+  /** The graph strip's width, shared by every row so the text stays aligned. */
+  readonly graphWidth: number
   readonly now: number
   readonly t: Translate
   readonly locale: string
@@ -254,23 +363,26 @@ function CommitRow({
               }
         }
       >
-        <span className={cls.commitTop}>
-          <span className={cls.commitHash}>{commit.shortOid}</span>
-          <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
-        </span>
-        <span className={cls.commitMeta} data-commit-meta="true">
-          <span>{relative}</span>
-          <span>·</span>
-          <span>{commit.authorName}</span>
-          {commit.pushed !== null && (
-            <span
-              className={cls.marker}
-              data-pushed={commit.pushed}
-              title={commit.pushed ? t('history.pushed') : t('history.unpushed')}
-            >
-              {commit.pushed ? <DotGlyph /> : <RingGlyph />}
-            </span>
-          )}
+        <GraphCell row={graph} width={graphWidth} />
+        <span className={cls.commitLines}>
+          <span className={cls.commitTop}>
+            <span className={cls.commitHash}>{commit.shortOid}</span>
+            <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
+          </span>
+          <span className={cls.commitMeta} data-commit-meta="true">
+            <span>{relative}</span>
+            <span>·</span>
+            <span>{commit.authorName}</span>
+            {commit.pushed !== null && (
+              <span
+                className={cls.marker}
+                data-pushed={commit.pushed}
+                title={commit.pushed ? t('history.pushed') : t('history.unpushed')}
+              >
+                {commit.pushed ? <DotGlyph /> : <RingGlyph />}
+              </span>
+            )}
+          </span>
         </span>
       </button>
     </div>
@@ -434,6 +546,25 @@ export function HistoryPanel({
   const selected = commits.find((commit) => commit.oid === openOid) ?? null
   /** FR-3.8 undoes the NEWEST commit, so only that row carries a menu. */
   const newestOid = commits[0]?.oid
+  /**
+   * The swimlane diagram over the WHOLE loaded list (FR-7.1).
+   *
+   * Building it here rather than per page is what makes pagination continuous:
+   * the assignment for a row depends only on the rows above it, so appending a
+   * page extends the diagram instead of redrawing it.
+   */
+  const graph = useMemo(() => buildGraph(commits), [commits])
+  /**
+   * The strip's width — one number for every row.
+   *
+   * It is the widest lane any row needs, not each row's own width: a merge that
+   * opens a lane must not shift the hash beside it, and the row above it that
+   * does not use that lane still draws at the same x positions.
+   */
+  const graphWidth = useMemo(() => {
+    const widest = graph.reduce((lanes, row) => Math.max(lanes, row.lanes), 0)
+    return Math.min(Math.max(widest, 1), GRAPH_MAX_LANES) * GRAPH_LANE_W
+  }, [graph])
 
   return (
     // The list is the first child and the detail the second, which is what makes
@@ -442,22 +573,28 @@ export function HistoryPanel({
     <div className={cls.historySplit} data-split={String(selected !== null)}>
       <div className={cls.historyList}>
         {loaded && commits.length === 0 && <p className={cls.note}>{t('history.empty')}</p>}
-        {commits.map((commit) => (
-          <CommitRow
-            key={commit.oid}
-            commit={commit}
-            now={now}
-            t={t}
-            locale={locale}
-            selected={commit.oid === openOid}
-            onSelect={() => select(commit.oid)}
-            onMenu={
-              onCommitMenu === undefined
-                ? undefined
-                : (anchor) => onCommitMenu(commit, anchor, commit.oid === newestOid)
-            }
-          />
-        ))}
+        {commits.map((commit, index) => {
+          const row = graph[index]
+          if (row === undefined) return null
+          return (
+            <CommitRow
+              key={commit.oid}
+              commit={commit}
+              graph={row}
+              graphWidth={graphWidth}
+              now={now}
+              t={t}
+              locale={locale}
+              selected={commit.oid === openOid}
+              onSelect={() => select(commit.oid)}
+              onMenu={
+                onCommitMenu === undefined
+                  ? undefined
+                  : (anchor) => onCommitMenu(commit, anchor, commit.oid === newestOid)
+              }
+            />
+          )
+        })}
         {hasMore && (
           <p className={cls.note}>
             <button

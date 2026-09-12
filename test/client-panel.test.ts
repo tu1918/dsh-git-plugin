@@ -645,6 +645,38 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('stretches the graph strip down the whole row, so the lines meet', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // The segments are drawn with percentage y-coordinates from one row's edges
+    // to its middle; if the strip did not fill the row, each row's lines would
+    // end short and the diagram would be dashed. Its width comes from the
+    // component (the same number on every row), so only the stretch lives here.
+    assert.match(sheet, new RegExp(`\\.${cls.commitGraph}\\s*\\{[^}]*align-self:\\s*stretch`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.commitGraph}\\s*\\{[^}]*flex:\\s*none`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.commitLines}\\s*\\{[^}]*flex-direction:\\s*column`, 'u'),
+    )
+    // The SVG must be OUT of flow. In flow, its percentage height cannot resolve
+    // against a content-sized flex item, so the browser falls back to the SVG's
+    // intrinsic 300x150 box and every row becomes ~150px tall (reported from the
+    // running panel). jsdom has no layout to assert against, so this pins the
+    // rule that makes the percentages resolve.
+    assert.match(sheet, new RegExp(`\\.${cls.commitGraph} svg\\s*\\{[^}]*position:\\s*absolute`, 'u'))
+    // And the row must carry NO vertical padding: the strip stretches to the
+    // button's content box, so 4px/5px of padding there would sit outside the
+    // graph and put a seam of missing line between every pair of rows. The
+    // breathing room lives on the text column, which the strip spans alongside.
+    assert.match(sheet, new RegExp(`\\.${cls.commitRow}\\s*\\{[^}]*padding:\\s*0\\s+12px`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.commitLines}\\s*\\{[^}]*padding:\\s*4px\\s+0\\s+5px`, 'u'),
+    )
+  })
+
   it('gives a menu entry one highlight, whoever put it there', () => {
     installStyles(document)
     const sheet =
@@ -4820,6 +4852,174 @@ describe('the commit’s own file diff (FR-7.2)', () => {
     status = { ok: true, value: { ...withFile, branch: { ...withFile.branch, oid: 'c'.repeat(40) } } }
     await publish(['refs'])
     assert.equal(diffCalls.length, 2, 'a moved ref must re-read the commit diff')
+  })
+})
+
+/* ── M5b order 7: the swimlane diagram (FR-7.1) ─────────────────────────── */
+
+/** The node circle of one commit's row. */
+function graphNode(container: HTMLElement, oid: string): SVGCircleElement {
+  return must<SVGCircleElement>(container, `[data-commit="${oid}"] .${cls.commitGraph} circle`)
+}
+
+/** Every line in one commit row's strip, as `x1 y1 x2 y2`. */
+function graphLines(container: HTMLElement, oid: string): string[] {
+  return [
+    ...container.querySelectorAll<SVGLineElement>(
+      `[data-commit="${oid}"] .${cls.commitGraph} line`,
+    ),
+  ].map(
+    (line) =>
+      `${line.getAttribute('x1')} ${line.getAttribute('y1')} ${line.getAttribute('x2')} ${line.getAttribute('y2')}`,
+  )
+}
+
+/** The width every row's strip reserves, in document order. */
+function graphWidths(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLElement>(`.${cls.commitGraph}`)].map(
+    (cell) => cell.style.width,
+  )
+}
+
+describe('the commit graph (FR-7.1)', () => {
+  it('draws a lane strip beside every row, and leaves the title’s first child the hash', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [commitFixture()] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const entry = must<HTMLButtonElement>(container, `.${cls.commitRow}`)
+    const cell = must(container, `.${cls.commitGraph}`)
+    assert.ok(entry.contains(cell), 'the strip is part of the row, so clicking it opens the commit')
+    assert.equal(must(cell, 'svg').getAttribute('aria-hidden'), 'true', 'the diagram is decoration')
+
+    // A lone linear commit opens and closes its own line, so only its node is
+    // drawn. Percent y-coordinates are what let the segment meet the next row
+    // whatever height that row's text needs.
+    assert.deepEqual(graphLines(container, 'b'.repeat(40)), [])
+    const node = graphNode(container, 'b'.repeat(40))
+    assert.equal(node.getAttribute('cx'), '5')
+    assert.equal(node.getAttribute('cy'), '50%')
+    assert.match(node.getAttribute('fill') ?? '', /--dsw-alias-brand-primary/u)
+
+    // The graph is a sibling of the text column, not inside the title, so the
+    // "no leading glyph before the hash" property still holds.
+    const title = must(container, `.${cls.commitTop}`)
+    assert.equal(title.querySelector('svg'), null)
+    assert.equal(title.firstElementChild?.className, cls.commitHash)
+  })
+
+  it('opens a lane for a merge, closes it at the join, and keeps every hash aligned', async () => {
+    const merge = {
+      ...commitFixture(),
+      oid: 'm'.repeat(40),
+      shortOid: 'mmmmmmm',
+      subject: 'merge',
+      parents: ['a'.repeat(40), 'b'.repeat(40)],
+    }
+    const first = { ...commitFixture(), oid: 'a'.repeat(40), shortOid: 'aaaaaaa', parents: ['c'.repeat(40)] }
+    const second = { ...commitFixture(), oid: 'b'.repeat(40), shortOid: 'bbbbbbb', parents: ['c'.repeat(40)] }
+    const base = { ...commitFixture(), oid: 'c'.repeat(40), shortOid: 'ccccccc', parents: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [merge, first, second, base] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The merge's node sits in lane 0 and a link leaves it for lane 1 — drawn in
+    // the ink of the lane it JOINS, so the diagonal matches its continuation.
+    assert.equal(graphNode(container, 'm'.repeat(40)).getAttribute('cx'), '5')
+    const lines = graphLines(container, 'm'.repeat(40))
+    assert.ok(lines.includes('5 50% 15 100%'), `the second parent opens lane 1: ${lines.join(' | ')}`)
+    // The opened lane is reached by that diagonal alone. A lower-half vertical
+    // there as well would be a stub beside the diagonal — the phantom line
+    // reported from the running panel ("|\|") — so it must not be drawn.
+    assert.ok(
+      !lines.includes('15 50% 15 100%'),
+      `the opened lane must not also get a vertical stub: ${lines.join(' | ')}`,
+    )
+    assert.match(
+      must(container, `[data-commit="${'m'.repeat(40)}"] .${cls.commitGraph} line[stroke*='state-business-primary']`).getAttribute('stroke') ?? '',
+      /state-business-primary/u,
+    )
+
+    // The second-parent commit rides lane 1 and the base both lines rejoin is
+    // back in lane 0.
+    assert.equal(graphNode(container, 'b'.repeat(40)).getAttribute('cx'), '15')
+    assert.equal(graphNode(container, 'c'.repeat(40)).getAttribute('cx'), '5')
+    // Every row reserves the same width: the wide row cannot shift its own hash.
+    assert.deepEqual(new Set(graphWidths(container)), new Set(['20px']))
+  })
+
+  it('draws a merge under a newer commit as one line splitting, not three', async () => {
+    // The reported shape: a plain commit, then a merge, then the two parents.
+    // The merge row must read as lane 0 with a branch leaving it; the opened
+    // lane starts at that diagonal, so nothing vertical hangs beside the node.
+    const top = { ...commitFixture(), oid: 'n'.repeat(40), shortOid: 'nnnnnnn', parents: ['m'.repeat(40)] }
+    const merge = {
+      ...commitFixture(),
+      oid: 'm'.repeat(40),
+      shortOid: 'mmmmmmm',
+      parents: ['a'.repeat(40), 'b'.repeat(40)],
+    }
+    const first = { ...commitFixture(), oid: 'a'.repeat(40), shortOid: 'aaaaaaa', parents: ['c'.repeat(40)] }
+    const second = { ...commitFixture(), oid: 'b'.repeat(40), shortOid: 'bbbbbbb', parents: ['c'.repeat(40)] }
+    const base = { ...commitFixture(), oid: 'c'.repeat(40), shortOid: 'ccccccc', parents: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ log: [top, merge, first, second, base] }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // The commit above: its line drops into the merge.
+    assert.deepEqual(graphLines(container, 'n'.repeat(40)), ['5 50% 5 100%'])
+    // The merge: lane 0 comes in and continues straight, and one diagonal opens
+    // lane 1. Exactly three segments — no fourth vertical stub at lane 1.
+    assert.deepEqual(graphLines(container, 'm'.repeat(40)), [
+      '5 0% 5 50%',
+      '5 50% 5 100%',
+      '5 50% 15 100%',
+    ])
+    // The next commit: both lanes now run straight through.
+    const below = graphLines(container, 'a'.repeat(40))
+    assert.ok(below.includes('15 0% 15 50%'), `lane 1 must arrive from the merge: ${below.join(' | ')}`)
+    assert.ok(below.includes('15 50% 15 100%'), `and continue on: ${below.join(' | ')}`)
+  })
+
+  it('keeps the lines unbroken when the next page is loaded', async () => {
+    const all = [
+      { ...commitFixture(), oid: 'm'.repeat(40), shortOid: 'mmmmmmm', parents: ['a'.repeat(40), 'b'.repeat(40)] },
+      { ...commitFixture(), oid: 'a'.repeat(40), shortOid: 'aaaaaaa', parents: ['c'.repeat(40)] },
+      { ...commitFixture(), oid: 'b'.repeat(40), shortOid: 'bbbbbbb', parents: ['c'.repeat(40)] },
+      { ...commitFixture(), oid: 'c'.repeat(40), shortOid: 'ccccccc', parents: [] },
+    ]
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      log: (_sessionId, offset) =>
+        Promise.resolve({
+          ok: true,
+          value: { commits: offset === 0 ? all.slice(0, 2) : all.slice(2), total: null, hasMore: offset === 0 },
+        }),
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 2)
+    const before = must(container, `[data-commit="${'m'.repeat(40)}"] .${cls.commitGraph}`).innerHTML
+
+    await click(must(container, `.${cls.historyList} .${cls.ghost}`))
+    await flush()
+    assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 4)
+
+    // Page 1's drawing is byte-for-byte untouched...
+    assert.equal(must(container, `[data-commit="${'m'.repeat(40)}"] .${cls.commitGraph}`).innerHTML, before)
+    // ...and page 2's first commit lands in the lane page 1 already opened for
+    // it, with a line entering from above. A per-page graph would have restarted
+    // it in lane 0 with nothing above it.
+    assert.equal(graphNode(container, 'b'.repeat(40)).getAttribute('cx'), '15')
+    assert.ok(graphLines(container, 'b'.repeat(40)).includes('15 0% 15 50%'))
   })
 })
 

@@ -5,10 +5,13 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document, and currently at **M0 + M1 + M2 + M3 + M4**:
-the foundation, a read-only panel, the commit loop (stage → commit → push), the
-diff view, and branch management with the merge state, an AI-written commit
-message, and a commit detail.
+Built to the requirements document, and currently through **M5b order 7**: the
+foundation, a read-only panel, the commit loop (stage → commit → push), the diff
+view, branch management with the merge state, an AI-written commit message, a
+commit detail — then M5a's discard / undo / stash and M5b's commit-file
+drill-down, copy entries, and the commit graph. What remains of M5b: rewriting a
+commit (drop / squash / reset), multi-repository scanning, and the v1.0 release
+pass.
 
 ## Docs
 
@@ -59,7 +62,8 @@ message, and a commit detail.
 | The stash (FR-6.2), opened from the rail like the branch list: save the working tree (with an optional label, and untracked files only if you ask for them), read the stack, apply or pop an entry, or drop one. Entries are addressed by commit id rather than by `stash@{n}`, so a stack another window shifted cannot be acted on at the wrong position; dropping is the one irreversible action here and takes two clicks | ✅ |
 | A switch git refuses because the working tree is in the way (FR-4.4) shows git's multi-line refusal and offers "stash, then switch to …": one click stashes (untracked files included, because those are exactly what git sometimes names) and retries the very switch that was blocked | ✅ |
 | Drill into one file of a commit (FR-7.2): every row in a commit's file list is a button that opens that file as the commit changed it, in the same bottom diff tab a change row uses — `git show <hash> -m --first-parent -- <path>`, read against the revision rather than the working tree, so an uncommitted edit to the same file cannot appear in it. The reading follows moved refs only, and it is not swept away when the file is absent from the change list | ✅ |
-| Commit graph, rewriting a commit (drop/squash/reset) | ⏳ M5b |
+| Commit graph (FR-7.1): every history row carries its own swimlane strip — a first parent continues straight down, an extra parent opens a lane, and a line rejoins when the branches meet. The assignment is one pass over all loaded commits, so loading the next page extends the diagram without redrawing it (pagination cannot break the lines); the strip's width is one number shared by every row, so a merge cannot shift the hashes | ✅ |
+| Rewriting a commit (drop / squash / reset), multi-repository scanning, the v1.0 release pass | ⏳ M5b |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -111,7 +115,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 445 tests && build
+npm run check      # tsc --noEmit && 456 tests && build
 ```
 
 ## Install
@@ -184,6 +188,11 @@ npm test
 - `test/change-tree.test.ts` — the change list as a tree (FR-1.3): nesting,
   directories before files in git's own byte order, the compaction of a
   single-child chain and where it must stop, and the per-directory count
+- `test/commit-graph.test.ts` — the swimlanes (FR-7.1): a linear chain in one
+  lane, a merge opening a lane its second parent's line rejoins, a first parent
+  that merges back into an existing lane, an unrelated tip claiming its own lane,
+  and the property the pagination rests on — a prefix of the history is a prefix
+  of the graph
 - `test/commit-message.test.ts` — the AI message's pure halves: the truncation
   budget and its line boundary, the prompt's language and its "the diff was cut"
   sentence, and the cleaning rules for what models answer anyway
