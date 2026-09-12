@@ -620,6 +620,14 @@ describe('StatusPanel rendering', () => {
       assert.equal(drawer.querySelectorAll(`:scope > .${cls.changeBody}`).length, 1)
       assert.equal(drawer.querySelectorAll(`.${cls.group}`).length, 1, 'the drawer hosts its group')
       assert.equal((drawer.querySelector(`.${cls.changeBody}`) as HTMLElement).style.height, '')
+      // The drawer is top-anchored, so its free edge is the BOTTOM one: the grip
+      // comes after the body it sizes. On the top edge the handle would invite a
+      // pull upward that the layout cannot honour.
+      assert.equal(
+        drawer.lastElementChild?.className,
+        cls.paneGrip,
+        'a top-anchored drawer takes its grip on the bottom edge',
+      )
     }
 
     // The conflict group is the one group that is NOT a drawer: it comes and goes
@@ -642,24 +650,26 @@ describe('StatusPanel rendering', () => {
     const unstaged = must<HTMLElement>(container, `[data-drawer="unstaged"]`)
     const untracked = must<HTMLElement>(container, `[data-drawer="untracked"]`)
 
-    await dragGrip(must(staged, `.${cls.paneGrip}`), 200, 100)
+    // Downward grows a bottom grip. jsdom has no layout, so the drawer measures
+    // as zero and the travel is the whole height.
+    await dragGrip(must(staged, `.${cls.paneGrip}`), 100, 200)
     assert.equal(drawerHeight(staged), '100px')
 
     // The heights are the drawers' own: dragging one leaves the others at their
     // stylesheet default, which is what "every partition resizes itself" means.
-    await dragGrip(must(unstaged, `.${cls.paneGrip}`), 200, 40)
+    await dragGrip(must(unstaged, `.${cls.paneGrip}`), 40, 200)
     assert.equal(drawerHeight(staged), '100px', 'a released grip must stop resizing')
     assert.equal(drawerHeight(unstaged), '160px')
     assert.equal(drawerHeight(untracked), '')
 
-    await dragGrip(must(untracked, `.${cls.paneGrip}`), 100, 160)
+    // Upward shrinks it — and the floor is what stops it there.
+    await dragGrip(must(untracked, `.${cls.paneGrip}`), 160, 100)
     assert.equal(drawerHeight(unstaged), '160px')
-    // jsdom has no layout, so a panel measures as zero and the grip falls back to
-    // the window: 160 is below the floor, so the clamp is what this reads.
     assert.equal(drawerHeight(untracked), '44px')
 
-    // A drawer is clamped at its own ceiling too, whatever the pointer does.
-    await dragGrip(must(untracked, `.${cls.paneGrip}`), 0, -1000)
+    // A drawer is clamped at its own ceiling too, whatever the pointer does: 768
+    // (the window, since the column measures zero) minus the 180 reserved.
+    await dragGrip(must(untracked, `.${cls.paneGrip}`), 0, 1000)
     assert.equal(drawerHeight(untracked), '588px')
   })
 
@@ -787,6 +797,13 @@ describe('StatusPanel rendering', () => {
     const grip = must(container, `.${cls.bottom} .${cls.paneGrip}`)
     assert.equal(grip.getAttribute('role'), 'separator')
     assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the bottom pane')
+    // The dock is bottom-anchored, so its free edge is the TOP one — the mirror
+    // image of the change drawers, whose grip sits on their bottom edge.
+    assert.equal(
+      pane.firstElementChild?.className,
+      cls.paneGrip,
+      'a bottom-anchored pane takes its grip on the top edge',
+    )
 
     // jsdom reports a zero-height box, so the drag reads as "the pointer rose
     // 300px" — and the drawer above is asserted to be left exactly where it was.

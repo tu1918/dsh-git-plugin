@@ -131,8 +131,11 @@ export function BottomPane({
         expanded && height !== null ? { height: `${height}px`, maxHeight: 'none' } : undefined
       }
     >
+      {/* The dock is bottom-anchored: its bottom edge is pinned to the panel's,
+          so its free edge is the top one and a drag upward grows it. */}
       <PaneResizer
         label={t('bottom.resize')}
+        edge="top"
         minHeight={MIN_PANE_HEIGHT}
         reserved={PANE_RESERVED_HEIGHT}
         onResize={(next) => {

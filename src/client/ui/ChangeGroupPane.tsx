@@ -9,11 +9,17 @@
  * component rather than three copies of the same markup — "每个分区的高度要能自己
  * 拖" is a property of a partition, not of the index.
  *
- * A drawer is `flex: 0 0 auto` in the body it sits in, with the grip as its first
- * child, because {@link PaneResizer} reads its parent's box for the drag's
- * starting height. The height stays `null` until a drag: the stylesheet's own
- * cap (`max-height: 40%`) then applies, so a window resize keeps meaning what it
- * meant.
+ * A drawer is top-anchored: it sits in a stack and its rows flow from its top, so
+ * the edge that moves when it grows is its BOTTOM one — the grip is the drawer's
+ * LAST child and a drag downward makes it taller. Putting that grip on the top
+ * edge was a real bug: the handle invited a pull upward, nothing above could
+ * shrink, and so the drawer grew downward anyway while the gesture said
+ * otherwise. (See `PaneResizer`'s own doc for the rule.)
+ *
+ * The grip has to be a child of the drawer, because {@link PaneResizer} reads its
+ * parent's box for the drag's starting height. The height stays `null` until a
+ * drag: the stylesheet's own cap (`max-height: 40%`) then applies, so a window
+ * resize keeps meaning what it meant.
  *
  * @module dsh-git-panel/client/ui/ChangeGroupPane
  */
@@ -35,8 +41,9 @@ const MIN_PANE_HEIGHT = 44
  * Height kept for the rest of the column — the rail, the commit box, the other
  * drawers, and a usable bottom pane — however far the pointer travels.
  *
- * Like the staged drawer's own reserve, this is deliberately generous: a grip
- * that can starve the panes below it makes the layout worse, not more flexible.
+ * The grip is on the drawer's bottom edge, so "the rest" is everything below it
+ * in practice; the number is deliberately generous either way, because a grip
+ * that can starve another pane makes the layout worse, not more flexible.
  */
 const RESERVED_HEIGHT = 180
 
@@ -97,12 +104,6 @@ export function ChangeGroupPane({
 
   return (
     <div className={cls.changeDrawer} data-drawer={area}>
-      <PaneResizer
-        label={resizeLabel}
-        minHeight={MIN_PANE_HEIGHT}
-        reserved={RESERVED_HEIGHT}
-        onResize={setHeight}
-      />
       <div
         className={cls.changeBody}
         style={height === null ? undefined : { height: `${height}px`, maxHeight: 'none' }}
@@ -123,6 +124,15 @@ export function ChangeGroupPane({
           onOpen={onOpen}
         />
       </div>
+      {/* The drawer's free edge: below the body it sizes, so the pointer pulls
+          the drawer's bottom down rather than its top up. */}
+      <PaneResizer
+        label={resizeLabel}
+        edge="bottom"
+        minHeight={MIN_PANE_HEIGHT}
+        reserved={RESERVED_HEIGHT}
+        onResize={setHeight}
+      />
     </div>
   )
 }
