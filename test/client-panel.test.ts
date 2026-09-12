@@ -1025,12 +1025,29 @@ describe('StatusPanel rendering', () => {
     await dragGrip(grip, 0, -1000)
     assert.equal(pane.style.height, `${ceiling}px`)
 
-    // Folding from the chevron drops the explicit height (a height would leave a
-    // blank body), and expanding brings the pane back where it was.
-    await click(must(container, `.${cls.tool}[aria-expanded]`))
+    // There is no fold/unfold chevron any more: whether the pane is showing IS
+    // whether a tab is active (asked for after the strip grew one control too
+    // many). Clicking the tab that is showing puts the pane away — the gesture the
+    // chevron used to carry — and clicking it again brings it back.
+    assert.equal(
+      container.querySelectorAll(`.${cls.tool}[aria-expanded]`).length,
+      0,
+      'the strip carries no separate fold control',
+    )
+    const historyTab = must<HTMLButtonElement>(container, `.${cls.bottomTab}`)
+    assert.equal(historyTab.getAttribute('aria-selected'), 'true')
+    // The hint belongs on the tab only while it is the one showing, because that
+    // is when a click means "away" rather than "show me".
+    assert.equal(historyTab.getAttribute('title'), 'Collapse the bottom pane')
+
+    // Folding this way drops the explicit height (a height would leave a blank
+    // body), and selecting the tab again brings the pane back where it was.
+    await click(historyTab)
     assert.equal(pane.getAttribute('data-expanded'), 'false')
     assert.equal(pane.style.height, '')
-    await click(must(container, `.${cls.tool}[aria-expanded]`))
+    assert.equal(historyTab.getAttribute('aria-selected'), 'false')
+    assert.equal(historyTab.getAttribute('title'), null)
+    await click(historyTab)
     assert.equal(pane.getAttribute('data-expanded'), 'true')
     assert.equal(pane.style.height, `${ceiling}px`)
 
@@ -1042,7 +1059,7 @@ describe('StatusPanel rendering', () => {
     await settle()
     assert.equal(must(reopened, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
     assert.equal((must(reopened, `.${cls.bottom}`) as HTMLElement).style.height, `${ceiling}px`)
-    await click(must(reopened, `.${cls.tool}[aria-expanded]`))
+    await click(must(reopened, `.${cls.bottomTab}`))
     assert.equal(
       (must(reopened, `.${cls.bottom}`) as HTMLElement).getAttribute('data-expanded'),
       'false',
@@ -1056,6 +1073,47 @@ describe('StatusPanel rendering', () => {
       'false',
       'a folded dock stays folded across a reload',
     )
+  })
+
+  it('falls back to the history when the file whose diff is open leaves the list', async () => {
+    // The diff tab IS the open file, and the panel drops that file on its own when
+    // the row disappears (it was committed, or discarded). A dock left pointing at
+    // a tab that no longer exists used to render an empty body; it now shows the
+    // history and stays open, because the user did not close anything.
+    const base = statusFixture()
+    let listeners: ((change: GitChange) => void)[] = []
+    let status: Result<RepoStatus> = { ok: true, value: base }
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      status: () => Promise.resolve(status),
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((l) => l !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await flush()
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-tab'), 'diff')
+
+    // The file is gone from every group: only the staged fixture entry is left.
+    status = { ok: true, value: statusWith({ staged: base.groups.staged }) }
+    await act(async () => {
+      for (const listener of listeners) listener({ kinds: ['index'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+    await flush()
+
+    const pane = must(container, `.${cls.bottom}`)
+    assert.equal(pane.getAttribute('data-expanded'), 'true', 'the user closed nothing')
+    assert.equal(pane.getAttribute('data-tab'), 'history')
+    assert.equal(must(container, `.${cls.bottomTab}`).getAttribute('aria-selected'), 'true')
+    assert.equal(container.querySelector('[data-shown="false"]'), null)
   })
 
   it('re-reads when the host reports a change', async () => {
@@ -3046,7 +3104,9 @@ describe('the commit detail (FR-3.6)', () => {
     const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
     await settle()
 
-    await click(must(container, `.${cls.bottomTab}`))
+    // The dock opens on the history tab by itself, so the rows are already there:
+    // clicking that tab now means "put the pane away", which is the fold gesture.
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
     assert.equal(container.querySelector('[data-commit-detail]'), null)
 
     // The row IS the button — not just its title line. The hot zone has to be
@@ -3150,8 +3210,8 @@ describe('the commit detail (FR-3.6)', () => {
     }
     const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
     await settle()
-    await click(must(container, `.${cls.bottomTab}`))
 
+    // No click to open the dock: it starts expanded on the history tab.
     const rows = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRow}`)]
     assert.equal(rows.length, 2)
 

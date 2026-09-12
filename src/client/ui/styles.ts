@@ -130,7 +130,6 @@ export const cls = {
   bottomTabs: `${P}-bottom-tabs`,
   bottomTab: `${P}-bottom-tab`,
   bottomTabGroup: `${P}-bottom-tab-group`,
-  bottomChevron: `${P}-bottom-chevron`,
   bottomBody: `${P}-bottom-body`,
   bottomScroll: `${P}-bottom-scroll`,
   bottomDiff: `${P}-bottom-diff`,
@@ -1242,15 +1241,6 @@ export const css = `
   margin-left: -4px;
 }
 
-.${cls.bottomChevron} {
-  flex: none;
-  transition: transform 120ms ease;
-}
-
-.${cls.tool}[aria-expanded='true'] .${cls.bottomChevron} {
-  transform: rotate(90deg);
-}
-
 .${cls.bottomBody} {
   display: flex;
   flex: 1 1 auto;
@@ -1780,8 +1770,7 @@ export const css = `
 @media (prefers-reduced-motion: reduce) {
   .${cls.spinner} { animation-duration: 2400ms; }
   .${cls.spinnerGlyph} { animation-duration: 2400ms; }
-  .${cls.groupCaret},
-  .${cls.bottomChevron} { transition: none; }
+  .${cls.groupCaret} { transition: none; }
 }
 `
 

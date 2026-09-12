@@ -37,7 +37,7 @@ message, and a commit detail.
 | A resident staged drawer directly above the commit box: it is what that box commits, and its empty state says so | ✅ |
 | Changes and Untracked are drawers of the same shape — own grip, own cap, own scroller — so each partition's height is its own, and a long group cannot push the others off screen | ✅ |
 | A group with no rows keeps its bulk action on screen but disabled, and says why — an empty group has nothing to stage, so it never becomes a refused request | ✅ |
-| One bottom pane, two tabs — recent commits and the selected file's diff — opening on the history tab by default, foldable to its tab strip, sized by a drag handle, keeping both tabs' content loaded; the fold and the height are remembered | ✅ |
+| One bottom pane, two tabs — recent commits and the selected file's diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping both tabs' content loaded; the fold and the height are remembered | ✅ |
 | Diff view: click a change row → the diff opens as the bottom pane's second tab (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
@@ -105,7 +105,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 338 tests && build
+npm run check      # tsc --noEmit && 339 tests && build
 ```
 
 ## Install

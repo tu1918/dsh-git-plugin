@@ -26,6 +26,20 @@
  * closes itself on every page load is one the user has to re-open every time. It
  * opens on the history tab by default.
  *
+ * ## The tab is the switch
+ *
+ * There is no separate fold/unfold button: whether the pane is showing is
+ * **whether a tab is active**. Clicking a tab activates it and opens the pane;
+ * clicking the active tab again puts the pane away, which is the gesture the
+ * chevron used to be — VS Code's panel tabs behave the same way, and it has to
+ * exist in some form, because a fold that only a drag can perform is not available
+ * to every input device.
+ *
+ * That also removes a state that could disagree with itself. A pane that keeps a
+ * `tab` AND an `expanded` flag can end up expanded with no tab selected (which is
+ * what a fold left behind), and then it renders an empty body; here the two are
+ * one value, and `null` is the folded strip.
+ *
  * ## What the height may cost
  *
  * The dock is the column's only draggable region, and the rest of the column has
@@ -51,7 +65,7 @@ import { HistoryPanel } from './History.tsx'
 import { PaneResizer } from './pane-resizer.tsx'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
-import { CaretGlyph, CloseGlyph } from './icons.tsx'
+import { CloseGlyph } from './icons.tsx'
 
 /** Which tab of the bottom pane is showing. */
 export type BottomTab = 'history' | 'diff'
@@ -95,44 +109,55 @@ export function BottomPane({
   openFile,
   onCloseDiff,
 }: BottomPaneProps): ReactNode {
-  const [tab, setTab] = useState<BottomTab>('history')
   /**
-   * Whether a panel is showing at all, and the height it was dragged to.
+   * The active tab, which is also whether the pane is open: `null` is the strip.
    *
-   * Both come from storage, so a reload puts the dock back the way it was left:
-   * the default is open, and a user who folds it keeps it folded.
+   * Whether that is open comes from storage — a dock that folds itself on every
+   * reload is one the user has to re-open every time — and so does the height it
+   * was dragged to.
    */
-  const [expanded, setExpanded] = useState(() => readBottomPane().expanded)
+  const [active, setActive] = useState<BottomTab | null>(() =>
+    readBottomPane().expanded ? 'history' : null,
+  )
   /** `null` means "not dragged yet": the stylesheet's per-tab default applies. */
   const [height, setHeight] = useState<number | null>(() => readBottomPane().height)
 
   useEffect(() => {
-    writeBottomPane({ expanded, height })
-  }, [expanded, height])
+    writeBottomPane({ expanded: active !== null, height })
+  }, [active, height])
 
   // A row that was just clicked is what the user wants to look at, so the pane
   // opens on it — that is the whole interaction the change list promises.
   useEffect(() => {
     if (openFile === null) return
-    setTab('diff')
-    setExpanded(true)
+    setActive('diff')
   }, [openFile])
 
+  const expanded = active !== null
+  /**
+   * The tab whose panel is showing.
+   *
+   * The only case where it differs from {@link active}: the diff tab is the open
+   * file, and the panel clears that file on its own when the row leaves the change
+   * list (it was committed, or discarded). Pointing at a tab that no longer exists
+   * would leave the body empty, so the dock falls back to the history rather than
+   * showing a blank pane — and, since the user did not close it, it stays open.
+   */
+  const shown: BottomTab =
+    active === 'diff' && openFile === null ? 'history' : (active ?? 'history')
+
   const select = useCallback((next: BottomTab): void => {
-    setTab(next)
-    setExpanded(true)
+    // The active tab is a toggle: a second click puts the pane away. That is the
+    // fold gesture the chevron used to carry, and the only non-drag one.
+    setActive((current) => (current === next ? null : next))
   }, [])
 
   const closeDiff = useCallback((): void => {
     onCloseDiff()
-    setTab('history')
-    setExpanded(false)
+    // The tab is gone, so nothing is active and the pane folds — what the × has
+    // always meant.
+    setActive(null)
   }, [onCloseDiff])
-
-  /** Fold or unfold from the strip's chevron, which is the non-drag way in. */
-  const toggleExpanded = useCallback((): void => {
-    setExpanded((value) => !value)
-  }, [])
 
   const name = openFile === null ? '' : pathParts(openFile.path).name
 
@@ -140,7 +165,7 @@ export function BottomPane({
     <div
       className={cls.bottom}
       data-bottom=""
-      data-tab={tab}
+      data-tab={shown}
       data-expanded={String(expanded)}
       // Folded, the pane is its strip: an explicit height would leave a blank
       // body, so it is only applied while a panel is showing — and it comes back
@@ -165,7 +190,9 @@ export function BottomPane({
         reserved={DOCK_RESERVED}
         onResize={(next) => {
           setHeight(next)
-          setExpanded(true)
+          // Dragging the folded strip open needs a tab to show: the diff if the
+          // panel has one open, the history otherwise.
+          setActive((current) => current ?? (openFile === null ? 'history' : 'diff'))
         }}
       />
       <div className={cls.bottomTabs} role="tablist" aria-label={t('bottom.tabs')}>
@@ -173,8 +200,11 @@ export function BottomPane({
           type="button"
           role="tab"
           className={cls.bottomTab}
-          aria-selected={tab === 'history' && expanded}
-          data-active={tab === 'history' && expanded ? 'true' : undefined}
+          aria-selected={expanded && shown === 'history'}
+          data-active={expanded && shown === 'history' ? 'true' : undefined}
+          // The hint appears only while this tab is the one showing, because that
+          // is when a click means "put the pane away" rather than "show it".
+          title={expanded && shown === 'history' ? t('bottom.collapse') : undefined}
           onClick={() => select('history')}
         >
           {t('history.title')}
@@ -183,12 +213,12 @@ export function BottomPane({
           // The label and its close button are siblings, never nested: a button
           // inside a button is invalid markup and the inner one is not reliably
           // clickable.
-          <span className={cls.bottomTabGroup} data-active={tab === 'diff' && expanded ? 'true' : undefined}>
+          <span className={cls.bottomTabGroup} data-active={expanded && shown === 'diff' ? 'true' : undefined}>
             <button
               type="button"
               role="tab"
               className={cls.bottomTab}
-              aria-selected={tab === 'diff' && expanded}
+              aria-selected={expanded && shown === 'diff'}
               title={openFile.path}
               onClick={() => select('diff')}
             >
@@ -206,18 +236,6 @@ export function BottomPane({
           </span>
         )}
         <span className={cls.spacer} />
-        {/* Without this, folding the pane would be a drag-only gesture, and a
-            drag is not something every input device can perform. */}
-        <button
-          type="button"
-          className={cls.tool}
-          title={expanded ? t('bottom.collapse') : t('bottom.expand')}
-          aria-label={expanded ? t('bottom.collapse') : t('bottom.expand')}
-          aria-expanded={expanded}
-          onClick={toggleExpanded}
-        >
-          <CaretGlyph className={cls.bottomChevron} />
-        </button>
       </div>
       {expanded && (
         <div className={cls.bottomBody}>
@@ -225,18 +243,18 @@ export function BottomPane({
               rendered on demand: a tab that forgets its commits, its loaded pages
               and its scroll position the moment you look at the other one is not
               a tab — and switching back would spend another git call. */}
-          <div className={cls.bottomScroll} data-shown={String(tab === 'history')}>
+          <div className={cls.bottomScroll} data-shown={String(shown === 'history')}>
             <HistoryPanel
               sessionId={sessionId}
               git={git}
               t={t}
               locale={locale}
               signal={signal}
-              active={expanded && tab === 'history'}
+              active={expanded && shown === 'history'}
             />
           </div>
           {openFile !== null && (
-            <div className={cls.bottomDiff} data-shown={String(tab === 'diff')}>
+            <div className={cls.bottomDiff} data-shown={String(shown === 'diff')}>
               <DiffPane
                 // Keyed by target so switching files remounts the pane: a fold or
                 // a layout read must not leak from the file that was open before.
