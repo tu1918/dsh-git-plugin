@@ -69,6 +69,7 @@ export const zh = {
   'group.conflicted': '合并冲突',
   'group.count': '{count}',
   'group.stagedEmpty': '无暂存更改',
+  'staged.resize': '拖动调整已暂存区高度',
   'group.expand': '展开这一类',
   'group.collapse': '收起这一类',
 
@@ -166,6 +167,7 @@ export const en: Record<GitPanelKey, string> = {
   'group.conflicted': 'Merge conflicts',
   'group.count': '{count}',
   'group.stagedEmpty': 'No staged changes',
+  'staged.resize': 'Drag to resize the staged changes',
   'group.expand': 'Expand this group',
   'group.collapse': 'Collapse this group',
 

@@ -39,6 +39,7 @@ import { badgeFor } from '../../core/git-parse.ts'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
 import { BottomPane, type OpenFile } from './BottomPane.tsx'
+import { PaneResizer } from './pane-resizer.tsx'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -57,6 +58,15 @@ import {
 } from './icons.tsx'
 
 export type { Translate }
+
+/** Smallest the staged drawer may be dragged to, in pixels. */
+const STAGED_MIN_HEIGHT = 44
+
+/**
+ * Height kept for the rail, the commit box and a usable change list below, however
+ * far the staged drawer is dragged.
+ */
+const STAGED_RESERVED_HEIGHT = 220
 
 /** The change-list groups, in the order the panel draws them. */
 const CHANGE_AREAS: readonly ChangeArea[] = ['conflicted', 'staged', 'unstaged', 'untracked']
@@ -560,6 +570,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * opened still exists.
    */
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  /** `null` means "not dragged yet": the stylesheet's cap applies. */
+  const [stagedHeight, setStagedHeight] = useState<number | null>(null)
   // Folded groups are a preference, not a render detail: someone who folds
   // "untracked" away does not want it back on the next visit (§4.2 draws the
   // caret). Initialised from storage, written back whenever it changes.
@@ -763,12 +775,43 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           {action.summary === '' ? action.label : action.summary}
         </p>
       )}
-      {/* The column, top to bottom, follows VS Code's Source Control view: the
-          message box first, then the change list, then the bottom pane. The one
-          thing that cannot follow it is where a diff opens — VS Code uses the
-          editor area, and this plugin registers only a right-sidebar tab — so the
-          diff shares the bottom pane with the history, as its second tab
-          (`BottomPane`). FR-2.1 still holds: embedded, never a modal. */}
+      {/* The column: the staged drawer, the message box, the working-tree list,
+          then the bottom pane. The first two are deliberately not VS Code's order
+          — see the drawer's own comment — and the last one cannot be: VS Code
+          opens a diff in the editor area, and this plugin registers only a
+          right-sidebar tab, so the diff shares the bottom pane with the history as
+          its second tab (`BottomPane`). FR-2.1 still holds in both cases:
+          embedded, never a modal. */}
+      {/* The staged drawer sits directly above the commit box, because it is what
+          that box commits: the association is the closest one in the panel, and it
+          is worth breaking VS Code's own order (message box first, staged list
+          below it) to make it read — these files, this message, commit. The cost
+          is that staging a row moves it across the box, which is the same jump
+          VS Code makes between its two groups. */}
+      <div className={cls.stagedDrawer}>
+        <PaneResizer
+          label={t('staged.resize')}
+          minHeight={STAGED_MIN_HEIGHT}
+          reserved={STAGED_RESERVED_HEIGHT}
+          onResize={setStagedHeight}
+        />
+        <div className={cls.stagedBody} style={stagedHeight === null ? undefined : { height: `${stagedHeight}px`, maxHeight: 'none' }}>
+            <Group
+              label={t('group.staged')}
+              area="staged"
+              entries={staged}
+              t={t}
+              busy={busy || pending}
+              batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+              emptyNote={t('group.stagedEmpty')}
+              collapsed={collapsedGroups.has('staged')}
+              onToggle={() => toggleGroup('staged')}
+              onStage={stage}
+              onUnstage={unstage}
+              onOpen={openDiff}
+            />
+        </div>
+      </div>
       <CommitBox
         message={message}
         onMessage={setMessage}
@@ -782,46 +825,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       />
       <div className={cls.body}>
         {clean ? (
-          <>
-            <Group
-              label={t('group.staged')}
-              area="staged"
-              entries={staged}
-              t={t}
-              busy={busy || pending}
-              batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-              emptyNote={t('group.stagedEmpty')}
-              collapsed={collapsedGroups.has('staged')}
-              onToggle={() => toggleGroup('staged')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
-            <div className={cls.status} data-git-panel-state="clean">
-              <p className={cls.statusTitle}>{t('clean.title')}</p>
-              <p className={cls.statusHint}>{t('clean.hint')}</p>
-            </div>
-          </>
+          <div className={cls.status} data-git-panel-state="clean">
+            <p className={cls.statusTitle}>{t('clean.title')}</p>
+            <p className={cls.statusHint}>{t('clean.hint')}</p>
+          </div>
         ) : (
           <>
             {/* Conflicts get a group and a `+` per row, but no bulk action: the
                 conflict UI proper (FR-9) is a later milestone, and "stage all"
                 over a half-resolved merge is not a shortcut worth offering. */}
             <Group label={t('group.conflicted')} area="conflicted" entries={conflicted} t={t} busy={busy || pending} collapsed={collapsedGroups.has('conflicted')} onToggle={() => toggleGroup('conflicted')} onStage={stage} onUnstage={unstage} onOpen={openDiff} />
-            <Group
-              label={t('group.staged')}
-              area="staged"
-              entries={staged}
-              t={t}
-              busy={busy || pending}
-              batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-              emptyNote={t('group.stagedEmpty')}
-              collapsed={collapsedGroups.has('staged')}
-              onToggle={() => toggleGroup('staged')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
             <Group
               label={t('group.unstaged')}
               area="unstaged"

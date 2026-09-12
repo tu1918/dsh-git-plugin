@@ -417,10 +417,12 @@ describe('StatusPanel rendering', () => {
       node.getAttribute('data-status'),
       node.textContent,
     ])
-    // A conflict is `U` in its own group; the same file is not listed twice.
+    // The staged rows come first, because their drawer sits above the commit box;
+    // then a conflict (`U` in its own group, the same file never listed twice),
+    // then the working tree, then what git does not track yet.
     assert.deepEqual(badges, [
-      ['U', 'U'],
       ['M', 'M'],
+      ['U', 'U'],
       ['M', 'M'],
       ['?', '?'],
     ])
@@ -464,6 +466,27 @@ describe('StatusPanel rendering', () => {
     const drawer = must(container, `[data-group="staged"]`)
     assert.equal(must(drawer, `.${cls.count}`).textContent, '0')
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
+  })
+
+  it('sizes the staged drawer from its own grip', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // Every pane that owns a height owns a grip: the staged drawer takes its
+    // height from the commit box and the list below it.
+    const drawer = must(container, `.${cls.stagedDrawer}`) as HTMLElement
+    const grip = must(drawer, `.${cls.paneGrip}`)
+    assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the staged changes')
+    assert.equal((drawer.querySelector(`.${cls.stagedBody}`) as HTMLElement).style.height, '')
+
+    await act(async () => {
+      grip.dispatchEvent(new window.MouseEvent('pointerdown', { clientY: 200, bubbles: true }))
+      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 100, bubbles: true }))
+    })
+    await flush()
+    assert.equal((drawer.querySelector(`.${cls.stagedBody}`) as HTMLElement).style.height, '100px')
   })
 
   it('keeps the staged drawer on screen when only the index is empty', async () => {
@@ -585,6 +608,8 @@ describe('StatusPanel rendering', () => {
     // No inline height yet: the tab's own default (the stylesheet) applies.
     assert.equal(pane.style.height, '')
 
+    // Two panes carry a grip (the staged drawer above and this one), so the
+    // queries are scoped to the pane under test.
     const grip = must(container, `.${cls.bottom} .${cls.paneGrip}`)
     assert.equal(grip.getAttribute('role'), 'separator')
     assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the bottom pane')
@@ -1118,16 +1143,18 @@ describe('the diff view (FR-2)', () => {
     assert.deepEqual(
       [
         ...container.querySelectorAll(
-          `.${cls.commitBox}, [data-group="unstaged"], .${cls.bottom}`,
+          `[data-group="staged"], .${cls.commitBox}, [data-group="unstaged"], .${cls.bottom}`,
         ),
       ].map((node) =>
-        node.getAttribute('data-group') !== null
-          ? 'list'
-          : node.classList.contains(cls.commitBox)
-            ? 'box'
-            : 'bottom',
+        node.getAttribute('data-group') === 'staged'
+          ? 'staged'
+          : node.getAttribute('data-group') !== null
+            ? 'list'
+            : node.classList.contains(cls.commitBox)
+              ? 'box'
+              : 'bottom',
       ),
-      ['box', 'list', 'bottom'],
+      ['staged', 'box', 'list', 'bottom'],
     )
     // The diff is the pane's active tab, and the default height is the
     // stylesheet's (keyed by that tab): a window resize keeps the meaning, and

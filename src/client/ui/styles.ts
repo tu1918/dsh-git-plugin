@@ -42,6 +42,8 @@ export const cls = {
   groupLabel: `${P}-group-label`,
   count: `${P}-count`,
   groupEmpty: `${P}-group-empty`,
+  stagedDrawer: `${P}-staged-drawer`,
+  stagedBody: `${P}-staged-body`,
   groupActions: `${P}-group-actions`,
   groupToggle: `${P}-group-toggle`,
   groupCaret: `${P}-group-caret`,
@@ -241,6 +243,37 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
+
+/* ── the staged drawer ──────────────────────────────────────────────────── */
+
+/* Directly above the commit box, because it is what that box commits. It takes
+   its content's height up to a cap and scrolls inside itself past it, so a
+   twenty-file index never pushes the box and the working-tree list off screen;
+   the grip takes the height back from those two, the way every other pane does. */
+.${cls.stagedDrawer} {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 40%;
+  overflow: hidden;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.${cls.stagedBody} {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+.${cls.stagedBody}::-webkit-scrollbar { width: 10px; height: 10px; }
+.${cls.stagedBody}::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: var(--dsw-alias-scrollbar-bg-l1);
+}
+.${cls.stagedBody}::-webkit-scrollbar-track { background: transparent; }
 
 /* ── change list ────────────────────────────────────────────────────────── */
 
