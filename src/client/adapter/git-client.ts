@@ -210,6 +210,11 @@ export function createGitRemoteClient(): GitRemoteClient {
     stashDrop: (sessionId, oid, signal) =>
       mutate<OperationReport>('/stashDrop', { session: sessionId, oid }, signal),
 
+    // Deployment configuration rather than repository data — but it travels the
+    // same transport, so the UI still knows exactly one way to reach the host.
+    fileIcons: (sessionId, signal) =>
+      request<Readonly<Record<string, string>>>('/fileIcons', { session: sessionId }, signal),
+
     watch(sessionId, onChange) {
       /** Every kind: the guesses this transport makes on its own. */
       const ALL: GitChange = { kinds: ['refs', 'index', 'worktree'] }

@@ -15,6 +15,8 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,6 +27,7 @@ import { createGitRunner } from '../src/host/git-exec.ts'
 import { createGitService } from '../src/host/git-service.ts'
 import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
 import { createGitProbe } from '../src/host/git-probe.ts'
+import { createFileIconRegistry } from '../src/host/file-icons.ts'
 import type { HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
 import {
   cleanupRepos,
@@ -460,12 +463,16 @@ interface Harness {
 async function startHarness(
   sessions: Readonly<Record<string, string>>,
   ports: HostPorts = SILENT,
+  iconConfigPath?: string,
 ): Promise<Harness> {
   const registrations: Registration[] = []
   const ctx = stubContext(registrations)
   const service = serviceWith(ports, sessions)
   const probe = createGitProbe(ports)
-  const dispose = registerGitPanelRoutes(ctx, service, probe, ports)
+  // An unmapped deployment is the default: a path that does not exist, so every
+  // test that is not about icons sees the panel exactly as before.
+  const icons = createFileIconRegistry(ports, iconConfigPath ?? join(tmpdir(), 'dsh-git-panel-no-icons.yml'))
+  const dispose = registerGitPanelRoutes(ctx, service, probe, ports, icons)
 
   const server: Server = createServer((req, res) => dispatch(registrations, req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -908,7 +915,8 @@ describe('the loopback fence', () => {
     const registrations: Registration[] = []
     const service = serviceFor({ s1: repo })
     const probe = createGitProbe(SILENT)
-    registerGitPanelRoutes(stubContext(registrations), service, probe, SILENT)
+    const icons = createFileIconRegistry(SILENT, join(tmpdir(), 'dsh-git-panel-no-icons.yml'))
+    registerGitPanelRoutes(stubContext(registrations), service, probe, SILENT, icons)
     const routes = registrations as Registration[]
     const post = routes.find((route) => route.kind === 'prefix')
     assert.ok(post)
@@ -1667,6 +1675,83 @@ describe('the stash routes (FR-6.2)', () => {
       const missing = await post(harness, '/git-panel/stashDrop', { session: 's1' })
       assert.equal(missing.ok, false)
       assert.equal(missing.error?.code, 'bad-request')
+    } finally {
+      await harness.close()
+    }
+  })
+})
+
+describe('the file-icon route (FR-1.2)', () => {
+  /** A deployment that mapped three extensions, two of them unusable. */
+  function iconsFixture(): { dir: string; configPath: string; lines: string[] } {
+    const dir = makePlainDir('icon-map')
+    const repo = makeRepo('icon-repo')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const tsSvg = '<svg viewBox="0 0 16 16"><path d="M1 1h14v14H1z"/></svg>'
+    write(dir, 'ts.svg', tsSvg)
+    write(dir, 'notes.txt', 'this is not an SVG, whatever the extension says\n')
+    write(dir, 'huge.svg', `<svg>${'x'.repeat(65 * 1024)}</svg>`)
+    const configPath = join(dir, 'icons.yml')
+    write(
+      dir,
+      'icons.yml',
+      [
+        '# our own marks',
+        `.ts: ${join(dir, 'ts.svg')}`,
+        `.md: ${join(dir, 'notes.txt')}`, // not an SVG
+        `.png: ${join(dir, 'huge.svg')}`, // over the cap
+        '.js: relative/path.svg', // not absolute
+        `.rs: ${join(dir, 'missing.svg')}`, // no such file
+        'this line is not a pair',
+      ].join('\n'),
+    )
+    return { dir, configPath, lines: [tsSvg] }
+  }
+
+  it('serves only the icons it could read, and logs why the others did not', async () => {
+    const { configPath, lines } = iconsFixture()
+    const logged: string[] = []
+    const ports: HostPorts = {
+      log: (_level, message) => logged.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    }
+    const harness = await startHarness({ s1: makePlainDir('icon-session') }, ports, configPath)
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/fileIcons?session=s1`)
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; value?: Record<string, string> }
+      assert.equal(body.ok, true)
+      // The one icon that could be read, verbatim; every other line left its
+      // extension to the built-in glyphs.
+      assert.deepEqual(Object.keys(body.value ?? {}), ['ts'])
+      assert.equal(body.value?.['ts'], lines[0])
+      // …and each refusal says which line and why, because a silently missing icon
+      // is exactly the failure this file would be hardest to debug.
+      // Four refused icon FILES (a non-SVG, one over the cap, a relative path, a
+      // missing file) and one refused LINE, each with its own sentence.
+      assert.equal(logged.filter((line) => line.includes('icon for .')).length, 4)
+      assert.equal(logged.filter((line) => line.includes('icons.yml')).length, 1)
+      assert.ok(logged.some((line) => line.includes('is not an SVG document')))
+      assert.ok(logged.some((line) => line.includes('over the 65536-byte cap')))
+      assert.ok(logged.some((line) => line.includes('must be an absolute path')))
+      assert.ok(logged.some((line) => line.includes('unreadable')))
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('answers an empty map when no icon map is configured at all', async () => {
+    const repo = makePlainDir('icon-none')
+    const harness = await startHarness({ s1: repo }, SILENT, join(repo, 'nothing-here.yml'))
+    try {
+      const body = (await (
+        await fetch(`${harness.origin}/git-panel/fileIcons?session=s1`)
+      ).json()) as { ok: boolean; value?: Record<string, string> }
+      assert.equal(body.ok, true)
+      assert.deepEqual(body.value, {}, 'the panel then draws its built-in glyphs')
     } finally {
       await harness.close()
     }

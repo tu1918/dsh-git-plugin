@@ -11,7 +11,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { fileKindOf } from '../src/core/file-kind.ts'
+import { customIconFor, fileIconKeyOf, fileKindOf } from '../src/core/file-kind.ts'
 
 describe('file kinds (FR-1.2)', () => {
   it('reads the extension of the last path segment only', () => {
@@ -57,5 +57,26 @@ describe('file kinds (FR-1.2)', () => {
     // `.eslintrc.json` ends in a known extension; `.gitignore` does not.
     assert.equal(fileKindOf('.eslintrc.json'), 'data')
     assert.equal(fileKindOf('.gitignore'), 'config')
+  })
+})
+
+describe('a deployment’s own icons (FR-1.2)', () => {
+  it('keys a path by the same extension rule as the kind table', () => {
+    assert.equal(fileIconKeyOf('src/a.ts'), 'ts')
+    assert.equal(fileIconKeyOf('src/a.TS'), 'ts', 'the match is case-insensitive')
+    assert.equal(fileIconKeyOf('a.test.ts'), 'ts', 'only the last dot counts')
+    assert.equal(fileIconKeyOf('.gitignore'), null, 'a leading dot is not an extension')
+    assert.equal(fileIconKeyOf('README'), null)
+    assert.equal(fileIconKeyOf('weird.'), null, 'a trailing dot names none either')
+  })
+
+  it('prefers a configured icon, and falls back to nothing when there is none', () => {
+    const icons = { ts: 'data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E' }
+    assert.equal(customIconFor('src/a.ts', icons), icons.ts)
+    // A file with no extension, and one whose extension is not mapped: the row
+    // keeps its built-in kind glyph.
+    assert.equal(customIconFor('LICENSE', icons), undefined)
+    assert.equal(customIconFor('docs/plan.md', icons), undefined)
+    assert.equal(customIconFor('src/a.ts', {}), undefined)
   })
 })

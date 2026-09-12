@@ -24,7 +24,7 @@
 import type { ReactNode } from 'react'
 
 import { changeTreeOf, filesUnder, type ChangeTreeNode } from '../../core/change-tree.ts'
-import { fileKindOf } from '../../core/file-kind.ts'
+import { customIconFor, fileKindOf } from '../../core/file-kind.ts'
 import { pathParts } from '../../core/format.ts'
 import { badgeFor, type BadgeLetter } from '../../core/git-parse.ts'
 import type { ChangeArea, FileChange } from '../../core/types.ts'
@@ -32,7 +32,7 @@ import type { GitPanelKey } from '../locales.ts'
 import type { Translate } from './translate.ts'
 import { cls } from './styles.ts'
 import { useArmedKey } from './armed.ts'
-import { dirKey, type ChangeView } from './change-view.ts'
+import { dirKey, type ChangeView, type FileIcons } from './change-view.ts'
 import { canDiscard } from './row-actions.ts'
 import {
   CaretGlyph,
@@ -167,6 +167,7 @@ export function ChangeRow({
   busy,
   showDirectory = true,
   selected,
+  icons,
   onStage,
   onUnstage,
   onOpen,
@@ -188,6 +189,13 @@ export function ChangeRow({
   readonly showDirectory?: boolean
   /** Whether this row is part of the selection the group's batch acts on. */
   readonly selected: boolean
+  /**
+   * The deployment's own icons, extension to drawable URL (FR-1.2).
+   *
+   * Empty for every deployment that has not configured one, in which case a row
+   * draws its built-in kind glyph — `customIconFor` is the whole rule.
+   */
+  readonly icons: FileIcons
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
@@ -206,6 +214,9 @@ export function ChangeRow({
   const { directory, name } = pathParts(entry.path)
   const badge = badgeFor(entry, area)
   const kind = fileKindOf(entry.path)
+  // The deployment's icon for this extension, when it configured one; the built-in
+  // kind glyph is the fallback, so an unconfigured panel is exactly as before.
+  const customIcon = customIconFor(entry.path, icons)
   // A rename is the one case where the row cannot stand alone: the new path is
   // only half the story, so the original joins the tooltip.
   const tooltip =
@@ -268,9 +279,20 @@ export function ChangeRow({
       />
       {/* The leading column says WHAT the file is; the far right is the change
           STATUS column. The two used to be one `M`/`A`/`?` letter at the front,
-          which a reader had to decode before they knew what they were looking at. */}
-      <span className={cls.fileIcon} data-kind={kind} aria-hidden="true">
-        <FileKindGlyph kind={kind} />
+          which a reader had to decode before they knew what they were looking at.
+          A configured icon replaces the built-in glyph and is drawn as an image
+          (see ui/file-icons.ts for why that is the safe shape). */}
+      <span
+        className={cls.fileIcon}
+        data-kind={kind}
+        data-icon={customIcon === undefined ? 'builtin' : 'custom'}
+        aria-hidden="true"
+      >
+        {customIcon === undefined ? (
+          <FileKindGlyph kind={kind} />
+        ) : (
+          <img className={cls.fileIconImg} src={customIcon} alt="" />
+        )}
       </span>
       <span className={cls.path}>
         {showDirectory && directory !== '' && <span className={cls.pathDir}>{directory}</span>}
@@ -436,6 +458,7 @@ function TreeNodeView({
           busy={busy}
           showDirectory={false}
           selected={isSelected(node.entry.path)}
+          icons={view.icons}
           onStage={onStage}
           onUnstage={onUnstage}
           onOpen={onOpen}
@@ -689,6 +712,7 @@ export function Group({
             t={t}
             busy={busy}
             selected={isSelected(entry.path)}
+            icons={view.icons}
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}

@@ -98,6 +98,15 @@ export function writeCollapsedDirs(dirs: ReadonlySet<string>): void {
   }
 }
 
+/**
+ * The deployment's own file-type icons: extension (no dot, lowercased) to
+ * something an `<img src>` can draw.
+ *
+ * Empty when nothing is configured, which is the ordinary case — the rows then draw
+ * their built-in glyphs (`ui/icons.tsx`), and `customIconFor` is what decides.
+ */
+export type FileIcons = Readonly<Record<string, string>>
+
 /** Everything the group rows need in order to draw either shape. */
 export interface ChangeView {
   /** Which shape to draw. */
@@ -106,6 +115,12 @@ export interface ChangeView {
   readonly collapsedDirs: ReadonlySet<string>
   /** Fold or unfold one directory of one group. */
   readonly onToggleDir: (key: string) => void
+  /**
+   * The deployment's icons, carried here instead of as one more prop per
+   * component: it is a display detail like the other three, and the group, the
+   * tree and every row need it.
+   */
+  readonly icons: FileIcons
 }
 
 /**

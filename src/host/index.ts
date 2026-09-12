@@ -22,6 +22,7 @@ import { createGitRunner } from './git-exec.ts'
 import { createGitService, type GitServiceLimits } from './git-service.ts'
 import { registerGitPanelRoutes } from './adapter/routes.ts'
 import { createGitProbe } from './git-probe.ts'
+import { createFileIconRegistry, resolveIconConfigPath } from './file-icons.ts'
 
 /**
  * Services required before this plugin can mount.
@@ -38,6 +39,14 @@ export interface Config {
   readonly gitTimeoutMs?: number
   /** Ceiling on captured stdout for one git call, in bytes. */
   readonly maxStdoutBytes?: number
+  /**
+   * Where the file-type icon map lives (FR-1.2).
+   *
+   * Absent, the panel looks for `$DSH_HOME/git-panel-icons.yml`; the map itself is
+   * `extension: path` lines, read per request so editing it needs no restart (see
+   * `core/icon-config.ts` and `host/file-icons.ts`).
+   */
+  readonly fileIconsPath?: string
 }
 
 /**
@@ -56,13 +65,16 @@ export function apply(ctx: Context, config: Config = {}): void {
   const resolver = createSessionDirResolver(ctx, ports)
   const service = createGitService(runner, resolver, ports, limits)
   const probe = createGitProbe(ports)
+  // Read per request rather than once here: a deployment that edits its icon map
+  // and reloads the panel gets the new icons without restarting the host.
+  const icons = createFileIconRegistry(ports, resolveIconConfigPath(config.fileIconsPath))
 
   // `ctx.effect` ties both the routes and the probe to this plugin's own
   // lifetime, so an unload or a config reload leaves no route, no filesystem
   // watch, and no open SSE socket behind.
   ctx.effect(
     () => {
-      const disposeRoutes = registerGitPanelRoutes(ctx, service, probe, ports)
+      const disposeRoutes = registerGitPanelRoutes(ctx, service, probe, ports, icons)
       ports.log('info', 'git panel host ready at /git-panel')
       return () => {
         disposeRoutes()

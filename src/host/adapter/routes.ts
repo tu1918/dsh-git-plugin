@@ -45,6 +45,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { GitPanelError, HostPorts, WorkspaceGitService } from '../../core/ports.ts'
+import type { FileIconRegistry } from '../file-icons.ts'
 import type { GitProbe } from '../git-probe.ts'
 
 /** The path prefix this plugin owns; distinct from git-graph's `/git`. */
@@ -64,6 +65,7 @@ const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'diff',
   'showCommit',
   'stashes',
+  'fileIcons',
 ])
 
 /**
@@ -310,6 +312,7 @@ function intOf(url: URL, name: string, fallback: number): number {
  * @param service - The git service.
  * @param probe - The git state probe feeding the stream.
  * @param ports - Diagnostic port.
+ * @param icons - The deployment's own file-type icons (FR-1.2), if it configured any.
  * @returns A disposer that unregisters both routes and ends every open stream.
  */
 export function registerGitPanelRoutes(
@@ -317,6 +320,7 @@ export function registerGitPanelRoutes(
   service: WorkspaceGitService,
   probe: GitProbe,
   ports: HostPorts,
+  icons: FileIconRegistry,
 ): () => void {
   /** Live SSE responses, so disposal can end them rather than leak sockets. */
   const streams = new Set<ServerResponse>()
@@ -331,6 +335,13 @@ export function registerGitPanelRoutes(
     switch (operation) {
       case 'status':
         return await service.status(sessionId)
+      case 'fileIcons': {
+        // Deployment configuration rather than a repository reading, so it does not
+        // go through the git service: the browser is handed the SVGs the icon map
+        // names, keyed by extension, and sends nothing but its session id.
+        const list = await icons.list()
+        return { ok: true, value: Object.fromEntries(list.map((icon) => [icon.ext, icon.svg])) }
+      }
       case 'branches':
         return await service.branches(sessionId)
       case 'log':

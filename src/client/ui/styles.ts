@@ -60,6 +60,7 @@ export const cls = {
   branchFormActions: `${P}-branch-form-actions`,
   branchFooter: `${P}-branch-footer`,
   fileIcon: `${P}-file-icon`,
+  fileIconImg: `${P}-file-icon-img`,
   stashPicker: `${P}-stash-picker`,
   stashRow: `${P}-stash-row`,
   stashHead: `${P}-stash-head`,
@@ -1062,6 +1063,15 @@ export const css = `
   align-items: center;
   justify-content: center;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* A configured icon, drawn as an image beneath that quiet ink: it keeps whatever
+   colours it was drawn in — which is the point of supplying one — so the ink above
+   is only what the BUILT-IN glyphs take. */
+.${cls.fileIconImg} {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
 }
 
 /* The status letter is the row's last element, to the right of the actions: the

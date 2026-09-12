@@ -717,6 +717,21 @@ export interface GitRemoteClient {
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>
   /**
+   * The deployment's own file-type icons (FR-1.2): extension to SVG document.
+   *
+   * Deliberately only on this side of the contract. The host's git service is "what
+   * the repository says"; this is deployment configuration read from a file, so the
+   * route layer serves it from its own registry and no git service grows a method
+   * for it. The browser sends nothing but its session id, exactly as for every
+   * other operation.
+   *
+   * Keys are extensions without their dot, lowercased (`ts`, not `.TS`), because
+   * that is how the icon map normalizes them and how the panel matches a path.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  fileIcons(sessionId: string, signal?: AbortSignal): Promise<Result<Readonly<Record<string, string>>>>
+  /**
    * Subscribe to "the repository changed" notifications.
    *
    * The adapter owns the transport (an SSE stream, or a poll when the stream is

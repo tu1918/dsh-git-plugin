@@ -273,6 +273,9 @@ function stubGit(options: {
   /** What `checkout` answers: a value, or a function for the tests that need the
    *  first attempt refused and the retry accepted (FR-4.4's shortcut). */
   checkout?: Result<OperationReport> | (() => Result<OperationReport>)
+  /** The deployment's icon map (FR-1.2); empty by default, as most deployments are.
+   *  A function is for the tests that count the reads. */
+  fileIcons?: Readonly<Record<string, string>> | (() => Readonly<Record<string, string>>)
 }): GitRemoteClient {
   const report: Result<OperationReport> =
     options.report ?? { ok: true, value: { summary: '', detail: '' } }
@@ -388,6 +391,13 @@ function stubGit(options: {
     stashDrop: (_sessionId, oid) => {
       note(`stashDrop:${oid}`)
       return Promise.resolve(options.stashDrop ?? report)
+    },
+    // Not logged: the shared log is "the mutations the panel made", and this is a
+    // deployment read (the stash listing is filtered the same way where it matters).
+    fileIcons: () => {
+      const answer = options.fileIcons
+      const value = typeof answer === 'function' ? answer() : (answer ?? {})
+      return Promise.resolve({ ok: true as const, value })
     },
     watch: options.watch ?? (() => () => undefined),
   }
@@ -761,6 +771,46 @@ describe('StatusPanel rendering', () => {
     )
   })
 
+  it('draws a configured icon for its extension, and keeps the built-in glyph elsewhere', async () => {
+    let reads = 0
+    const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7"/></svg>'
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          fileIcons: () => {
+            reads += 1
+            // Keys arrive normalized (no dot, lowercased) — the host's icon map is
+            // what accepts `.TS`, and that normalization is tested there.
+            return { ts: svg }
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // `src/staged.ts` has an extension the deployment mapped.
+    const staged = must(fileNode(container, 'staged', 'src/staged.ts'), `.${cls.row}`)
+    const icon = must(staged, `.${cls.fileIcon}`)
+    assert.equal(icon.getAttribute('data-icon'), 'custom')
+    const img = must<HTMLImageElement>(icon, 'img')
+    assert.match(img.src, /^data:image\/svg\+xml;charset=utf-8,/)
+    assert.ok(img.src.includes(encodeURIComponent(svg).slice(0, 24)), 'the document is carried verbatim')
+
+    // A file whose extension is not mapped keeps its built-in kind glyph — one
+    // configured icon does not change the rest of the list.
+    const notes = must(fileNode(container, 'untracked', 'notes.md'), `.${cls.row}`)
+    assert.equal(must(notes, `.${cls.fileIcon}`).getAttribute('data-icon'), 'builtin')
+    assert.ok(must(notes, `.${cls.fileIcon}`).querySelector('svg'), 'the built-in glyph is inline SVG')
+    assert.equal(must(notes, `.${cls.fileIcon}`).querySelector('img'), null)
+
+    // Read once per panel mount: an icon map is deployment configuration, and a
+    // request per render would be a request per keystroke for some deployments.
+    assert.equal(reads, 1)
+  })
+
   it('gives the status letter its meaning as a tooltip', async () => {
     // The letter is at the end of the row now, away from the name, and a lone `M`
     // is not something a reader should have to decode.
@@ -778,7 +828,7 @@ describe('StatusPanel rendering', () => {
     assert.equal(badgeOf('untracked', 'notes.md'), 'Untracked')
   })
 
-  it('draws every file kind as its own mark on the one page', async () => {
+  it('draws every file kind as a mark of its own', async () => {
     // The kinds are the whole point of the icon: two that render the same drawing
     // would be a copy-paste a reader pays for. `FILE_KINDS` is the single list, so
     // a tenth kind is covered here the moment it is added to core.
@@ -788,10 +838,19 @@ describe('StatusPanel rendering', () => {
       const svg = must(container, 'svg')
       assert.equal(svg.getAttribute('viewBox'), '0 0 16 16', kind)
       const shapes = [...svg.querySelectorAll('path, circle')]
+      assert.ok(shapes.length >= 1, `${kind}: a mark, not an empty box`)
       if (kind === 'file') {
         assert.equal(shapes.length, 2, 'the plain file is the page and its fold, nothing else')
-      } else {
-        assert.ok(shapes.length >= 3, `${kind}: the page plus its own mark`)
+      }
+      // No shared outline: every kind used to sit inside the same page, which made
+      // nine glyphs read as one at 14px ("they all look the same at a glance").
+      // Only the fallback may draw that page, and it draws nothing on it.
+      if (kind !== 'file') {
+        assert.equal(
+          shapes.some((shape) => (shape.getAttribute('d') ?? '').includes('M4 2.6h5.2')),
+          false,
+          `${kind}: the fallback's page outline is the fallback's alone`,
+        )
       }
       drawn.set(kind, svg.innerHTML)
     }

@@ -94,6 +94,27 @@ const BY_NAME: Readonly<Record<string, FileKind>> = {
 }
 
 /**
+ * The last path segment, lowercased: what both tables are keyed by.
+ * @param path - Repo-relative, `/`-separated path.
+ */
+function nameOf(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+}
+
+/**
+ * The extension a name ends in, or `null` when it has none.
+ *
+ * Only the LAST dot counts, so `a.test.ts` is `ts`. A dot that leads the name is
+ * not an extension (`.gitignore`), and neither is a trailing one (`weird.`).
+ * @param name - An already-lowercased path segment.
+ */
+function extensionOf(name: string): string | null {
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0 || dot === name.length - 1) return null
+  return name.slice(dot + 1)
+}
+
+/**
  * The kind of one changed file, from its repo-relative path.
  *
  * The last path segment is the name; only the LAST dot is an extension, so
@@ -105,12 +126,41 @@ const BY_NAME: Readonly<Record<string, FileKind>> = {
  * @returns The kind, or `file` when nothing matches.
  */
 export function fileKindOf(path: string): FileKind {
-  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  const name = nameOf(path)
   const byName = BY_NAME[name]
   if (byName !== undefined) return byName
-  const dot = name.lastIndexOf('.')
-  // `dot <= 0` covers both "no dot" and "the dot is the leading one" (a dotfile);
-  // a trailing dot names no extension either.
-  if (dot <= 0 || dot === name.length - 1) return 'file'
-  return BY_EXTENSION[name.slice(dot + 1)] ?? 'file'
+  const extension = extensionOf(name)
+  return extension === null ? 'file' : (BY_EXTENSION[extension] ?? 'file')
+}
+
+/**
+ * The extension key a path is matched by against a deployment's icon map, or
+ * `null` when the path has no extension.
+ *
+ * The same rule as {@link fileKindOf}'s extension lookup — one dot rule for the
+ * whole module — and the same normalization the icon-map file's keys go through
+ * (`core/icon-config.ts`): no dot, lowercased.
+ * @param path - Repo-relative, `/`-separated path.
+ * @returns The key, or `null`.
+ */
+export function fileIconKeyOf(path: string): string | null {
+  return extensionOf(nameOf(path))
+}
+
+/**
+ * The custom icon a deployment mapped this path's extension to, if any.
+ *
+ * Pure — the map's values are whatever the caller's icons are (the panel passes
+ * data URLs) — so the precedence rule of "a configured icon wins, the built-in
+ * kind is the fallback" lives in one place, testable without a DOM.
+ * @param path - Repo-relative, `/`-separated path.
+ * @param icons - Extension (no dot, lowercased) to icon.
+ * @returns The icon, or `undefined` when the built-in glyph should be used.
+ */
+export function customIconFor(
+  path: string,
+  icons: Readonly<Record<string, string>>,
+): string | undefined {
+  const key = fileIconKeyOf(path)
+  return key === null ? undefined : icons[key]
 }

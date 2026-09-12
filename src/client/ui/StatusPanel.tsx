@@ -52,8 +52,10 @@ import {
   writeCollapsedDirs,
   writeViewMode,
   type ChangeView,
+  type FileIcons,
   type ViewMode,
 } from './change-view.ts'
+import { iconUrlsOf } from './file-icons.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './repo-change.tsx'
 import { canDiscard } from './row-actions.ts'
@@ -329,6 +331,41 @@ function useRepoSnapshot(
 }
 
 /**
+ * The deployment's own file-type icons (FR-1.2), read once per panel mount.
+ *
+ * A read that fails is deliberately quiet: the built-in glyphs are exactly what a
+ * deployment without an icon map sees, so falling back IS the feature — while what
+ * could actually be wrong (a bad line, an unreadable path, an oversized file) is
+ * reported by the host, in the log the operator reads.
+ *
+ * It is not re-read when the session changes: it is deployment configuration, not
+ * a property of the repository the panel is showing.
+ * @param git - The host-facing git client.
+ * @param sessionId - The session the panel is showing, which the transport keys on.
+ * @param tabSignal - Aborted when the tab closes.
+ * @returns Extension to drawable URL; empty when nothing is configured.
+ */
+function useFileIcons(
+  git: GitRemoteClient,
+  sessionId: string,
+  tabSignal: AbortSignal | undefined,
+): FileIcons {
+  const [icons, setIcons] = useState<FileIcons>({})
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const result = await git.fileIcons(sessionId, tabSignal)
+      if (cancelled || !result.ok) return
+      setIcons(iconUrlsOf(result.value))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [git, sessionId, tabSignal])
+  return icons
+}
+
+/**
  * The state rail: which branch, how it stands against its upstream (FR-1.5), and
  * the three sync actions (FR-5.1).
  *
@@ -514,6 +551,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // repository with its own changes.
   const bus = useMemo(createRepoChangeBus, [])
   const { snapshot, reload, busy } = useRepoSnapshot(sessionId, git, signal, bus)
+  // The deployment's own file-type icons, if it configured any (FR-1.2).
+  const icons = useFileIcons(git, sessionId, signal)
   // The draft lives up here, not inside the box: a commit that fails must not
   // cost the user the message they just wrote.
   const [message, setMessage] = useState('')
@@ -677,8 +716,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * display detail.
    */
   const view: ChangeView = useMemo(
-    () => ({ mode, collapsedDirs, onToggleDir: toggleDir }),
-    [mode, collapsedDirs, toggleDir],
+    () => ({ mode, collapsedDirs, onToggleDir: toggleDir, icons }),
+    [mode, collapsedDirs, toggleDir, icons],
   )
 
   const toggleGroup = useCallback((area: ChangeArea): void => {
