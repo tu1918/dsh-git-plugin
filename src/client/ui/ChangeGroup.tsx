@@ -7,27 +7,41 @@
  * survives a fold, and a bulk action that stays on screen are properties of "a
  * group", not of where it happens to sit.
  *
+ * The rows inside it take one of FR-1.3's two shapes, and the shape is decided
+ * here rather than by the containers, for the same reason: both modes exist in
+ * both containers, and a second copy of this markup is how the two would drift.
+ *
  * @module dsh-git-panel/client/ui/ChangeGroup
  */
 
 import type { ReactNode } from 'react'
 
+import { changeTreeOf, type ChangeTreeNode } from '../../core/change-tree.ts'
 import { pathParts } from '../../core/format.ts'
 import { badgeFor } from '../../core/git-parse.ts'
 import type { ChangeArea, FileChange } from '../../core/types.ts'
 import type { Translate } from './translate.ts'
 import { cls } from './styles.ts'
+import { dirKey, type ChangeView } from './change-view.ts'
 import { CaretGlyph, MinusGlyph, PlusGlyph } from './icons.tsx'
 
 /** One glyph button with a tooltip and an accessible name. */
 export function ToolButton({
   label,
   disabled,
+  pressed,
   onClick,
   children,
 }: {
   readonly label: string
   readonly disabled?: boolean
+  /**
+   * Whether this control is a toggle that is currently on.
+   *
+   * `undefined` means "not a toggle": passing it always would turn every icon
+   * button into a two-state control as far as a screen reader is concerned.
+   */
+  readonly pressed?: boolean
   readonly onClick: () => void
   readonly children: ReactNode
 }): ReactNode {
@@ -37,6 +51,7 @@ export function ToolButton({
       className={cls.tool}
       title={label}
       aria-label={label}
+      aria-pressed={pressed}
       disabled={disabled === true}
       onClick={onClick}
     >
@@ -61,6 +76,7 @@ export function ChangeRow({
   area,
   t,
   busy,
+  showDirectory = true,
   onStage,
   onUnstage,
   onOpen,
@@ -69,6 +85,14 @@ export function ChangeRow({
   readonly area: ChangeArea
   readonly t: Translate
   readonly busy: boolean
+  /**
+   * Whether the row draws the directory part of the path.
+   *
+   * `false` in the tree, where the directories are the nodes above the row and
+   * repeating them on every row would be the same text twice — and, in a narrow
+   * sidebar, the reason the file name itself gets truncated.
+   */
+  readonly showDirectory?: boolean
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
@@ -111,7 +135,7 @@ export function ChangeRow({
         {badge}
       </span>
       <span className={cls.path}>
-        {directory !== '' && <span className={cls.pathDir}>{directory}</span>}
+        {showDirectory && directory !== '' && <span className={cls.pathDir}>{directory}</span>}
         <span className={cls.pathName}>{name}</span>
       </span>
       <span className={cls.rowActions} onClick={(event) => event.stopPropagation()}>
@@ -149,6 +173,102 @@ export interface GroupBatch {
 }
 
 /**
+ * How far one tree level is indented, in CSS pixels.
+ *
+ * Small on purpose: the sidebar is narrow, and the directories that carry the
+ * structure are usually compacted into one node (`core/change-tree.ts`), so a
+ * deep-looking path still costs only one or two levels of indent.
+ */
+const INDENT_PX = 14
+
+/**
+ * One node of a group's tree: a directory's disclosure row, or a change row.
+ *
+ * Indentation is the wrapper's left padding rather than the row's own, so the row
+ * keeps the padding the stylesheet gives every row in both modes — one place owns
+ * "how a row is laid out", and the tree only says how deep it sits.
+ */
+function TreeNodeView({
+  node,
+  area,
+  depth,
+  t,
+  busy,
+  view,
+  onStage,
+  onUnstage,
+  onOpen,
+}: {
+  readonly node: ChangeTreeNode
+  readonly area: ChangeArea
+  readonly depth: number
+  readonly t: Translate
+  readonly busy: boolean
+  readonly view: ChangeView
+  readonly onStage: (paths: readonly string[]) => void
+  readonly onUnstage: (paths: readonly string[]) => void
+  readonly onOpen: (entry: FileChange, area: ChangeArea) => void
+}): ReactNode {
+  const indent = { paddingLeft: `${depth * INDENT_PX}px` }
+
+  if (node.kind === 'file') {
+    return (
+      <div className={cls.treeNode} style={indent} data-tree-file={node.entry.path}>
+        <ChangeRow
+          entry={node.entry}
+          area={area}
+          t={t}
+          busy={busy}
+          showDirectory={false}
+          onStage={onStage}
+          onUnstage={onUnstage}
+          onOpen={onOpen}
+        />
+      </div>
+    )
+  }
+
+  // Keyed by area as well as path: each group builds its own tree (FR-1.1), so
+  // folding `src` in the staged drawer must not fold it in Changes too.
+  const key = dirKey(area, node.path)
+  const folded = view.collapsedDirs.has(key)
+  return (
+    <>
+      <div className={cls.treeNode} style={indent} data-tree-dir={node.path}>
+        <button
+          type="button"
+          className={cls.dirToggle}
+          aria-expanded={!folded}
+          title={node.path}
+          onClick={() => view.onToggleDir(key)}
+        >
+          <CaretGlyph className={cls.groupCaret} />
+          <span className={cls.dirName}>{node.label}</span>
+          {/* The count is what makes a folded directory still informative: "there
+              are 12 changed files in here" is the reason to open it. */}
+          <span className={cls.count}>{node.count}</span>
+        </button>
+      </div>
+      {!folded &&
+        node.children.map((child) => (
+          <TreeNodeView
+            key={child.kind === 'dir' ? `dir:${child.path}` : `file:${child.entry.path}`}
+            node={child}
+            area={area}
+            depth={depth + 1}
+            t={t}
+            busy={busy}
+            view={view}
+            onStage={onStage}
+            onUnstage={onUnstage}
+            onOpen={onOpen}
+          />
+        ))}
+    </>
+  )
+}
+
+/**
  * One group of changes: a disclosure header, its count, its bulk action, and its
  * rows.
  *
@@ -172,6 +292,7 @@ export function Group({
   batch,
   emptyNote,
   collapsed,
+  view,
   onToggle,
   onStage,
   onUnstage,
@@ -192,6 +313,8 @@ export function Group({
   readonly emptyNote?: string
   /** Whether the group's rows are folded away. */
   readonly collapsed: boolean
+  /** FR-1.3: which shape the rows take, and which directories are folded. */
+  readonly view: ChangeView
   /** Fold or unfold this group. */
   readonly onToggle: () => void
   readonly onStage: (paths: readonly string[]) => void
@@ -199,6 +322,10 @@ export function Group({
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
 }): ReactNode {
   if (entries.length === 0 && emptyNote === undefined) return null
+  // Built once per render, and only when it will be drawn: the flat list is a
+  // direct map, so a mode switch is the only thing that pays for the tree, and a
+  // folded group pays for nothing at all.
+  const tree = !collapsed && view.mode === 'tree' ? changeTreeOf(entries) : []
   return (
     <section className={cls.group} data-group={area} data-collapsed={String(collapsed)}>
       <div className={cls.groupHead}>
@@ -242,6 +369,7 @@ export function Group({
         <p className={cls.groupEmpty}>{emptyNote}</p>
       )}
       {!collapsed &&
+        view.mode === 'list' &&
         entries.map((entry) => (
           <ChangeRow
             key={`${area}:${entry.path}`}
@@ -249,6 +377,21 @@ export function Group({
             area={area}
             t={t}
             busy={busy}
+            onStage={onStage}
+            onUnstage={onUnstage}
+            onOpen={onOpen}
+          />
+        ))}
+      {!collapsed &&
+        tree.map((node) => (
+          <TreeNodeView
+            key={node.kind === 'dir' ? `dir:${node.path}` : `file:${node.entry.path}`}
+            node={node}
+            area={area}
+            depth={0}
+            t={t}
+            busy={busy}
+            view={view}
             onStage={onStage}
             onUnstage={onUnstage}
             onOpen={onOpen}

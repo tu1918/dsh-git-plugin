@@ -103,6 +103,8 @@ export const zh = {
   'untracked.resize': '拖动调整「未跟踪的文件」区高度',
   'group.expand': '展开这一类',
   'group.collapse': '收起这一类',
+  'view.tree': '切换为文件树',
+  'view.list': '切换为平铺列表',
 
   'clean.title': '没有未提交的更改',
   'clean.hint': '工作区与 HEAD 一致。',
@@ -244,6 +246,8 @@ export const en: Record<GitPanelKey, string> = {
   'untracked.resize': 'Drag to resize the untracked files',
   'group.expand': 'Expand this group',
   'group.collapse': 'Collapse this group',
+  'view.tree': 'Show as a file tree',
+  'view.list': 'Show as a flat list',
 
   'clean.title': 'No uncommitted changes',
   'clean.hint': 'The working tree matches HEAD.',

@@ -59,6 +59,9 @@ export const cls = {
   groupLabel: `${P}-group-label`,
   count: `${P}-count`,
   groupEmpty: `${P}-group-empty`,
+  treeNode: `${P}-tree-node`,
+  dirToggle: `${P}-dir-toggle`,
+  dirName: `${P}-dir-name`,
   changeDrawer: `${P}-change-drawer`,
   changeBody: `${P}-change-body`,
   groupActions: `${P}-group-actions`,
@@ -603,8 +606,13 @@ export const css = `
 
 /* Keyed off the button's own 'aria-expanded' rather than a data attribute on the
    svg: the glyph components forward only size and className, so an attribute put
-   on them goes nowhere (which is why the history caret never turned). */
-.${cls.groupToggle}[aria-expanded='true'] .${cls.groupCaret} {
+   on them goes nowhere (which is why the history caret never turned).
+
+   The tree's directory rows share this glyph, so they need their own copy of the
+   rule — a caret that never turns is exactly the bug this pair of selectors is
+   here to prevent. */
+.${cls.groupToggle}[aria-expanded='true'] .${cls.groupCaret},
+.${cls.dirToggle}[aria-expanded='true'] .${cls.groupCaret} {
   transform: rotate(90deg);
 }
 
@@ -652,6 +660,45 @@ export const css = `
   padding: 4px 12px 6px 32px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+}
+
+/* ── the tree shape (FR-1.3) ────────────────────────────────────────────── */
+
+/* The wrapper owns the depth: its inline left padding is what indents a node,
+   while the row inside keeps the padding every row has in both modes. One place
+   decides how a row is laid out; the tree only says how deep it sits. */
+.${cls.treeNode} {
+  display: flex;
+  min-width: 0;
+}
+
+.${cls.dirToggle} {
+  display: flex;
+  flex: auto;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.${cls.dirToggle}:hover .${cls.dirName} {
+  color: var(--dsw-alias-label-primary);
+}
+
+.${cls.dirName} {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--dsh-font-mono);
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .${cls.row} {

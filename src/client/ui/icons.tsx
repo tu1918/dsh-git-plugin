@@ -242,6 +242,39 @@ export function SplitGlyph({ size = 13, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * A file tree: nested rows with a disclosure arrow (FR-1.3).
+ *
+ * It draws the layout it selects, like {@link SplitGlyph} does for the diff, so
+ * the toggle is readable without its tooltip.
+ * @param props - Size and class.
+ */
+export function TreeGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M2.6 3.6h4.2M4.6 8h4.2M6.6 12.4h4.2" />
+      <path d="M2.6 3.6v8.8" />
+      <path d="M4.6 8v4.4" />
+    </>,
+  )
+}
+
+/**
+ * A flat list: one row per file, no hierarchy (FR-1.3's other mode).
+ * @param props - Size and class.
+ */
+export function ListGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M2.6 4h10.8M2.6 8h10.8M2.6 12h10.8" />
+    </>,
+  )
+}
+
+/**
  * The panel's spinner, as an inline SVG.
  *
  * The CSS spinner is a styled `span`; this one exists for places that need the

@@ -22,6 +22,7 @@ message, and a commit detail.
 | Area | State |
 |---|---|
 | Change list: staged / changes / untracked / conflicts, git's own status letters | ✅ |
+| That list as a **file tree** — directories fold, single-child chains compact into one row, each directory carries its subtree's file count — or as a flat list; the choice is remembered per user | ✅ |
 | Branch rail: name, detached / unborn / upstream-gone, ↑ahead ↓behind | ✅ |
 | Recent commits: lazy-loaded, paged by look-ahead, pushed/unpushed marker | ✅ |
 | Auto-refresh from `.git/index` + `.git/HEAD` change, pushed over SSE | ✅ |
@@ -69,8 +70,9 @@ them.
 
 ```
 src/core/      pure TypeScript: types, ports, git parsers, argument validation,
-               the commit-scope decision, the unified-diff parser, and the AI
-               commit message's prompt/truncation/cleaning
+               the commit-scope decision, the unified-diff parser, the change
+               list as a file tree, and the AI commit message's
+               prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, change watcher, git directory lookup
   adapter/     the only place the host names DSH (webServer, sessions, logger,
@@ -96,7 +98,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 268 tests && build
+npm run check      # tsc --noEmit && 280 tests && build
 ```
 
 ## Install
@@ -132,6 +134,9 @@ npm test
   line numbers, word-level marks asserted by the text they cover, a whole-line
   replacement earning none, binary and combined (`diff --cc`) output, truncation,
   and the 5000-line fold gate
+- `test/change-tree.test.ts` — the change list as a tree (FR-1.3): nesting,
+  directories before files in git's own byte order, the compaction of a
+  single-child chain and where it must stop, and the per-directory count
 - `test/commit-message.test.ts` — the AI message's pure halves: the truncation
   budget and its line boundary, the prompt's language and its "the diff was cut"
   sentence, and the cleaning rules for what models answer anyway
@@ -155,7 +160,10 @@ npm test
   branch, Escape), the merge bar (continue held while conflicts remain, abort
   armed), the sparkle (offered only with a staged diff, the message landing in the
   box, the truncation note, `no-llm`), the conflict row's label, the commit detail
-  (files, churn, binary, remembered across folds), and the two-stage registration
+  (files, churn, binary, remembered across folds), the file tree (nesting,
+  compaction, the directory caret actually turning, folds remembered per group,
+  the mode switch and its memory, and staging/opening a diff from inside the
+  tree), and the two-stage registration
 
 ## Notes for the next milestone
 

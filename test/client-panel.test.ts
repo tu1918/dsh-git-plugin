@@ -56,6 +56,7 @@ const { act } = await import('react')
 
 const { StatusPanel } = await import('../src/client/ui/StatusPanel.tsx')
 const { cls, STYLE_TAG_ID, installStyles } = await import('../src/client/ui/styles.ts')
+const { DIR_COLLAPSE_KEY, VIEW_MODE_KEY } = await import('../src/client/ui/change-view.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
@@ -536,7 +537,9 @@ describe('StatusPanel rendering', () => {
     ])
   })
 
-  it('splits a path so the file name survives and the directory can clip', async () => {
+  it('splits a path in the flat list, so the file name survives and the directory can clip', async () => {
+    // FR-1.3's other mode. It has to be asked for now: the tree is the default.
+    window.localStorage.setItem(VIEW_MODE_KEY, 'list')
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
     )
@@ -2111,5 +2114,176 @@ describe('the commit detail (FR-3.6)', () => {
     assert.equal(entry.getAttribute('aria-expanded'), 'false')
     await click(entry)
     assert.equal(calls.entries.length, 1)
+  })
+})
+
+/* ── the change list as a file tree (FR-1.3) ────────────────────────────── */
+
+/** The directory row for one path, in one group. */
+function dirNode(container: HTMLElement, area: string, path: string): HTMLElement {
+  return must<HTMLElement>(container, `[data-group="${area}"] [data-tree-dir="${path}"]`)
+}
+
+/** The file row for one path, in one group. */
+function fileNode(container: HTMLElement, area: string, path: string): HTMLElement {
+  return must<HTMLElement>(container, `[data-group="${area}"] [data-tree-file="${path}"]`)
+}
+
+/** The rail's mode toggle: the only icon button that is a two-state control. */
+function modeToggle(container: HTMLElement): HTMLButtonElement {
+  return must<HTMLButtonElement>(container, `.${cls.head} .${cls.tool}[aria-pressed]`)
+}
+
+describe('the file tree (FR-1.3)', () => {
+  it('nests each group’s files under their directories, and opens in that shape', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // FR-1.3 says the tree folds by directory, so a nested path arrives as
+    // directory rows plus a file row — the directory part is no longer repeated
+    // on every row.
+    const deepest = fileNode(container, 'unstaged', 'deep/nested/dir/changed.ts')
+    assert.match(deepest.textContent ?? '', /changed\.ts/)
+    assert.equal(
+      deepest.querySelector(`.${cls.pathDir}`),
+      null,
+      'the tree must not repeat the directory on the file’s own row',
+    )
+    // FR-1.2 still holds: the full path is the row's tooltip.
+    assert.equal(must(deepest, `.${cls.row}`).getAttribute('title'), 'deep/nested/dir/changed.ts')
+
+    // A chain of single-child directories is compacted into one row, which is
+    // what keeps a deep path from spending the sidebar's width on arrows: the
+    // whole chain `deep` → `nested` → `dir` is a single row here, and the file
+    // hangs directly under it.
+    const compacted = dirNode(container, 'unstaged', 'deep/nested/dir')
+    assert.match(compacted.textContent ?? '', /deep\/nested\/dir/)
+    // The row draws the chain, the tooltip and the key carry the real path.
+    assert.equal(
+      must<HTMLButtonElement>(compacted, 'button').getAttribute('title'),
+      'deep/nested/dir',
+    )
+    // The count of everything under it stays visible, folded or not.
+    assert.match(compacted.textContent ?? '', /1/)
+
+    // Indentation is the wrapper's, one step per level: the directory sits at
+    // the group's left edge and the file it holds one step in.
+    assert.equal(compacted.style.paddingLeft, '0px')
+    assert.equal(deepest.style.paddingLeft, '14px')
+
+    // A top-level file has no directory row above it.
+    assert.match(fileNode(container, 'untracked', 'notes.md').textContent ?? '', /notes\.md/)
+    assert.equal(
+      dirNode(container, 'staged', 'src').textContent?.includes('staged.ts'),
+      false,
+      'a directory row names the directory, not its files',
+    )
+  })
+
+  it('folds a directory, and remembers the fold', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const dir = dirNode(container, 'unstaged', 'deep/nested/dir')
+    const toggle = must<HTMLButtonElement>(dir, 'button')
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    // The caret is the only thing that says "this row holds rows". It must
+    // actually turn — the directory rows share the group header's glyph, and a
+    // selector scoped to the wrong button is how this stopped working before.
+    const opened = window.getComputedStyle(must(dir, `.${cls.groupCaret}`)).transform
+    await click(toggle)
+    const closed = window.getComputedStyle(must(dir, `.${cls.groupCaret}`)).transform
+    assert.notEqual(closed, opened, 'the directory caret must turn when it folds')
+
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(container.querySelector('[data-tree-file="deep/nested/dir/changed.ts"]'), null)
+    // The fold is keyed by group AND path: each group builds its own tree, so
+    // folding `deep` in Changes must not fold it in the staged drawer.
+    assert.deepEqual(JSON.parse(window.localStorage.getItem(DIR_COLLAPSE_KEY) ?? '[]'), [
+      'unstaged:deep/nested/dir',
+    ])
+    // The count survives the fold — that number is the reason to open it again.
+    assert.match(dir.textContent ?? '', /1/)
+
+    // A remount reads the fold back, the way a page refresh does.
+    const again = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    assert.equal(
+      must<HTMLButtonElement>(dirNode(again, 'unstaged', 'deep/nested/dir'), 'button').getAttribute(
+        'aria-expanded',
+      ),
+      'false',
+    )
+  })
+
+  it('switches to the flat list and back from the rail, and remembers the choice', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const toggle = modeToggle(container)
+    // The glyph names the mode it would switch TO; the pressed state says which
+    // one is on screen, which is what a screen reader needs to hear.
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true')
+    assert.equal(toggle.getAttribute('title'), 'Show as a flat list')
+    assert.notEqual(container.querySelector('[data-tree-dir]'), null)
+
+    await click(toggle)
+    assert.equal(modeToggle(container).getAttribute('aria-pressed'), 'false')
+    assert.equal(modeToggle(container).getAttribute('title'), 'Show as a file tree')
+    assert.equal(container.querySelector('[data-tree-dir]'), null)
+    // The flat list is the same rows with their directory spans back.
+    const dirs = [...container.querySelectorAll(`.${cls.pathDir}`)].map((n) => n.textContent)
+    assert.ok(dirs.includes('deep/nested/dir/'))
+    assert.equal(window.localStorage.getItem(VIEW_MODE_KEY), 'list')
+
+    // And the choice survives a remount, like the diff layout and the folds.
+    const again = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    assert.equal(again.querySelector('[data-tree-dir]'), null)
+
+    await click(modeToggle(again))
+    assert.equal(window.localStorage.getItem(VIEW_MODE_KEY), 'tree')
+    assert.notEqual(again.querySelector('[data-tree-dir]'), null)
+  })
+
+  it('stages and opens a diff from inside the tree, with the full path', async () => {
+    const calls: ActionLog = { entries: [] }
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          diffCalls,
+          diff: (path, area) => ({
+            ok: true,
+            value: diffFixture({ path, area: area as FileDiff['area'] }),
+          }),
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    // The tree changes how a path is DRAWN, never which path an action carries:
+    // both of these address the file by its repository-relative path (FR-3.1,
+    // FR-2.1).
+    const file = fileNode(container, 'unstaged', 'deep/nested/dir/changed.ts')
+    await click(must(file, `.${cls.tool}`))
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/changed.ts'])
+
+    await click(must(file, `.${cls.row}`))
+    assert.deepEqual(diffCalls, ['worktree:deep/nested/dir/changed.ts@3'])
   })
 })

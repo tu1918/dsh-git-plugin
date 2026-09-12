@@ -23,6 +23,7 @@ import type { ReactNode } from 'react'
 
 import type { ChangeArea, FileChange } from '../../core/types.ts'
 import { Group, type GroupBatch } from './ChangeGroup.tsx'
+import type { ChangeView } from './change-view.ts'
 import { PaneResizer } from './pane-resizer.tsx'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -62,6 +63,8 @@ export interface ChangeGroupPaneProps {
   readonly emptyNote?: string
   /** Whether the group's rows are folded away. */
   readonly collapsed: boolean
+  /** FR-1.3: which shape the rows take, and which directories are folded. */
+  readonly view: ChangeView
   /** Fold or unfold this group. */
   readonly onToggle: () => void
   readonly onStage: (paths: readonly string[]) => void
@@ -83,6 +86,7 @@ export function ChangeGroupPane({
   batch,
   emptyNote,
   collapsed,
+  view,
   onToggle,
   onStage,
   onUnstage,
@@ -112,6 +116,7 @@ export function ChangeGroupPane({
           batch={batch}
           emptyNote={emptyNote}
           collapsed={collapsed}
+          view={view}
           onToggle={onToggle}
           onStage={onStage}
           onUnstage={onUnstage}

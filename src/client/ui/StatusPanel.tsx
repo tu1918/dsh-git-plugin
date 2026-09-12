@@ -41,6 +41,15 @@ import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
 import { BottomPane, type OpenFile } from './BottomPane.tsx'
+import {
+  dirKey,
+  readCollapsedDirs,
+  readViewMode,
+  writeCollapsedDirs,
+  writeViewMode,
+  type ChangeView,
+  type ViewMode,
+} from './change-view.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
@@ -51,10 +60,12 @@ import {
   BranchGlyph,
   CaretGlyph,
   CloseGlyph,
+  ListGlyph,
   PlusGlyph,
   RefreshGlyph,
   RingGlyph,
   SyncGlyph,
+  TreeGlyph,
 } from './icons.tsx'
 
 export type { Translate }
@@ -245,6 +256,8 @@ function BranchRail({
   onSync,
   pickerOpen,
   onTogglePicker,
+  mode,
+  onToggleMode,
 }: {
   readonly branch: BranchInfo
   /**
@@ -271,6 +284,10 @@ function BranchRail({
   readonly pickerOpen: boolean
   /** Fold or unfold the branch picker (FR-4.1). */
   readonly onTogglePicker: () => void
+  /** FR-1.3: which shape the change list is drawn in. */
+  readonly mode: ViewMode
+  /** Switch between the flat list and the file tree. */
+  readonly onToggleMode: () => void
 }): ReactNode {
   const track =
     branch.upstream === null
@@ -340,6 +357,16 @@ function BranchRail({
       >
         <ArrowUpGlyph size={13} />
       </ToolButton>
+      {/* FR-1.3's mode switch, at the end of the rail the way VS Code puts its
+          view actions in the view's title bar. The glyph draws the mode it would
+          switch TO, which is what makes a single button read as a toggle. */}
+      <ToolButton
+        label={mode === 'tree' ? t('view.list') : t('view.tree')}
+        pressed={mode === 'tree'}
+        onClick={onToggleMode}
+      >
+        {mode === 'tree' ? <ListGlyph /> : <TreeGlyph />}
+      </ToolButton>
       <ToolButton label={t('action.refresh')} onClick={onRefresh}>
         {busy ? <span className={cls.spinner} /> : <RefreshGlyph />}
       </ToolButton>
@@ -386,10 +413,44 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // caret). Initialised from storage, written back whenever it changes.
   const [collapsedGroups, setCollapsedGroups] =
     useState<ReadonlySet<ChangeArea>>(readCollapsedGroups)
+  // FR-1.3's shape, and the tree's own folds. Both are preferences, like the
+  // groups above: the mode outlives a render, and a folded directory that came
+  // back on every refresh would not be worth folding.
+  const [mode, setMode] = useState<ViewMode>(readViewMode)
+  const [collapsedDirs, setCollapsedDirs] = useState<ReadonlySet<string>>(readCollapsedDirs)
 
   useEffect(() => {
     writeCollapsedGroups(collapsedGroups)
   }, [collapsedGroups])
+
+  useEffect(() => {
+    writeViewMode(mode)
+  }, [mode])
+
+  useEffect(() => {
+    writeCollapsedDirs(collapsedDirs)
+  }, [collapsedDirs])
+
+  const toggleDir = useCallback((key: string): void => {
+    setCollapsedDirs((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  /**
+   * What every group needs in order to draw the current shape.
+   *
+   * One object rather than three props, so `Group` and the drawers that carry it
+   * take "the view" as one thing instead of growing a parameter per future
+   * display detail.
+   */
+  const view: ChangeView = useMemo(
+    () => ({ mode, collapsedDirs, onToggleDir: toggleDir }),
+    [mode, collapsedDirs, toggleDir],
+  )
 
   const toggleGroup = useCallback((area: ChangeArea): void => {
     setCollapsedGroups((current) => {
@@ -411,6 +472,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setBranchRefusal(null)
     setGenerating(false)
     setAiNote(null)
+    // Neither the mode nor the folded directories are reset here: both are
+    // preferences about how a list is drawn, exactly like the group folds above,
+    // and a fold keyed by path is meaningful in the next repository too
+    // (`node_modules` is folded wherever it appears).
     disarm()
   }, [sessionId, disarm])
 
@@ -663,6 +728,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         onSync={sync}
         pickerOpen={pickerOpen}
         onTogglePicker={() => setPickerOpen((open) => !open)}
+        mode={mode}
+        onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
       />
       {pickerOpen && (
         <BranchPicker
@@ -758,6 +825,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
         emptyNote={t('group.stagedEmpty')}
         collapsed={collapsedGroups.has('staged')}
+        view={view}
         onToggle={() => toggleGroup('staged')}
         onStage={stage}
         onUnstage={unstage}
@@ -802,6 +870,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               collapsed={collapsedGroups.has('conflicted')}
+              view={view}
               onToggle={() => toggleGroup('conflicted')}
               onStage={stage}
               onUnstage={unstage}
@@ -822,6 +891,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               busy={busy || pending}
               batch={{ kind: 'stage', run: () => stage(unstaged.map((entry) => entry.path)) }}
               collapsed={collapsedGroups.has('unstaged')}
+              view={view}
               onToggle={() => toggleGroup('unstaged')}
               onStage={stage}
               onUnstage={unstage}
@@ -836,6 +906,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               busy={busy || pending}
               batch={{ kind: 'stage', run: () => stage(untracked.map((entry) => entry.path)) }}
               collapsed={collapsedGroups.has('untracked')}
+              view={view}
               onToggle={() => toggleGroup('untracked')}
               onStage={stage}
               onUnstage={unstage}
