@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 **四个顺序全部交付、待产品方验收**：顺序 1 行级菜单机制、2 discard、3 undoCommit、4 stash（§10.1）；D20 有意留下的「贮藏后切换」随顺序 4 补回 FR-4.4 的受阻路径。`npm run check` 全绿（395 项测试）。**GUI 观感待人工确认**：宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效 |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 **四个顺序全部交付、待产品方验收**：顺序 1 行级菜单机制、2 discard、3 undoCommit、4 stash（§10.1）；D20 有意留下的「贮藏后切换」随顺序 4 补回 FR-4.4 的受阻路径。`npm run check` 全绿（419 项测试）。**GUI 观感待人工确认**：宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效 |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -134,6 +134,9 @@ discard 与 undoCommit 在 M5a。
 | **D33** | FR-4.4 只说「提供 **贮藏后切换** 快捷项」，没说这一击要不要连未跟踪文件一起收 | 「贮藏后切换」走 `git stash push -u`（**含未跟踪文件**），而列表里的「贮藏当前更改…」表单里那个复选框**默认不勾**（与 git 自己的默认一致） | 两处的承诺不同：表单的承诺是「把工作区收起来」，跟着 git 的默认最不容易让用户意外；捷径的承诺是「让这次切换成立」，而 git 拒绝切换时点的名既可能是已跟踪文件（"Your local changes … would be overwritten"）也可能是未跟踪文件（"The following untracked working tree files would be overwritten"）——只收已跟踪的话，后一种情况下这一击会「按了却没解决」，看起来像坏了。代价是未跟踪文件里与本次切换无关的那些也会进栈；它们没有丢（就在同一层列表里，可以 apply 回来），而通知与审计都点名了这次贮藏 |
 | **D34** | FR-4.4 的受阻路径原先只有 git 的原始输出（M4 的降级，见 D20） | host 给这种拒绝一个**自己的错误码** `dirty-worktree`（`/would be overwritten by (checkout\|merge)/`），面板据此才在失败框旁边长出「贮藏后切换到 {name}」按钮 | 「按错误码分支」是本插件一贯的做法（`not-merged` → 武装成强制删除、`non-fast-forward` → 指向同步）；用文案匹配在客户端判断会把 git 的措辞变成 API。同一个码也覆盖 `stash apply` 被工作区挡住的情况，那里不显示捷径（`op` 不是 `checkout`），但标题会说清是「git 拒绝覆盖本地改动」 |
 | **D35** | 无边框文字控件只有一种样式（`.ghost`，`label-tertiary`） | 拆成两档墨色：`.ghost` 仍是**脚注**（表单里的「取消」、diff 的「折叠」、分组的批量按钮），新增 `.accent` 给**动作**——打开表单的那两条（「新建分支…」「贮藏当前更改…」）、贮藏条目的「应用 / 弹出」、受阻切换的「贮藏后切换到 X」。动作取 `--dsw-alias-link`（DSH 自己给可点击文字用的 token，皮肤可覆盖），hover 仍是全局面板同一条淡底 | 产品方验收时实测原话：「『新建分支』『贮藏当前更改』这两个可以交互的纯文字……我都不知道这两个可以点」。同一份文档已经栽过一次同类问题（D19：hover-only 的批量按钮在窄侧栏里等于不存在）——可发现性只能由**静态外观**承担，不能指望用户去试探。没有把 `.ghost` 整体提色，是因为它同时服务「取消 / 折叠」这类真的次要的控件：全提亮会让每个表单里都多出一个看起来像主按钮的控件 |
+| **D36** | FR-1.2 只要求「每个文件显示状态徽标（M/A/D/R/U/?）+ 相对路径」，没规定徽标在行的哪一端 | **行内顺序改成** `[复选框][类型图标][路径][hover 按钮列][状态徽标]`：徽标落在**行的最右端**，自成一列（文件变更状态列），字母因此在一列里对齐；它原来占的前导位置改放**文件类型图标**——`core/file-kind.ts` 的 `fileKindOf`（纯函数，路径进、类型出）+ `ui/icons.tsx` 的 `FileKindGlyph`（统一的纸张轮廓 + 每种一类小记号），共 9 类：code（`{ }`）/ markup（标签）/ style（`#`）/ data（网格）/ image（地平线 + 太阳）/ doc（三行）/ shell（`>_`）/ config（滑杆）/ 普通文件（唯一的纸张轮廓）。**每个类型各画各的、不共用外框**（第一版九类都画在同一张纸上，产品方实测原话：「乍一看都一样」）。徽标补上 `title`（「已修改」「未跟踪」…），因为它离文件名远了；分组标题的右内边距 12px → 32px（= 12 + 8 + 12），用来补出这一列，好让「全部暂存」仍与行的 `+`/`−` 同列 | 产品方原话：「我想把文件行的变更状态放在最后……」，随后在验收中定稿为「放在操作的右侧。文件行的最右侧，作为文件变更状态区域」。**两处取舍**：① 状态列抢在按钮列右边，代价是分组标题必须自己补出这 20px，否则两列对不齐（`.dgp-row` / `.dgp-group-head` 的注释各记了一半）；② 图标**单色**（`label-tertiary`），只靠形状区分——DSH 的规矩是「颜色全走 token」，而 token 里没有「每种语言一个颜色」，写死色值会毁掉皮肤；想要 VS Code 那种彩色图标，得先有对应 token |
+| **D37** | FR-1.2 写的徽标字母是 `M/A/D/R/U/?`（git 自己的记号） | 徽标用**状态的英文首字母**，并照 VS Code 给冲突一个字母：未跟踪 `?` → **`U`**，冲突（unmerged）→ **`!`**。字母表于是是 `M/T/A/D/R/C/U/!`（`core/git-parse.ts` 的 `BadgeLetter`），**一个字母一个状态**，徽标不再需要「读它所在的分组」才能解释；颜色与 tooltip 都直接按字母取。中间实现过一版「`U` 兼指未跟踪与冲突 + `data-state` 分开配色」，定稿为 `!` 后那一层（`ChangeState`/`badgeStateOf`/`data-state`）已删除 | 产品方先要求「『?』改成『U』。都用状态的英文首字母」，随后要求「看 vscode 是怎么处理的」。**实测本机 VS Code**（`/mnt/d/codes/Microsoft VS Code/*/resources/app/extensions/git/dist/main.js` 的 `getStatusLetter` / `getStatusText` / `getStatusColor`）：字母是 `M/T/A/D/R/C/U/!`，**未跟踪 = `U`、冲突 = `!`**；冲突 tooltip 按 7 种细分（`Conflict: Both Modified` …）；`strikeThrough` 对删除与三种「被删」冲突为真；staged 行另用 `stageModifiedResourceForeground` / `stageDeletedResourceForeground`。冲突只能取 `!`——`C` 已被 copied 占用，`M`/`U` 也已名花有主。**没有跟的两处**：① VS Code 把字母画在文件名的标签里（workbench 的 SCM 行模板是 `[icon] label · .actions · .decoration-icon`），即字母在操作按钮**左边**；产品方选择保留「状态列贴在行最右、操作在它左边」（见 D36）；② 它的重命名/复制用偏绿的 `renamedResourceForeground`，我们仍用语义蓝（DSH 的 token 里没有那套装饰色） |
+| **D38** | FR-1.2 的内置 9 类图标是代码里的，没有配置面 | 图标映射改成**用户可配**：`$DSH_HOME/git-panel-icons.yml`（可用 `config.fileIconsPath` 改）里一行一个 `扩展名: SVG 文件路径`。host 侧新增 `core/icon-config.ts`（YAML 子集解析器，纯函数）+ `host/file-icons.ts`（读文件、校验、按 mtime+size 缓存、按需重读），路由新增 `GET /git-panel/fileIcons` 一次把**已读到的** SVG 全量下发；客户端 `ui/file-icons.ts` 把每个文档转成 `data:` URL，行内按扩展名命中就用 `<img>` 画、否则回落内置 glyph（`customIconFor` 一条规则） | 产品方要求「改成用户可配的映射，用 yml 配置，后缀为 key，path 为 value」。**四处有意选择**：① **独立文件而不是塞进 profile patch**（产品方选定）——路径仍可由 `Config.fileIconsPath` 覆盖，测试与特殊部署都能指；默认 `$DSH_HOME/git-panel-icons.yml`，`~/` 会展开。② **不引 YAML 依赖**，手写只认「一行一个 `ext: path`、`#` 注释、引号值」的子集：需要的是扁平字符串映射，引入解析器（并给 core 的零依赖守卫开白名单，见 D12）换来的是这个文件用不上的锚点/嵌套/多行。③ **浏览器只被下发 SVG 文本、自己转 `data:` URL 交给 `<img>`**：图片是静态上下文（脚本与外链都不执行），配置里的文件因此永远不进入面板 DOM，也就没有 `dangerouslySetInnerHTML` + 净化器这一层；一次请求带全部图标，避免「一行一条请求」。④ **读得到就替换、读不到就回落**：限制 64 KiB/个、64 个、必须含 `<svg`，每条被拒绝的路径都在 host 日志里说明原因——图标静默缺失是最难查的那种失败 |
 
 
 ---
@@ -237,6 +240,7 @@ discard 与 undoCommit 在 M5a。
   让浏览器发出请求，但不能让它声称本站源。
 - **参数形状**（D11）：路径禁绝对/`..`/`.git`，消息禁空与 NUL；所有 git 调用都用
   参数数组 + `--` 分隔，无 shell 插值。
+- **配置里的图标**（D38）：浏览器拿到的 SVG 只来自它**没有**参与指定的地方——图标路径在 host 自己的配置文件里，客户端只带 session id；下发前校验「像 SVG / ≤64 KiB / ≤64 个」，并且只以 `data:` URL 交给 `<img>`（图片是静态上下文，脚本与外链都不执行），配置里的文件因此不进入面板 DOM。
 - **审计日志**：每个写操作记一行（`stage`/`unstage` 记路径数，`commit` 记
   short oid 与 subject，`push`/`pull` 记分支与仓库根，`stash push`/`apply`/`pop`/`drop`
   记选择器、id 与仓库根——drop 还记 subject，因为条目随后就从列表里消失了）。
@@ -545,6 +549,19 @@ FR-6.2 的四个动作（存 / 列表 / 应用 / 删除）加 D20 欠下的那�
 | `ui/error-copy.ts` + `locales.ts` | `dirty-worktree` 有自己的标题（「git 拒绝覆盖本地改动」），git 的原始输出仍作为 detail；+27 键（中英）覆盖贮藏按钮、层、表单、四个动作与三种通知、捷径文案 |
 | `styles.ts` 的两档墨色（D35） | 新增 `cls.accent`：`--dsw-alias-link` + 全局面板同一条 hover 淡底，用于「新建分支…」「贮藏当前更改…」、贮藏条目的「应用 / 弹出」与「贮藏后切换到 X」；`.ghost` 保持 `label-tertiary` 只服务脚注（表单「取消」、diff「折叠」、分组批量按钮）。产品方验收时反馈：「这两个可以交互的纯文字……我都不知道这两个可以点」 |
 | 测试 | +30 项（395 总计）：core 6 项（`parseStashList` 三段真实字节格式 + 空栈 + 多行/残缺记录；`validateStashMessage` 三类形状）；服务层 12 项真仓库（带说明贮藏并列出、未跟踪只在要求时收、已暂存与未暂存一并收走且两侧干净、空工作区拒绝、冲突合并中被 git 拒绝且不动冲突现场、apply 保留条目 / pop 删条目、**按 id 应用位移过的栈**、过期 id 拒绝、被本地改动挡住报 `dirty-worktree`、pop 冲突保留条目、drop 审计、非法 id 不发 git）；路由 2 项（GET 栈 + POST 405；三个写路由走通、GET 405、缺 id 走信封）；客户端 10 项（从状态栏打开并列出、表单带说明与未跟踪选项、按 id 应用/弹出、删除先武装、空栈提示、两档墨色：开表单的那两条是动作而表单的「取消」仍是脚注；FR-4.4：受阻后出现捷径并「先贮藏再切换」、重试成功后的通知点名分支、其它原因不给捷径） |
+
+### 验收期改动：文件行的图标与徽标（2026-09-12，产品方提出）
+
+不属于任何 FR 的新增，是验收时对 FR-1.2 那一行的排版反馈（见 D36）。
+
+| 落点 | 内容 |
+|---|---|
+| `core/file-kind.ts`（新） | 纯函数 `fileKindOf(path)`：取最后一段路径名，先查按全名的表（`Dockerfile`/`Makefile`/`.gitignore`/`.env.local`/`LICENSE`… 这些的意义不在扩展名里），再查按扩展名的表；`.gitignore` 那种「唯一的点在开头」不算扩展名，认不出来就是 `file`（普通文件），不猜。**加类型只动两处**：`FILE_KINDS`（唯一的清单，`FileKind` union 由它派生）加一个名字 + `ui/icons.tsx` 的 `FILE_MARKS` 加一个记号——漏了记号是编译错误；而「哪些扩展名归到它」只是 `BY_EXTENSION` 里的一行。要上色也不用改 TS：行上的 `data-kind` 已经写出去了，加一条 `[data-kind='x']` 的 CSS 即可 |
+| `ui/icons.tsx` | 新增 `FileKindGlyph`：**每个类型各画各的记号，不共用外框**，画满 16×16 的 3–13 区间：code（`{ }` 花括号，左在左、右在右）、markup（标签）、style（`#`）、data（2×2 网格）、image（地平线 + 太阳）、doc（三行长文）、shell（`>_`）、config（两条滑杆 + 旋钮）、file（唯一的纸张轮廓）。第一版九类都画在同一张纸上，产品方实测「乍一看都一样」，据此重画 |
+| 图标映射可配（D38）：`core/icon-config.ts`（新）+ `host/file-icons.ts`（新）+ `GET /git-panel/fileIcons` + `ui/file-icons.ts`（新） | 一行一个 `扩展名: SVG 路径`（默认 `$DSH_HOME/git-panel-icons.yml`，`Config.fileIconsPath` 可改）；host 解析、校验（像 SVG / ≤64 KiB / ≤64 项 / 绝对路径或 `~/`）、按 mtime+size 缓存并按需重读、全量下发；客户端转 `data:` URL 用 `<img>` 画，命不中回落内置 glyph |
+| `ui/ChangeGroup.tsx` + `styles.ts` + `core/git-parse.ts` | 徽标字母改成「状态的英文首字母 + VS Code 的冲突记号」：未跟踪 `?` → `U`、冲突 → `!`（`BadgeLetter` = `M/T/A/D/R/C/U/!`，一字母一状态，配色与 tooltip 都按字母取）；`ChangeRow` 的子元素顺序变成 `[复选框][类型图标][路径][hover 按钮列][状态徽标]`——状态是**行的最右端、操作右侧**的自成一列，字母沿列表纵向对齐；徽标补 `title`（`STATUS_COPY`：字母 → 译文键，键写错是编译错误），因为字母离文件名远了；新增 `.dgp-file-icon`（14px 定宽、`label-tertiary`）；分组标题的右内边距 12px → 32px（= 12 + 8 + 12，补出状态列），让「全部暂存」仍与行的 `+`/`−` 同列；空分组那句提示的缩进从 54px 改成 56px（= 12 + 14 + 8 + 14 + 8，跟的是新的前导列） |
+| `locales.ts` | +9 键（中英）：`status.modified` / `typeChanged` / `added` / `deleted` / `renamed` / `copied` / `unmerged` / `untracked` / `unchanged` |
+| 测试 | +24 项（419 总计）：`file-kind.test.ts` 8 项（只取最后一段、五类各取一个、大小写不敏感、按全名认得的那些、认不出时是普通文件、`.eslintrc.json` 与 `.gitignore` 的区别，以及图标键与命中规则）；`badgeFor` 2 项（未跟踪是 `U` 而不是 git 的 `?`；冲突一律 `!`，且 pair 里的 `?` 永远不会漏到徽标上）；`icon-config.test.ts` 5 项（点号可选/大小写、注释与空行、`#` 属于路径 vs 注释、后写的键覆盖先写的、坏行各自一句）；`file-icons.test.ts` 3 项（默认路径随 `$DSH_HOME` 或家目录、`~/` 展开、图标改过之后重读不靠重启）；路由 2 项（只下发读得到的 SVG、其余四种原因逐条进日志；没配置就是空映射）；客户端 4 项（行的子元素顺序、徽标字母与 tooltip、9 个类型互不相同且除回落类型外都不画那张纸、配置的图标按扩展名替换内置 glyph 且一次挂载只读一次） |
 
 ### 10.2 M5b（M5a 验收之后）
 

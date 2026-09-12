@@ -21,7 +21,7 @@ message, and a commit detail.
 
 | Area | State |
 |---|---|
-| Change list: staged / changes / untracked / conflicts, git's own status letters | ✅ |
+| Change list: staged / changes / untracked / conflicts. Each row leads with a glyph for what the file IS (code, markup, stylesheet, data, image, prose, shell, settings, or a plain page), and its own right-hand column carries the status letter, which is the English initial of the state (`U` for untracked) with VS Code's `!` for a conflict, plus the meaning as a tooltip | ✅ |
 | That list as a **file tree** — directories fold, single-child chains compact into one row, each directory carries its subtree's file count — or as a flat list; the choice is remembered per user | ✅ |
 | Branch rail: name, detached / unborn / upstream-gone, ↑ahead ↓behind | ✅ |
 | Recent commits: paged by look-ahead, pushed/unpushed marker, read only while its tab is showing | ✅ |
@@ -109,7 +109,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 395 tests && build
+npm run check      # tsc --noEmit && 419 tests && build
 ```
 
 ## Install
@@ -123,6 +123,40 @@ dsh plugin --profile web add link:/absolute/path/to/dsh-git-plugin
 ```
 
 The panel appears through the right sidebar's **＋** control as "Git changes".
+
+## Custom file-type icons
+
+Each change row leads with a glyph for what the file IS: nine built-in kinds
+(code, markup, stylesheet, data, image, prose, shell, settings, or a plain page).
+A deployment can replace any of them per extension with its own SVG, by writing a
+small map at **`$DSH_HOME/git-panel-icons.yml`** (or wherever
+`config.fileIconsPath` points):
+
+```yaml
+# extension: path to an SVG file
+ts: ~/icons/typescript.svg
+.tsx: /home/me/icons/tsx.svg   # the leading dot is optional
+md: ~/icons/markdown.svg
+```
+
+Rules, all of them deliberate:
+
+- **Keys are extensions only** (case-insensitive, with or without the dot), and
+  matching is on the last dot of the file name. A name like `Dockerfile` keeps its
+  built-in glyph.
+- **Values are absolute paths** (`~/…` is expanded). A relative path is refused,
+  because there is no meaningful base to resolve it against.
+- **The file must be an SVG**, at most 64 KiB, and the map at most 64 entries.
+- Everything else keeps its **built-in glyph**, and every line that could not be
+  used is logged with the reason (`icon for .md is not an SVG document: …`) — a
+  silently missing icon is the one failure that is hard to debug.
+- The map is read **per panel mount**, so editing it (or an icon) and reloading the
+  panel is enough; nothing has to restart.
+- The SVG is handed to the browser as an image (`data:` URL), never injected into
+  the panel's DOM, so a configured file cannot run or fetch anything.
+
+Lines may be commented with `#`; quote a value (`'…'` or `"…"`) when the path
+itself contains a ` #` or leading/trailing spaces.
 
 ## See it working
 
