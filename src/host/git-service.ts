@@ -39,7 +39,7 @@ import type {
   BranchRef,
   CommitDetail,
   CommitInfo,
-  DiffArea,
+  DiffTarget,
   FileChange,
   FileDiff,
   GeneratedMessage,
@@ -670,13 +670,22 @@ export function createGitService(
   }
 
   /**
-   * Read one file's diff (FR-2).
+   * Read one file's diff (FR-2, FR-7.2).
    *
    * Which comparison to make is the caller's decision but the *shape* of the
    * answer is not: `index` diffs the index against HEAD (`--cached`), `worktree`
    * diffs the working tree against the index, and a path git does not track at
    * all is asked for a second time as a diff against nothing, because FR-2.2
    * wants a new file shown as one whole addition rather than as "no changes".
+   *
+   * A `commit` target is FR-7.2's drill-down and a different kind of question —
+   * history, not the working tree — so it takes its own path: `git show <hash> --
+   * <path>`, with the commit header suppressed (`--format=`) so the byte budget
+   * buys diff rather than a message the view does not draw. `-m --first-parent`
+   * is passed for every commit, not only merges: it is inert on a non-merge
+   * (git documents `-m` as ignored there) and on a merge it selects the same
+   * first-parent diff `showCommit` counts its numstat against, so the file list
+   * and the file's diff can never disagree about what the commit did.
    *
    * The command is pinned to a format the parser can read: git's user-level diff
    * configuration is deliberately excluded (`--no-ext-diff`, `--no-textconv`),
@@ -685,23 +694,28 @@ export function createGitService(
    * to be refusing to render (FR-2.5).
    * @param sessionId - Session whose repository to read from.
    * @param path - Repo-relative path from the browser.
-   * @param area - Which comparison to make.
+   * @param target - Which comparison to make, and the revision it is against.
    * @param contextLines - Context per hunk; clamped, never rejected.
    * @returns The diff, or the failure that kept git from producing one.
    */
   async function diffPath(
     sessionId: string,
     path: string,
-    area: DiffArea,
+    target: DiffTarget,
     contextLines: number,
   ): Promise<Result<FileDiff>> {
     const accepted = validatePaths([path])
     if (!accepted.ok) return accepted
-    const target = accepted.value[0]
-    if (target === undefined) return fail('bad-request', 'a path is required')
-    if (area !== 'worktree' && area !== 'index') {
+    const file = accepted.value[0]
+    if (file === undefined) return fail('bad-request', 'a path is required')
+    const area = target.area
+    if (area !== 'worktree' && area !== 'index' && area !== 'commit') {
       return fail('bad-request', `unknown diff area: ${String(area)}`)
     }
+    // Validated before any git call and independently of the client's own
+    // reading: a hand-written request must not be able to hand git an argument.
+    const revision = area === 'commit' ? validateHash(target.hash) : null
+    if (revision !== null && !revision.ok) return revision
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
 
@@ -709,19 +723,28 @@ export function createGitService(
       Number.isSafeInteger(contextLines) && contextLines >= 0
         ? Math.min(contextLines, MAX_CONTEXT_LINES)
         : DEFAULT_CONTEXT_LINES
-    const format = ['--no-color', '--no-ext-diff', '--no-textconv', `--unified=${context}`, '--']
+    const format = ['--no-color', '--no-ext-diff', '--no-textconv', `--unified=${context}`]
     const parsed = (text: string, truncated: boolean): Result<FileDiff> => ({
       ok: true,
-      value: parseUnifiedDiff(text, { path: target, area, truncated }),
+      value: parseUnifiedDiff(text, { path: file, area, truncated }),
     })
 
+    if (revision !== null) {
+      const shown = await run(
+        ['show', '--format=', ...format, '-m', '--first-parent', revision.value, '--', file],
+        root.value,
+      )
+      if (!shown.ok) return shown
+      return parsed(shown.value.stdout, shown.value.truncated)
+    }
+
     if (area === 'index') {
-      const staged = await run(['diff', '--cached', ...format, target], root.value)
+      const staged = await run(['diff', '--cached', ...format, '--', file], root.value)
       if (!staged.ok) return staged
       return parsed(staged.value.stdout, staged.value.truncated)
     }
 
-    const worktree = await run(['diff', ...format, target], root.value)
+    const worktree = await run(['diff', ...format, '--', file], root.value)
     if (!worktree.ok) return worktree
     if (worktree.value.stdout !== '') {
       return parsed(worktree.value.stdout, worktree.value.truncated)
@@ -731,13 +754,13 @@ export function createGitService(
     // path is unchanged in the working tree, or git does not track it. The index
     // answers that question directly, and costs a call only in the empty case.
     const tracked = await runner.run(
-      ['ls-files', '--error-unmatch', '--', target],
+      ['ls-files', '--error-unmatch', '--', file],
       options(root.value, false),
     )
     if (tracked.code === 0) return parsed('', false)
 
     const fresh = await runner.run(
-      ['diff', '--no-index', ...format, '/dev/null', target],
+      ['diff', '--no-index', ...format, '--', '/dev/null', file],
       options(root.value, false),
     )
     if (fresh.spawnFailed) {

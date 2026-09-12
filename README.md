@@ -57,6 +57,7 @@ message, and a commit detail.
 | Undo the newest commit (FR-3.8): the newest history row's menu carries one armed entry whose confirmation says which undo is coming — an unpublished commit is reset (`--mixed`, its changes return to the working tree), a published one is reverted (a new commit; history is never rewritten). The host re-resolves HEAD and re-asks the pushed question at execution time, so a stale row is refused rather than silently undoing a commit nobody pointed at | ✅ |
 | The stash (FR-6.2), opened from the rail like the branch list: save the working tree (with an optional label, and untracked files only if you ask for them), read the stack, apply or pop an entry, or drop one. Entries are addressed by commit id rather than by `stash@{n}`, so a stack another window shifted cannot be acted on at the wrong position; dropping is the one irreversible action here and takes two clicks | ✅ |
 | A switch git refuses because the working tree is in the way (FR-4.4) shows git's multi-line refusal and offers "stash, then switch to …": one click stashes (untracked files included, because those are exactly what git sometimes names) and retries the very switch that was blocked | ✅ |
+| Drill into one file of a commit (FR-7.2): every row in a commit's file list is a button that opens that file as the commit changed it, in the same bottom diff tab a change row uses — `git show <hash> -m --first-parent -- <path>`, read against the revision rather than the working tree, so an uncommitted edit to the same file cannot appear in it. The reading follows moved refs only, and it is not swept away when the file is absent from the change list | ✅ |
 | Commit graph, rewriting a commit (drop/squash/reset) | ⏳ M5b |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
@@ -109,7 +110,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 419 tests && build
+npm run check      # tsc --noEmit && 428 tests && build
 ```
 
 ## Install

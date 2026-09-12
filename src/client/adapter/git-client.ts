@@ -154,8 +154,15 @@ export function createGitRemoteClient(): GitRemoteClient {
     // The host's own parameter names, not the panel's: `path`/`area`/`context`
     // are what `host/routes.ts` reads, and the `area` value is the core's
     // `DiffArea` verbatim so no translation table can drift between the halves.
-    diff: (sessionId, path, area, contextLines, signal) =>
-      request<FileDiff>('/diff', { session: sessionId, path, area, context: contextLines }, signal),
+    // A commit target also sends the revision it is read against (FR-7.2).
+    diff: (sessionId, path, target, contextLines, signal) =>
+      request<FileDiff>(
+        '/diff',
+        target.area === 'commit'
+          ? { session: sessionId, path, area: target.area, hash: target.hash, context: contextLines }
+          : { session: sessionId, path, area: target.area, context: contextLines },
+        signal,
+      ),
 
     stage: (sessionId, paths, signal) =>
       mutate<OperationReport>('/stage', { session: sessionId, paths }, signal),

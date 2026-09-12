@@ -1,6 +1,10 @@
 /**
  * The bottom pane: one region, two tabs — the recent commits and the diff of the
- * file the change list selected.
+ * file that was opened.
+ *
+ * "Opened" covers both ways in: a change row (FR-2.1), and one file of a commit
+ * read against that commit (FR-7.2). They are the same kind of reading — one
+ * file's changes — so they share the tab rather than each growing a surface.
  *
  * ## Why tabs instead of a stacked diff
  *
@@ -56,8 +60,9 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { pathParts } from '../../core/format.ts'
+import { diffTargetKey } from '../../core/diff-target.ts'
 import type { GitRemoteClient } from '../../core/ports.ts'
-import type { CommitInfo, DiffArea } from '../../core/types.ts'
+import type { CommitInfo, DiffTarget } from '../../core/types.ts'
 import { readBottomPane, writeBottomPane } from './bottom-view.ts'
 import { DOCK_MIN_HEIGHT, DOCK_RESERVED } from './panel-layout.ts'
 import { DiffPane } from './DiffView.tsx'
@@ -70,12 +75,16 @@ import { CloseGlyph } from './icons.tsx'
 /** Which tab of the bottom pane is showing. */
 export type BottomTab = 'history' | 'diff'
 
-/** One change-list row whose diff is open. */
+/** One change-list row or commit file whose diff is open. */
 export interface OpenFile {
   /** Repo-relative path. */
   readonly path: string
-  /** Which comparison the row stands for (FR-2.2). */
-  readonly area: DiffArea
+  /**
+   * Which comparison the row stands for (FR-2.2), or the commit FR-7.2 drilled
+   * into. Both shapes of the panel's diff live in this one tab, so the target
+   * travels with the path rather than the pane growing a second mode.
+   */
+  readonly target: DiffTarget
 }
 
 /** What the pane is handed. */
@@ -99,6 +108,16 @@ export interface BottomPaneProps {
    * confirmation and the action feedback both live there.
    */
   readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
+  /**
+   * Open one file of a commit as that commit changed it (FR-7.2).
+   *
+   * Required, unlike the menu above it: this is the drill-down FR-7.2 asks for,
+   * and the history panel's file rows are buttons exactly because someone can
+   * always answer them. Owned by the panel above for the same reason the menu is
+   * — opening a diff means closing the layers the rail owns, and this pane is not
+   * where they live.
+   */
+  readonly onOpenCommitFile: (commit: CommitInfo, path: string) => void
 }
 
 /**
@@ -114,6 +133,7 @@ export function BottomPane({
   openFile,
   onCloseDiff,
   onCommitMenu,
+  onOpenCommitFile,
 }: BottomPaneProps): ReactNode {
   /**
    * The active tab, which is also whether the pane is open: `null` is the strip.
@@ -258,6 +278,7 @@ export function BottomPane({
               signal={signal}
               active={expanded && shown === 'history'}
               onCommitMenu={onCommitMenu}
+              onOpenCommitFile={onOpenCommitFile}
             />
           </div>
           {openFile !== null && (
@@ -265,10 +286,10 @@ export function BottomPane({
               <DiffPane
                 // Keyed by target so switching files remounts the pane: a fold or
                 // a layout read must not leak from the file that was open before.
-                key={`${openFile.path}\u0000${openFile.area}`}
+                key={`${openFile.path}\u0000${diffTargetKey(openFile.target)}`}
                 sessionId={sessionId}
                 path={openFile.path}
-                area={openFile.area}
+                target={openFile.target}
                 git={git}
                 t={t}
                 signal={signal}

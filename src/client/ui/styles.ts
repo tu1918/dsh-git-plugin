@@ -1638,11 +1638,35 @@ export const css = `
   font-size: 11px;
 }
 
+/* One file of the selected commit: the row IS the button that opens it as that
+   commit changed it (FR-7.2), so it carries the reset and the hover band the
+   commit rows above it carry — the hot zone and the band are the same rectangle
+   here too. The 6px band is pulled out of the detail's own 12px padding with a
+   negative margin, so the path stays aligned with the header above it while the
+   clickable area reaches past the text. */
 .${cls.commitFile} {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 8px;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.${cls.commitFile}:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.${cls.commitFile}:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
 }
 
 .${cls.commitFilePath} {

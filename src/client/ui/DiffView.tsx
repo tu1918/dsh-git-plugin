@@ -29,8 +29,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { pathParts } from '../../core/format.ts'
+import { diffTargetKey } from '../../core/diff-target.ts'
 import type { GitPanelError, GitRemoteClient } from '../../core/ports.ts'
-import type { DiffArea, DiffHunk, DiffLine, FileDiff } from '../../core/types.ts'
+import type { DiffHunk, DiffLine, DiffTarget, FileDiff } from '../../core/types.ts'
 import { cls } from './styles.ts'
 import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
@@ -446,8 +447,8 @@ export interface DiffPaneProps {
   readonly sessionId: string
   /** Repo-relative path to draw. */
   readonly path: string
-  /** Which comparison to ask for (FR-2.2). */
-  readonly area: DiffArea
+  /** Which comparison to ask for, and the revision it is against (FR-2.2, FR-7.2). */
+  readonly target: DiffTarget
   /** The host-facing git client. */
   readonly git: GitRemoteClient
   /** The panel's copy. */
@@ -493,7 +494,7 @@ function useEscapeToClose(onClose: () => void): void {
 export function DiffPane({
   sessionId,
   path,
-  area,
+  target,
   git,
   t,
   signal,
@@ -510,19 +511,34 @@ export function DiffPane({
    * diff a user is reading refreshes itself under the agent's next write, and it
    * does so without this pane knowing what a "report from the git state probe"
    * is. Any kind counts — a file change or a stage both move what this shows.
+   *
+   * A COMMIT diff is the exception, and it is a real one: `git show <hash> -- f`
+   * does not change when the agent writes `f`, so subscribing to every kind would
+   * spend a process per keystroke on a reading that cannot go stale. Only a moved
+   * ref — a commit, reset, amend or fetch — can change what a commit diff says,
+   * so that is the one topic it follows.
    */
-  const change = useRepoChange()
+  const anyChange = useRepoChange()
+  const refsChange = useRepoChange('refs')
+  const change = target.area === 'commit' ? refsChange : anyChange
+  /** The revision a commit target names; `''` for the working comparisons. */
+  const revision = target.area === 'commit' ? target.hash : ''
+  const area = target.area
 
   // A new file starts folded, whatever the last one was: FR-2.6's budget is per
   // file, and remembering "expanded" across files would unfold the next one
-  // without asking.
-  const [target, setTarget] = useState(`${path}\u0000${area}`)
-  const nextTarget = `${path}\u0000${area}`
-  if (target !== nextTarget) {
-    setTarget(nextTarget)
+  // without asking. The reset covers a switch of comparison too — the same path
+  // as a commit diff and as a working-tree diff are two different readings.
+  const [shown, setShown] = useState(`${path}\u0000${diffTargetKey(target)}`)
+  const nextShown = `${path}\u0000${diffTargetKey(target)}`
+  if (shown !== nextShown) {
+    setShown(nextShown)
     setExpanded(false)
   }
 
+  // The target object is rebuilt by a caller every render, so the effect below is
+  // keyed on its two primitives (the comparison and the revision) rather than on
+  // its identity: a new object with the same content must not re-read.
   useEffect(() => {
     const controller = new AbortController()
     const abort = (): void => controller.abort()
@@ -532,7 +548,7 @@ export function DiffPane({
     let live = true
     setBusy(true)
     void (async () => {
-      const result = await git.diff(sessionId, path, area, CONTEXT_LINES, controller.signal)
+      const result = await git.diff(sessionId, path, target, CONTEXT_LINES, controller.signal)
       if (!live) return
       setBusy(false)
       if (result.ok) {
@@ -549,7 +565,7 @@ export function DiffPane({
       signal?.removeEventListener('abort', abort)
       controller.abort()
     }
-  }, [git, sessionId, path, area, signal, change, reloadNonce])
+  }, [git, sessionId, path, area, revision, signal, change, reloadNonce])
 
   const onLayout = useCallback((next: DiffLayout): void => {
     setLayout(next)

@@ -293,15 +293,33 @@ export type LogLevel = 'info' | 'warn' | 'error'
 /* ── diff viewing (FR-2) ─────────────────────────────────────────────────── */
 
 /**
- * Which two things a diff compares (FR-2.2).
+ * Which comparison produced a diff (FR-2.2, FR-7.2).
  *
- * The two values are the two states git can diff against without a second
- * revision: the index (staged) and the working tree. An untracked path is a
- * worktree diff of "nothing" against the file, which the host renders as an
- * all-added diff rather than a third area — the panel's own group already says
- * the file is untracked, so the wire has no third case to carry.
+ * `worktree` and `index` are the two states git can diff without a second
+ * revision. An untracked path is a worktree diff of "nothing" against the file,
+ * which the host renders as an all-added diff rather than a third area — the
+ * panel's own group already says the file is untracked, so the wire has no third
+ * case to carry.
+ *
+ * `commit` is FR-7.2's drill-down: one file as a particular commit changed it.
+ * This is the LABEL a finished diff carries; the request that asks for one is a
+ * {@link DiffTarget}, whose commit form also names the revision — "the commit"
+ * is not a state a path can be compared against without being told which one.
  */
-export type DiffArea = 'worktree' | 'index'
+export type DiffArea = 'worktree' | 'index' | 'commit'
+
+/**
+ * What one diff is asked for.
+ *
+ * The two working comparisons address nothing but the path and the index; a
+ * commit comparison addresses a revision as well, so the hash lives IN the
+ * target rather than in a second, optional parameter — a commit diff without a
+ * commit is not a value this model should be able to represent.
+ */
+export type DiffTarget =
+  | { readonly area: 'worktree' }
+  | { readonly area: 'index' }
+  | { readonly area: 'commit'; readonly hash: string }
 
 /** A half-open `[start, end)` range of characters inside one line's text. */
 export interface DiffSpan {

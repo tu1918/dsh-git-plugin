@@ -51,21 +51,36 @@ const MAX_LOG_ROWS = 500
 const CLOCK_TICK_MS = 30_000
 
 /**
- * One file inside a commit (FR-3.6).
+ * One file inside a commit (FR-3.6), and the way into its diff (FR-7.2).
+ *
+ * The row is a real `<button>`: clicking it opens this file as the commit
+ * changed it. It stays a row rather than growing a button of its own, for the
+ * same reason a commit row does — the hot zone and the hover band have to be the
+ * same rectangle.
  *
  * The counts are `null` for a binary file rather than zero — git declined to
  * count it, and a row reading `+0 −0` would claim it changed nothing.
- * @param props - The file's churn and the panel's copy.
+ * @param props - The file's churn, the panel's copy, and where a click goes.
  */
 function CommitFileRow({
   file,
   t,
+  onOpen,
 }: {
   readonly file: CommitDetail['files'][number]
   readonly t: Translate
+  /** Open this file's diff for the commit the column is about (FR-7.2). */
+  readonly onOpen: () => void
 }): ReactNode {
   return (
-    <div className={cls.commitFile} title={file.path}>
+    <button
+      type="button"
+      className={cls.commitFile}
+      data-commit-file={file.path}
+      title={file.path}
+      aria-label={t('history.openFile', { path: file.path })}
+      onClick={onOpen}
+    >
       <span className={cls.commitFilePath}>
         <span className={cls.pathName}>{file.path}</span>
       </span>
@@ -77,7 +92,7 @@ function CommitFileRow({
           <span className={cls.diffRemoved}>−{file.deletions ?? 0}</span>
         </span>
       )}
-    </div>
+    </button>
   )
 }
 
@@ -94,6 +109,7 @@ function CommitDetailPane({
   t,
   locale,
   onClose,
+  onOpenFile,
 }: {
   readonly commit: CommitInfo
   /** The commit's detail, or `null` while it is still being read. */
@@ -101,6 +117,8 @@ function CommitDetailPane({
   readonly t: Translate
   readonly locale: string
   readonly onClose: () => void
+  /** Open one listed file as this commit changed it (FR-7.2). */
+  readonly onOpenFile: (path: string) => void
 }): ReactNode {
   const date = useMemo(
     () => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }),
@@ -155,7 +173,7 @@ function CommitDetailPane({
           <p className={cls.commitFilesHead}>{t('history.files', { count: detail.value.files.length })}</p>
           {detail.value.files.length === 0 && <p className={cls.note}>{t('history.noFiles')}</p>}
           {detail.value.files.map((file) => (
-            <CommitFileRow key={file.path} file={file} t={t} />
+            <CommitFileRow key={file.path} file={file} t={t} onOpen={() => onOpenFile(file.path)} />
           ))}
         </>
       )}
@@ -281,6 +299,14 @@ export interface HistoryPanelProps {
    * FR-3.8 undoes exactly that one.
    */
   readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
+  /**
+   * Open one file of the selected commit as that commit changed it (FR-7.2).
+   *
+   * The panel above receives it because opening a diff is the bottom pane's
+   * business — it owns the diff tab and the rail layers that have to close when
+   * a file is opened from down here.
+   */
+  readonly onOpenCommitFile: (commit: CommitInfo, path: string) => void
 }
 
 /**
@@ -296,6 +322,7 @@ export function HistoryPanel({
   signal,
   active,
   onCommitMenu,
+  onOpenCommitFile,
 }: HistoryPanelProps): ReactNode {
   const [commits, setCommits] = useState<readonly CommitInfo[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -449,6 +476,7 @@ export function HistoryPanel({
           t={t}
           locale={locale}
           onClose={() => setOpenOid(null)}
+          onOpenFile={(path) => onOpenCommitFile(selected, path)}
         />
       )}
     </div>

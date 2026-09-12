@@ -14,7 +14,7 @@ import type {
   CommitDetail,
   CommitFileStat,
   CommitInfo,
-  DiffArea,
+  DiffTarget,
   FileChange,
   FileDiff,
   GeneratedMessage,
@@ -217,23 +217,25 @@ export interface WorkspaceGitService {
    */
   stagedPaths(sessionId: string, signal?: AbortSignal): Promise<Result<readonly FileChange[]>>
   /**
-   * Read one file's diff (FR-2).
+   * Read one file's diff (FR-2, FR-7.2).
    *
    * The host decides which comparison a path needs: `index` diffs the index
    * against HEAD, `worktree` diffs the working tree against the index, and a
    * path git does not track yet comes back as an all-added diff rather than as
-   * "no changes" (FR-2.2). The returned hunks carry their word-level marks, so
+   * "no changes" (FR-2.2). A `commit` target reads one file as that commit
+   * changed it (`git show <hash> -- <path>`), which is FR-7.2's drill-down from
+   * a commit's file list. The returned hunks carry their word-level marks, so
    * the browser does no diffing of its own.
    * @param sessionId - Opaque session identity from the browser.
    * @param path - Repo-relative path, validated before any git call (§5.5).
-   * @param area - Which comparison to make.
+   * @param target - Which comparison to make, and the revision it is made against.
    * @param contextLines - Lines of context per hunk; the host clamps it.
    * @param signal - Cancels the request when the tab goes away.
    */
   diff(
     sessionId: string,
     path: string,
-    area: DiffArea,
+    target: DiffTarget,
     contextLines: number,
     signal?: AbortSignal,
   ): Promise<Result<FileDiff>>
@@ -511,17 +513,17 @@ export interface GitRemoteClient {
     signal?: AbortSignal,
   ): Promise<Result<LogPage>>
   /**
-   * Read one file's diff (FR-2).
+   * Read one file's diff (FR-2, FR-7.2).
    * @param sessionId - Opaque session identity, supplied by the slot.
    * @param path - Repo-relative path.
-   * @param area - Which comparison to make: index, or working tree.
+   * @param target - Which comparison to make, and the revision it is made against.
    * @param contextLines - Lines of context per hunk.
    * @param signal - Cancels the request when the tab goes away.
    */
   diff(
     sessionId: string,
     path: string,
-    area: DiffArea,
+    target: DiffTarget,
     contextLines: number,
     signal?: AbortSignal,
   ): Promise<Result<FileDiff>>

@@ -31,7 +31,7 @@ import type {
   BranchRef,
   ChangeArea,
   CommitInfo,
-  DiffArea,
+  DiffTarget,
   FileChange,
   OperationReport,
   RepoStatus,
@@ -196,10 +196,10 @@ function reportOf(result: Result<OperationReport>): Result<string> {
  * rather than a rename: a file with both a staged and an unstaged change appears
  * in two groups, and clicking either row must open the side that row stands for.
  * @param area - The group the clicked row belongs to.
- * @returns The comparison to ask the host for.
+ * @returns The target to ask the host for.
  */
-export function diffAreaOf(area: ChangeArea): DiffArea {
-  return area === 'staged' ? 'index' : 'worktree'
+export function diffAreaOf(area: ChangeArea): DiffTarget {
+  return area === 'staged' ? { area: 'index' } : { area: 'worktree' }
 }
 
 /**
@@ -560,10 +560,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * The file whose diff is open, or `null` while the change list is showing.
    *
-   * The row's own group is kept rather than the derived {@link DiffArea}, so the
-   * "is this file still changed?" check below can look in the group the user
-   * actually clicked — which is the only group that can say whether the row they
-   * opened still exists.
+   * The target travels with the path: a change-list row opens a working
+   * comparison, and FR-7.2's drill-down opens one file as a commit changed it.
+   * The "is this file still changed?" check below applies only to the first kind
+   * — a commit diff has no change-list row to return to.
    */
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
   /** Whether the branch picker is unfolded (FR-4.1). */
@@ -761,8 +761,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // something the change list no longer lists. The check waits for a settled
   // read: during a refresh the group is briefly the old one, and clearing then
   // would close the pane on every keystroke of a `git add`.
+  //
+  // A COMMIT diff (FR-7.2) is not this kind of view: its subject is a piece of
+  // history, and the file it names is usually not in the change list at all — so
+  // this rule would close it the instant it opened. Its staleness is the host's
+  // to answer, the same way an expired undo row's is.
   useEffect(() => {
-    if (openFile === null || busy || snapshot === null || snapshot.kind !== 'ready') return
+    if (openFile === null || openFile.target.area === 'commit') return
+    if (busy || snapshot === null || snapshot.kind !== 'ready') return
     // Listed in ANY group, not just the one it was opened from: staging a file
     // moves it between groups, and the diff should survive that.
     const { groups } = snapshot.status
@@ -1203,6 +1209,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       if (result.value.truncated) setAiNote(t('commit.aiTruncated'))
     })()
   }
+
   /**
    * Open one row's diff (FR-2.1).
    * @param entry - The row that was activated.
@@ -1216,7 +1223,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     setMenu(null)
     setPickerOpen(false)
     setStashOpen(false)
-    setOpenFile({ path: entry.path, area: diffAreaOf(area) })
+    setOpenFile({ path: entry.path, target: diffAreaOf(area) })
+  }
+
+  /**
+   * Open one file of a commit as that commit changed it (FR-7.2).
+   *
+   * The commit is addressed by its full object id: the host reads the file with
+   * `git show <hash> -- <path>`, so which commit the row was in IS the request.
+   * @param commit - The commit whose file list was clicked in.
+   * @param path - The file the user picked.
+   */
+  const openCommitFile = (commit: CommitInfo, path: string): void => {
+    setMenu(null)
+    setPickerOpen(false)
+    setStashOpen(false)
+    setOpenFile({ path, target: { area: 'commit', hash: commit.oid } })
   }
 
   /**
@@ -1555,8 +1577,8 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             drawers, the conflict group, then the bottom pane. The first two are
             deliberately not VS Code's order — see the drawer's own comment — and the
             last one cannot be: VS Code opens a diff in the editor area, and this
-            plugin registers only a right-sidebar tab, so the diff shares the bottom
-            pane with the history as its second tab (`BottomPane`). FR-2.1 still
+            plugin registers only a right-sidebar tab, so the diffs share the bottom
+            pane with the history, as tabs of one strip (`BottomPane`). FR-2.1 still
             holds in both cases: embedded, never a modal. */}
         {/* The staged list sits directly above the commit box, because it is what
             that box commits: the association is the closest one in the panel, and it
@@ -1728,6 +1750,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           openFile={openFile}
           onCloseDiff={() => setOpenFile(null)}
           onCommitMenu={openCommitMenu}
+          onOpenCommitFile={openCommitFile}
         />
       </div>
     </RepoChangeProvider>

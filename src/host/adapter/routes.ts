@@ -352,13 +352,23 @@ export function registerGitPanelRoutes(
           return fail('bad-request', 'the path query parameter is required')
         }
         const area = url.searchParams.get('area')
-        // Checked here rather than passed through: the service's `DiffArea` is a
-        // two-value union, and a third value arriving from the wire should be a
+        // Checked here rather than passed through: the service's `DiffTarget` is a
+        // three-value union, and a fourth value arriving from the wire should be a
         // refusal the caller can read, not a type error nobody sees.
-        if (area !== 'worktree' && area !== 'index') {
-          return fail('bad-request', 'the area query parameter must be worktree or index')
+        if (area !== 'worktree' && area !== 'index' && area !== 'commit') {
+          return fail('bad-request', 'the area query parameter must be worktree, index, or commit')
         }
-        return await service.diff(sessionId, path, area, intOf(url, 'context', 3))
+        // FR-7.2's drill-down names the revision it reads; the service validates
+        // the hash's shape, but an absent one is a malformed request rather than a
+        // git failure, so it is refused here.
+        if (area === 'commit') {
+          const hash = url.searchParams.get('hash')
+          if (hash === null || hash === '') {
+            return fail('bad-request', 'the hash query parameter is required for a commit diff')
+          }
+          return await service.diff(sessionId, path, { area, hash }, intOf(url, 'context', 3))
+        }
+        return await service.diff(sessionId, path, { area }, intOf(url, 'context', 3))
       }
       case 'stage':
       case 'unstage':

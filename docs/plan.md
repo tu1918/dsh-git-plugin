@@ -11,8 +11,8 @@
 下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
 「与需求文档的偏差」。
 
-- 代码：`src/`（45 个源文件）、`test/`（15 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 355 项测试 + 两个打包产物
+- 代码：`src/`（53 个源文件）、`test/`（19 个测试文件）
+- 校验：`npm run check` → `tsc --noEmit` + 428 项测试 + 两个打包产物
 
 ---
 
@@ -444,11 +444,11 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 
 | 事项 | 内容与需要补的东西 |
 |---|---|
-| **① 点击提交行在底部 pane 预览该提交的差异** | 这正是 FR-3.6 的「可下钻看该提交的 diff」/ FR-7.2，也是它替代行内展开的做法（`onPreview(commitRefOf(entry))` → 共享底部 `DiffPane`）。需要：`DiffArea` 增加「按提交取 diff」的形态（如 `{kind:'commit', hash}`）、host 侧 `git show --no-color --no-ext-diff --no-textconv --unified=N <hash>`（**合并提交仍用 `-m --first-parent`**，与 `showCommit` 同口径）、以及多文件 patch 的渲染（它的 `git.commit-diff` 直接回整条 patch；我们要么让 `core/diff-parse.ts` 把一条 patch 切成多个文件段、要么按文件下钻 `git show <hash> -- <path>`）。做完这一项，行内的详情块可以退化成「文件清单 + 点击文件下钻」 |
+| **① 点击提交行在底部 pane 预览该提交的差异** | 这正是 FR-3.6 的「可下钻看该提交的 diff」/ FR-7.2，也是它替代行内展开的做法（`onPreview(commitRefOf(entry))` → 共享底部 `DiffPane`）。需要：`DiffArea` 增加「按提交取 diff」的形态（如 `{kind:'commit', hash}`）、host 侧 `git show --no-color --no-ext-diff --no-textconv --unified=N <hash>`（**合并提交仍用 `-m --first-parent`**，与 `showCommit` 同口径）、以及多文件 patch 的渲染（它的 `git.commit-diff` 直接回整条 patch；我们要么让 `core/diff-parse.ts` 把一条 patch 切成多个文件段、要么按文件下钻 `git show <hash> -- <path>`）。做完这一项，行内的详情块可以退化成「文件清单 + 点击文件下钻」。**✅ 2026-09-12 已在 M5b 顺序 5 交付**，走的是「按文件下钻」那一支：详情列的文件行成为按钮，命令是 `git show <hash> -m --first-parent -- <path>`，渲染复用底部 pane 既有的 `DiffPane`/`DiffView`，不新写解析器——细节与取舍见 §10.2 的「顺序 5 交付」 |
 | **② 提交行的右键操作菜单** | 它的条目：查看提交差异 / 复制短哈希 / 复制完整哈希 / 复制提交信息 / 分隔线 / **还原此提交**（danger + 确认：「将在当前分支创建一个反转「{subject}」的新提交。」）/ **捡取此提交**（danger + 确认：「将「{subject}」的更改应用到当前分支。」）。复制类三项是纯客户端 clipboard，随时可做；还原/捡取属**改写历史**，与 FR-3.8 的撤销（M5a）、drop/squash/reset（M5b）同一批，需要 host 新路由 + §4.3 的确认（本插件的确认机制是 `ui/armed.ts`，不是原生 `confirm`） |
 | **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 M5a 的 discard 一起做（§10.1 顺序 2）；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航）。**2026-09-12 已定并落地**：手搓 —— `ui/popover.tsx`（层）+ `ui/menu.tsx`（条目与键盘），见 §10.1 顺序 1；这张菜单现有该行自己的暂存动作 + 分隔线 + 「放弃更改」（顺序 2 已交付，且按 D26 只在工作区侧的行出现），「复制相对/绝对路径」到顺序 6 |
 
-**这三项在 §10 里的排期**：① = M5b 顺序 5（它的复制类条目 = 顺序 6）；②③ 的**菜单载体**
+**这三项在 §10 里的排期**：① = M5b 顺序 5（**✅ 已交付**，见 §10.2）；②③ 的**菜单载体**
 就是 M5a 顺序 1——顺序 1 不落地，这两张菜单各自都无从写起；其中「放弃更改」= M5a 顺序 2、
 「还原/捡取」= M5b 顺序 9、「打开编辑器」受 D21 阻塞（§10.4）。
 
@@ -567,12 +567,37 @@ FR-6.2 的四个动作（存 / 列表 / 应用 / 删除）加 D20 欠下的那�
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |
 |---|---|---|---|---|
-| 5 | **提交详情下钻单文件 diff** | FR-7.2 = §9 已登记① | `DiffArea` 增加「按提交取 diff」的形态 + host `git show <hash> -- <path>`（合并提交仍 `-m --first-parent`，与 `showCommit` 同口径）；渲染直接复用 `DiffView`，不需要新的解析器 | M |
+| 5 | **提交详情下钻单文件 diff** | FR-7.2 = §9 已登记① | `DiffArea` 增加「按提交取 diff」的形态 + host `git show <hash> -- <path>`（合并提交仍 `-m --first-parent`，与 `showCommit` 同口径）；渲染直接复用 `DiffView`，不需要新的解析器 | **✅ 已交付（2026-09-12）**：见下方「顺序 5 交付」 |
 | 6 | **复制类条目** | §9 已登记②③的一部分 | 短 hash / 完整 hash / 提交信息 / 相对路径 / 绝对路径——纯客户端 clipboard，成本最小、感知最直接，可穿插在 5 与 7 之间（「复制绝对路径」要 host 给出仓库根前缀，`RepoStatus.root` 已有） | S |
 | 7 | **提交图 SVG 泳道** | FR-7.1 | 分叉开道、合并收道、分页不断线。刻意排在 M5b 内靠后：同 profile 的 `dsh-client-ui-git-graph` 已提供 `/git/graph`（见 §12），它是本批次里**唯一「别处已经能用」的能力**——不是不做，而是边际价值最低 | L |
 | 8 | **多仓库** | FR-8.1 / 8.2（文档自己标 P2） | 工作区根非仓库时扫一层子目录（跳过 node_modules/dist/build/点开头）、仓库下拉、默认取 `.git` 最近活动的仓库、选择按工作区记忆；改动面在 `host/adapter/workspace.ts` 的 `resolveRepo` 与客户端的分支行 | M |
 | 9 | **提交改写与还原 / 捡取** | §9 已登记② + D22 | drop/squash/reset，以及提交行的「还原此提交 / 捡取此提交」，全属**改写历史**，需新路由 + 武装确认（§4.3）；M4 时已由产品方确认往后排 | M–L |
 | 10 | **v1.0 发布收尾** | §7 的验收标准 | 版本号 0.1.0 → 1.0.0、README 与本文件的已交付范围对齐（顺带修口径：本文件此前写 280 项测试、README 写 282，实际是 282）、安装路径核对（目前只验过 `link:` 装法） | S |
+
+**开工说明**：M5b 原定「M5a 验收之后」，本次顺序 5 是产品方在 M5a 验收仍开着的时候直接下令开工的
+（M5a 的 GUI 目视验收照旧待人工确认，见 §10.4）。顺序 5 只新增一条只读路径，不碰 M5a 的任何写操作，
+因此两件事互不阻塞。
+
+### 顺序 5 交付：提交详情下钻单文件 diff（2026-09-12，已完成）
+
+FR-7.2 的落点先定了一件事：**diff 显示在哪里**。两条路都能复用 `DiffView` —— 详情列内联展开，
+或切到底部 pane 已有的 diff 标签页。产品方选了后者（与点变更行同一套交互，diff 拿到全宽），
+所以本插件新增的是**一条只读的 diff 目标形态**，不是第二个 diff 表面。
+
+| 落点 | 内容 |
+|---|---|
+| `core/types.ts` | `DiffArea` 增加第三个值 `'commit'`（它是 `FileDiff.area` 这个**标签**，渲染与测试都读它）；新增请求形态 `DiffTarget`：`{area:'worktree'} \| {area:'index'} \| {area:'commit'; hash}`。**hash 放在目标里而不是第二个可选参数**：一个没有提交的提交 diff 不是这个模型该表示得出来的值 |
+| `core/diff-target.ts`（新） | 纯函数 `diffTargetKey(target)`：`worktree` / `index` / `commit:<hash>`。两个 panes 都问「屏幕上这条 diff 还是用户点的那条吗」，而同一路径的三种读法是三个不同的答案——键里少了 revision，点开另一条提交的同一个文件就会继续显示上一条 |
+| `core/ports.ts` | 服务端口与客户端端口的 `diff(...)` 第二个参数由 `area` 变成 `target`（其余不变） |
+| `host/git-service.ts` | `diffPath` 按 target 分三支。commit 支：`validateHash`（**先于任何 git 调用**，与 `undoCommit` 复用同一个校验）+ `git show --format= -m --first-parent -- <path>`，与工作区支共用同一份 `--no-color/--no-ext-diff/--no-textconv/--unified=N` 与同一个 `parseUnifiedDiff`。`--format=` 让字节预算全花在 patch 上；`-m --first-parent` **对每个提交都传**——git 自己规定 `-m` 在非合并提交上是 no-op，而对合并提交它给出与 `showCommit` 的 numstat 完全同一口径的首父 diff，于是「文件清单里的增删行」与「文件的 diff」不可能各说各话 |
+| `host/adapter/routes.ts` | `GET /git-panel/diff` 接受第三个 area 值；`area=commit` 时 `hash` 必填（缺了是 malformed request，在路由层就拒），其余照旧（GET 之外 405、跨源 403、同源校验、loopback 全不变——**这是一条读路由，不进 `WRITE_OPERATIONS`**） |
+| `client/adapter/git-client.ts` | `diff` 把 target 摊平成查询参数；commit 目标多带一个 `hash` 字段 |
+| `ui/DiffView.tsx` | `DiffPane` 收 `target` 而不是 `area`；重置/重读以 target 的**两个原始值**（area 与 revision）为键，目标对象每次渲染重建也不会引发多余读取。**订阅也不同**：commit diff 只跟 `refs`，因为 `git show <hash> -- f` 不会因为 agent 改写 `f` 而变化——跟全部 kind 等于每敲一个键就花一个进程去读一份不可能过期的读数 |
+| `ui/BottomPane.tsx` | `OpenFile` 由 `{path, area}` 变成 `{path, target}`；新增必填的 `onOpenCommitFile(commit, path)` 透传给历史面板（由面板实现，因为打开 diff 要收起 rail 上的层） |
+| `ui/History.tsx` | `CommitFileRow` 由 `div` 变成真 `<button>`（带 `data-commit-file`、`aria-label`、hover 带与 focus ring）——与提交行同一条理由：热区必须就是那块 hover 底色。`CommitDetailPane` 收 `onOpenFile(path)`，`HistoryPanel` 收必填的 `onOpenCommitFile` |
+| `ui/StatusPanel.tsx` | `diffAreaOf` 返回 `DiffTarget`；新增 `openCommitFile(commit, path)`（先收起菜单/分支层/贮藏层，再设 `{path, target:{area:'commit', hash: commit.oid}}`）。**既有那条「文件已不在变更列表里就收起 diff」的规则要跳过 commit 目标**：提交 diff 的主语是一段历史，它点名的文件通常根本不在变更列表里，否则这条 diff 一打开就会被自己关掉——它的过期由 host 回答，与撤销行的过期同一种处理 |
+| `styles.ts` + `locales.ts` | `.dgp-commit-file` 拿到按钮 reset + hover/focus 两条规则；负外边距 `margin: 0 -6px` 把 6px 的 hover 带从详情列的 12px 内边距里「借」出来，文字仍与上方表头同列。`history.openFile`（中英）作为行的无障碍名字 |
+| 测试 | +9 项（428 总计）：`diff-target` 3 项（三种读法各自成键、同一路径三读互不相等）；服务层 4 项真仓库（commit diff 读的是那次提交而不是工作区未提交的改动、合并提交按首父读且首父那侧的文件不被算进来、未触及的路径给空 diff、四种非法 hash 不发 git）；既有那条路由测试补进 commit 形态（`area=commit&hash=…` 走通并回 `area:'commit'`，`area=commit` 缺 hash 是 bad-request）；客户端 2 项（详情列的文件行是 BUTTON 且点开切到 diff 标签、读的是 `commit:<oid>:<path>@3`、`data-diff-area='commit'`，而列表与详情列仍挂在背后；commit diff 在变更列表刷新后**不被收起**、工作区变动**不重读**、ref 一动**才重读**） |
 
 ### 10.3 M5 之外登记在案、尚未排期
 

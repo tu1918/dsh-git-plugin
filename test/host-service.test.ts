@@ -29,6 +29,7 @@ import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
 import { createGitProbe } from '../src/host/git-probe.ts'
 import { createFileIconRegistry } from '../src/host/file-icons.ts'
 import type { HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
+import type { DiffTarget } from '../src/core/types.ts'
 import {
   cleanupRepos,
   commit,
@@ -268,7 +269,7 @@ describe('git service diff (FR-2)', () => {
     // no inner marks to find, which the parser tests cover separately.
     write(repo, 'a.txt', 'one\ntwo-x\nthree\n')
 
-    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'worktree', 3)
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', { area: 'worktree' }, 3)
     assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
     assert.equal(result.value.area, 'worktree')
     assert.equal(result.value.binary, false)
@@ -294,7 +295,7 @@ describe('git service diff (FR-2)', () => {
     git(repo, ['add', 'a.txt'])
 
     const service = serviceFor({ s1: repo })
-    const staged = await service.diff('s1', 'a.txt', 'index', 3)
+    const staged = await service.diff('s1', 'a.txt', { area: 'index' }, 3)
     assert.ok(staged.ok)
     assert.equal(staged.value.area, 'index')
     assert.deepEqual(
@@ -304,7 +305,7 @@ describe('git service diff (FR-2)', () => {
 
     // The same path read as a worktree diff is empty: the change is in the index,
     // which is exactly the distinction FR-2.2 makes visible on the two rows.
-    const worktree = await service.diff('s1', 'a.txt', 'worktree', 3)
+    const worktree = await service.diff('s1', 'a.txt', { area: 'worktree' }, 3)
     assert.ok(worktree.ok)
     assert.deepEqual(worktree.value.hunks, [])
   })
@@ -316,7 +317,7 @@ describe('git service diff (FR-2)', () => {
     commit(repo, 'first')
     write(repo, 'fresh.txt', 'hello\nworld\n')
 
-    const result = await serviceFor({ s1: repo }).diff('s1', 'fresh.txt', 'worktree', 3)
+    const result = await serviceFor({ s1: repo }).diff('s1', 'fresh.txt', { area: 'worktree' }, 3)
     assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
     assert.equal(result.value.additions, 2)
     assert.equal(result.value.deletions, 0)
@@ -332,7 +333,7 @@ describe('git service diff (FR-2)', () => {
     write(repo, 'a.txt', 'first line\n')
     stageAll(repo)
 
-    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'index', 3)
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', { area: 'index' }, 3)
     assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
     assert.equal(result.value.additions, 1)
   })
@@ -344,7 +345,7 @@ describe('git service diff (FR-2)', () => {
     commit(repo, 'first')
     write(repo, 'img.bin', 'binary\0changed\n')
 
-    const result = await serviceFor({ s1: repo }).diff('s1', 'img.bin', 'worktree', 3)
+    const result = await serviceFor({ s1: repo }).diff('s1', 'img.bin', { area: 'worktree' }, 3)
     assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
     assert.equal(result.value.binary, true)
     assert.deepEqual(result.value.hunks, [])
@@ -357,7 +358,7 @@ describe('git service diff (FR-2)', () => {
     stageAll(repo)
     commit(repo, 'first')
 
-    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', 'worktree', 3)
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', { area: 'worktree' }, 3)
     assert.ok(result.ok)
     assert.deepEqual(result.value.hunks, [])
     assert.equal(result.value.additions, 0)
@@ -372,15 +373,15 @@ describe('git service diff (FR-2)', () => {
 
     // §5.5: the browser never names an absolute path, so one is a refusal rather
     // than something to resolve.
-    const absolute = await service.diff('s1', '/etc/passwd', 'worktree', 3)
+    const absolute = await service.diff('s1', '/etc/passwd', { area: 'worktree' }, 3)
     assert.equal(absolute.ok, false)
     assert.equal(absolute.ok ? '' : absolute.error.code, 'bad-request')
 
-    const escaped = await service.diff('s1', '../outside.txt', 'worktree', 3)
+    const escaped = await service.diff('s1', '../outside.txt', { area: 'worktree' }, 3)
     assert.equal(escaped.ok, false)
     assert.equal(escaped.ok ? '' : escaped.error.code, 'bad-request')
 
-    const unknownArea = await service.diff('s1', 'a.txt', 'sideways' as 'worktree', 3)
+    const unknownArea = await service.diff('s1', 'a.txt', 'sideways' as unknown as DiffTarget, 3)
     assert.equal(unknownArea.ok, false)
     assert.equal(unknownArea.ok ? '' : unknownArea.error.code, 'bad-request')
   })
@@ -393,11 +394,105 @@ describe('git service diff (FR-2)', () => {
     write(repo, 'a.txt', Array.from({ length: 40 }, (_, index) => (index === 20 ? 'CHANGED' : `line ${index}`)).join('\n') + '\n')
 
     const service = serviceFor({ s1: repo })
-    const tight = await service.diff('s1', 'a.txt', 'worktree', 0)
-    const wide = await service.diff('s1', 'a.txt', 'worktree', 10)
+    const tight = await service.diff('s1', 'a.txt', { area: 'worktree' }, 0)
+    const wide = await service.diff('s1', 'a.txt', { area: 'worktree' }, 10)
     assert.ok(tight.ok && wide.ok)
     assert.equal(tight.value.lines, 2)
     assert.equal(wide.value.lines, 22)
+  })
+})
+
+describe('git service commit diff (FR-7.2)', () => {
+  it('reads one file as the commit changed it, not as the working tree stands', async () => {
+    const repo = makeRepo('commit-diff')
+    write(repo, 'a.txt', 'one\ntwo\n')
+    write(repo, 'b.txt', 'keep\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'one\nTWO\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    // An uncommitted edit afterwards must not appear: the reading is of the
+    // revision, which is the whole difference between this and a worktree diff.
+    write(repo, 'a.txt', 'one\nTWO\nTHREE\n')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', { area: 'commit', hash }, 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.area, 'commit')
+    assert.equal(result.value.binary, false)
+    assert.equal(result.value.additions, 1)
+    assert.equal(result.value.deletions, 1)
+    const changed = result.value.hunks
+      .flatMap((hunk) => hunk.lines)
+      .filter((line) => line.kind !== 'context')
+    assert.deepEqual(changed.map((line) => line.text), ['two', 'TWO'])
+    assert.deepEqual(changed.map((line) => line.kind), ['removed', 'added'])
+  })
+
+  it('reads a merge against its first parent, the same basis showCommit counts', async () => {
+    const repo = makeRepo('commit-diff-merge')
+    // The default branch name is the machine's git version's choice, so it is
+    // asked for rather than assumed.
+    const trunk = currentBranch(repo)
+    write(repo, 'base.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    write(repo, 'main.txt', 'main\n')
+    stageAll(repo)
+    commit(repo, 'main side')
+
+    git(repo, ['checkout', '-q', '-b', 'side', 'HEAD~1'])
+    write(repo, 'side.txt', 'side\n')
+    stageAll(repo)
+    commit(repo, 'side commit')
+    git(repo, ['checkout', '-q', trunk])
+    git(repo, ['merge', '-q', '--no-edit', 'side'])
+    const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const service = serviceFor({ s1: repo })
+    // `side.txt` arrives with the merge and is what a first-parent diff shows.
+    const added = await service.diff('s1', 'side.txt', { area: 'commit', hash }, 3)
+    assert.ok(added.ok, added.ok ? '' : JSON.stringify(added.error))
+    assert.deepEqual(
+      added.value.hunks[0]?.lines.map((line) => line.text),
+      ['side'],
+    )
+    // `main.txt` is committed on the first parent, so the merge itself did not
+    // touch it — a second-parent view would have claimed it did.
+    const untouched = await service.diff('s1', 'main.txt', { area: 'commit', hash }, 3)
+    assert.ok(untouched.ok)
+    assert.deepEqual(untouched.value.hunks, [])
+  })
+
+  it('answers an empty diff for a path the commit did not touch', async () => {
+    const repo = makeRepo('commit-diff-empty')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'b.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'a.txt', { area: 'commit', hash }, 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.deepEqual(result.value.hunks, [])
+  })
+
+  it('refuses a malformed hash without running git', async () => {
+    const repo = makeRepo('commit-diff-refuse')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const service = serviceFor({ s1: repo })
+
+    for (const hash of ['', 'nope', 'HEAD~1', 'B'.repeat(40)]) {
+      const result = await service.diff('s1', 'a.txt', { area: 'commit', hash }, 3)
+      assert.equal(result.ok, false, `expected ${hash} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
   })
 })
 
@@ -624,6 +719,30 @@ describe('the /git-panel routes over a real socket', () => {
       const noAreaBody = (await noArea.json()) as { ok: boolean; error: { code: string } }
       assert.equal(noAreaBody.ok, false)
       assert.equal(noAreaBody.error.code, 'bad-request')
+
+      // FR-7.2's commit form: the same route, with the revision the file is read
+      // against. The hash is required for it — an absent one is a malformed
+      // request, refused before the service is reached.
+      const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+      const commitDiff = await fetch(
+        `${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=commit&hash=${hash}`,
+      )
+      const commitBody = (await commitDiff.json()) as {
+        ok: boolean
+        value: { area: string; hunks: unknown[] }
+      }
+      assert.equal(commitBody.ok, true)
+      assert.equal(commitBody.value.area, 'commit')
+      // The commit changed `a.txt` from `two` to `two-x`, and the uncommitted
+      // worktree edit is not part of it.
+      assert.equal(commitBody.value.hunks.length, 1)
+
+      const noHash = await fetch(
+        `${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=commit`,
+      )
+      const noHashBody = (await noHash.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(noHashBody.ok, false)
+      assert.equal(noHashBody.error.code, 'bad-request')
 
       const asPost = await fetch(`${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=worktree`, {
         method: 'POST',

@@ -190,6 +190,7 @@ export const zh = {
   'history.binary': '二进制',
   'history.detail': '提交 {hash} 的信息',
   'history.close': '收起提交信息',
+  'history.openFile': '查看「{path}」在这次提交中的差异',
 
   'diff.open': '打开 {path} 的差异',
   'diff.close': '返回变更列表',
@@ -394,6 +395,7 @@ export const en: Record<GitPanelKey, string> = {
   'history.binary': 'binary',
   'history.detail': 'Details of commit {hash}',
   'history.close': 'Close the commit detail',
+  'history.openFile': 'Open {path} as this commit changed it',
 
   'diff.open': 'Open the diff of {path}',
   'diff.close': 'Back to the change list',

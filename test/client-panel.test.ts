@@ -75,6 +75,7 @@ const {
 } = await import('../src/client/ui/panel-layout.ts')
 const { NS, en, zh } = await import('../src/client/locales.ts')
 const { FILE_KINDS } = await import('../src/core/file-kind.ts')
+const { diffTargetKey } = await import('../src/core/diff-target.ts')
 const { FileKindGlyph } = await import('../src/client/ui/icons.tsx')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
@@ -249,8 +250,8 @@ function stubGit(options: {
   /** Where mutating calls are recorded, for the tests that assert on them. */
   calls?: ActionLog
   /** What every `diff` answers; {@link diffFixture} by default. */
-  diff?: (path: string, area: string) => Result<FileDiff>
-  /** Where diff requests are recorded, as `area:path@context`. */
+  diff?: (path: string, area: FileDiff['area']) => Result<FileDiff>
+  /** Where diff requests are recorded, as `target:path@context`. */
   diffCalls?: string[]
   /** What `showCommit` answers; an empty file list by default. */
   showCommit?: Result<CommitDetail>
@@ -289,9 +290,12 @@ function stubGit(options: {
     branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
     log: () =>
       Promise.resolve({ ok: true, value: { commits: options.log ?? [], total: null, hasMore: false } }),
-    diff: (_sessionId, path, area, contextLines) => {
-      options.diffCalls?.push(`${area}:${path}@${contextLines}`)
-      const answer = options.diff?.(path, area) ?? { ok: true as const, value: diffFixture({ path, area }) }
+    diff: (_sessionId, path, target, contextLines) => {
+      options.diffCalls?.push(`${diffTargetKey(target)}:${path}@${contextLines}`)
+      const answer = options.diff?.(path, target.area) ?? {
+        ok: true as const,
+        value: diffFixture({ path, area: target.area }),
+      }
       return Promise.resolve(answer)
     },
     stage: (_sessionId, paths) => {
@@ -4290,6 +4294,118 @@ describe('the commit detail (FR-3.6)', () => {
     assert.match(info.textContent ?? '', /bbbbbbb/)
     assert.match(info.textContent ?? '', /a commit subject/)
     assert.equal(container.querySelectorAll('[data-commit-detail]').length, 1)
+  })
+})
+
+/* ── M5b order 5: one file of a commit, read against that commit (FR-7.2) ── */
+
+describe('the commit’s own file diff (FR-7.2)', () => {
+  it('opens a listed file in the diff tab, read against that commit', async () => {
+    const diffCalls: string[] = []
+    const git: GitRemoteClient = {
+      ...stubGit({ diffCalls, log: [commitFixture()] }),
+      showCommit: (_sessionId, hash) =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            commit: { ...commitFixture(), oid: hash, pushed: true },
+            files: [{ path: 'src/history-only.ts', additions: 2, deletions: 1, binary: false }],
+          },
+        }),
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+
+    await click(must(container, `.${cls.commitRow}`))
+    await flush()
+
+    // The file row IS a button: the hot zone and the hover band have to be the
+    // same rectangle, exactly as on the commit rows above it.
+    const file = must<HTMLButtonElement>(container, '[data-commit-file="src/history-only.ts"]')
+    assert.equal(file.tagName, 'BUTTON')
+    assert.match(file.getAttribute('aria-label') ?? '', /src\/history-only\.ts/u)
+    file.focus()
+    assert.equal(document.activeElement, file, 'the file row must be reachable by keyboard')
+
+    await click(file)
+    await flush()
+
+    // The dock's diff tab is already where a change row's diff goes; a commit's
+    // file takes the same tab rather than growing a second diff surface.
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-tab'), 'diff')
+    assert.deepEqual(diffCalls, [`commit:${'b'.repeat(40)}:src/history-only.ts@3`])
+    assert.equal(must(container, `.${cls.diffView}`).getAttribute('data-diff-area'), 'commit')
+    // The list and the detail column stay mounted behind the tab, so going back
+    // costs a click rather than a re-read.
+    assert.notEqual(container.querySelector('[data-commit-detail]'), null)
+  })
+
+  it('survives a change-list refresh, and follows a ref rather than a file', async () => {
+    // A commit diff names a path that is usually NOT in the change list, so the
+    // "the row is gone, drop the view" rule would close it the moment it opened.
+    // And the reading itself is history: only a moved ref can make it stale.
+    const diffCalls: string[] = []
+    let listeners: ((change: GitChange) => void)[] = []
+    const base = statusFixture()
+    let status: Result<RepoStatus> = { ok: true, value: base }
+    const git: GitRemoteClient = {
+      ...stubGit({ diffCalls, log: [commitFixture()] }),
+      status: () => Promise.resolve(status),
+      showCommit: () =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            commit: commitFixture(),
+            files: [{ path: 'src/history-only.ts', additions: 2, deletions: 1, binary: false }],
+          },
+        }),
+      watch: (_sessionId, onChange) => {
+        listeners.push(onChange)
+        return () => {
+          listeners = listeners.filter((listener) => listener !== onChange)
+        }
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(must(container, `.${cls.commitRow}`))
+    await flush()
+    await click(must(container, '[data-commit-file="src/history-only.ts"]'))
+    await flush()
+    assert.deepEqual(diffCalls, [`commit:${'b'.repeat(40)}:src/history-only.ts@3`])
+
+    /** Publish one kind of change, through the same channel the probe uses. */
+    const publish = async (kinds: readonly GitChangeKind[]): Promise<void> => {
+      await act(async () => {
+        for (const listener of listeners) listener({ kinds })
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 260))
+      })
+      await flush()
+    }
+
+    // A file the change list did not have before: the reading changes, so the
+    // panel publishes — and the commit diff must neither be dropped nor re-read.
+    const withFile = {
+      ...base,
+      groups: {
+        ...base.groups,
+        untracked: [
+          ...base.groups.untracked,
+          { path: 'fresh.txt', index: '?', worktree: '.', staged: false, untracked: true, conflicted: false },
+        ] as RepoStatus['groups']['untracked'],
+      },
+    }
+    status = { ok: true, value: withFile }
+    await publish(['worktree'])
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-tab'), 'diff')
+    assert.equal(diffCalls.length, 1, 'a working-tree change cannot change a commit’s diff')
+
+    // A ref moved: that IS something a commit diff can go stale on.
+    status = { ok: true, value: { ...withFile, branch: { ...withFile.branch, oid: 'c'.repeat(40) } } }
+    await publish(['refs'])
+    assert.equal(diffCalls.length, 2, 'a moved ref must re-read the commit diff')
   })
 })
 
