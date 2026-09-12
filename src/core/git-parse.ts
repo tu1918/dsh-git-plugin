@@ -23,6 +23,8 @@ import type {
   ChangeArea,
   CommitFileStat,
   CommitInfo,
+  CommitRef,
+  CommitRefKind,
   FileChange,
   LogPage,
   RemoteBranchRef,
@@ -495,10 +497,89 @@ export function parseLog(raw: string): ParsedLogPage {
       authoredAt,
       committedAt,
       parents: parents === '' ? [] : parents.split(' '),
+      // Decorations are read separately (see `parseRefs`) because git's log
+      // decoration string does not say which namespace a ref came from, and the
+      // row colours and labels them by kind.
+      refs: [],
       pushed: null,
     })
   }
   return { commits }
+}
+
+/** The short prefix each ref namespace contributes, and the kind it means. */
+const REF_NAMESPACES: readonly (readonly [string, CommitRefKind])[] = [
+  ['refs/heads/', 'branch'],
+  ['refs/remotes/', 'remote'],
+  ['refs/tags/', 'tag'],
+]
+
+/** How the row orders refs of different kinds when a commit carries several. */
+const REF_KIND_ORDER: Readonly<Record<CommitRefKind, number>> = {
+  branch: 0,
+  remote: 1,
+  tag: 2,
+}
+
+/**
+ * Parse `git for-each-ref` output into "which refs point at which commit".
+ *
+ * The expected fields are `%(objectname)`, `%(*objectname)`, `%(refname)` and
+ * `%(symref)`, NUL-separated inside one line per ref (the `for-each-ref` format
+ * language spells its separator `%00`, not the `%x00` of the `log` family).
+ *
+ * Two things are settled by asking git rather than by reading a decoration
+ * string: an **annotated tag** names its tag object, so the peeled `%(*objectname)`
+ * is what has to point at the commit; and a **symbolic ref** —
+ * `refs/remotes/origin/HEAD` — is a pointer, not a ref anyone would want on a
+ * row, so it is dropped by its `%(symref)` rather than by a name pattern.
+ * @param raw - Raw stdout of the matching `for-each-ref` call.
+ * @returns Refs by the commit they point at, ordered by kind then name.
+ */
+export function parseRefs(raw: string): ReadonlyMap<string, readonly CommitRef[]> {
+  const byOid = new Map<string, CommitRef[]>()
+  for (const line of raw.split('\n')) {
+    if (line === '') continue
+    const fields = line.split('\x00')
+    if (fields.length < 4) continue
+    const [objectName, peeled, refname, symref] = fields as [string, string, string, string]
+    if (symref !== '') continue
+    const target = peeled !== '' ? peeled : objectName
+    if (target === '' || refname === '') continue
+    const namespace = REF_NAMESPACES.find(([prefix]) => refname.startsWith(prefix))
+    if (namespace === undefined) continue
+    const ref: CommitRef = { kind: namespace[1], name: refname.slice(namespace[0].length) }
+    if (ref.name === '') continue
+    const existing = byOid.get(target)
+    if (existing === undefined) byOid.set(target, [ref])
+    else existing.push(ref)
+  }
+  for (const refs of byOid.values()) {
+    refs.sort((left, right) => {
+      const byKind = REF_KIND_ORDER[left.kind] - REF_KIND_ORDER[right.kind]
+      return byKind !== 0 ? byKind : left.name.localeCompare(right.name)
+    })
+  }
+  return byOid
+}
+
+/**
+ * Decorate a page's commits with the refs that point at them.
+ *
+ * A commit no ref points at keeps the empty list it was parsed with, so the row's
+ * decoration can be missing without the row being incomplete.
+ * @param commits - One page, newest first.
+ * @param refs - Refs by commit id, as {@link parseRefs} returns them.
+ * @returns The page with `refs` settled.
+ */
+export function withRefs(
+  commits: readonly CommitInfo[],
+  refs: ReadonlyMap<string, readonly CommitRef[]>,
+): readonly CommitInfo[] {
+  return commits.map((commit) => {
+    const found = refs.get(commit.oid)
+    return found === undefined ? commit : { ...commit, refs: found }
+  })
 }
 
 /**

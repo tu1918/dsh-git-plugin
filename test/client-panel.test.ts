@@ -180,6 +180,7 @@ function commitFixture(): CommitInfo {
     authoredAt: '2026-09-11T10:00:00+08:00',
     committedAt: '2026-09-11T10:00:00+08:00',
     parents: [],
+    refs: [],
     pushed: false,
   }
 }
@@ -4951,6 +4952,62 @@ describe('the AI commit message (FR-3.5)', () => {
     assert.match(container.textContent ?? '', /no language model configured/)
     // The box keeps whatever it had; nothing was written on a failure.
     assert.equal(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`).value, '')
+  })
+})
+
+describe('the refs a history row is decorated with', () => {
+  /** A commit carrying the given refs. */
+  const decorated = (refs: CommitInfo['refs']): CommitInfo => ({ ...commitFixture(), refs })
+
+  it('shows branches and tags on the meta line, each by its kind', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          log: [
+            decorated([
+              { kind: 'branch', name: 'main' },
+              { kind: 'remote', name: 'upstream/main' },
+              { kind: 'tag', name: 'v0.2.9' },
+            ]),
+          ],
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const chips = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRef}`)]
+    assert.deepEqual(
+      chips.map((chip) => chip.textContent),
+      ['main', 'upstream/main', 'v0.2.9'],
+    )
+    assert.deepEqual(
+      chips.map((chip) => chip.getAttribute('data-ref-kind')),
+      ['branch', 'remote', 'tag'],
+    )
+    // The tooltip says what the kind means, since a badge is just a name.
+    assert.match(chips[2]?.getAttribute('title') ?? '', /tag/u)
+    // They live on the meta line, where they cannot crowd the subject.
+    const meta = must(container, '[data-commit-meta="true"]')
+    assert.ok(chips.every((chip) => meta.contains(chip)))
+  })
+
+  it('summarises the rest when one commit carries many refs', async () => {
+    const many = Array.from({ length: 6 }, (_, index) => ({
+      kind: 'tag' as const,
+      name: `v0.${index}`,
+    }))
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [decorated(many)] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const chips = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRef}`)]
+    assert.equal(chips.length, 4, 'three refs and one summary')
+    assert.equal(chips[3]?.textContent, '+3')
+    assert.match(chips[3]?.getAttribute('title') ?? '', /v0\.5/u, 'the summary names the rest')
   })
 })
 

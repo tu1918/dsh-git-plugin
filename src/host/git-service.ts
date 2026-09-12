@@ -24,10 +24,12 @@ import {
   markPushed,
   parseBranches,
   parseLog,
+  parseRefs,
   parseRemoteBranches,
   parseNumstat,
   parseStashList,
   parseStatusV2,
+  withRefs,
 } from '../core/git-parse.ts'
 import type {
   GitAskPass,
@@ -75,6 +77,15 @@ const BRANCH_FORMAT =
 /** The `for-each-ref` format the remote-branch parser expects; the two must agree. */
 const REMOTE_BRANCH_FORMAT =
   '%(objectname)%00%(refname:short)%00%(subject)%00%(committerdate:iso-strict)%00%(symref)'
+
+/**
+ * The `for-each-ref` format the decoration parser expects; the two must agree.
+ *
+ * `%(*objectname)` is the peeled commit of an annotated tag, and `%(symref)` is
+ * non-empty only for a symbolic ref (`refs/remotes/origin/HEAD`), which is how
+ * that one is told apart from a real branch without guessing at its name.
+ */
+const REFS_FORMAT = '%(objectname)%00%(*objectname)%00%(refname)%00%(symref)'
 
 /** The `log` format the history parser expects; the two must agree. */
 const LOG_FORMAT = '%H%x00%h%x00%s%x00%an%x00%aI%x00%cI%x00%P%x1e'
@@ -1686,18 +1697,29 @@ export function createGitService(
       const hasMore = parsed.commits.length > take
       const page = hasMore ? parsed.commits.slice(0, take) : parsed.commits
 
+      // Decorate the page with the refs pointing at its commits. Read from the
+      // ref namespaces rather than from `%d`/`%D`, because a decoration string
+      // does not say whether `origin/x` is a remote-tracking branch or a local
+      // branch whose name happens to contain a slash (see `parseRefs`). One read
+      // covers the whole page; a failure costs the decoration, not the row.
+      const refsRun = await runner.run(
+        ['for-each-ref', `--format=${REFS_FORMAT}`, 'refs/heads', 'refs/remotes', 'refs/tags'],
+        options(root.value, false),
+      )
+      const refs = refsRun.code === 0 ? parseRefs(refsRun.stdout) : undefined
+
       // Settle the ○/● marker from the same status read the panel already needs.
       const statusRun = await runner.run(
         ['status', '--porcelain=v2', '--branch', '-z'],
         options(root.value, false),
       )
-      let commits = page
+      let commits = refs === undefined ? page : withRefs(page, refs)
       if (statusRun.code === 0) {
         const branch = parseStatusV2(statusRun.stdout).branch
         if (branch.upstream === null) {
           // Without an upstream the question is unanswerable, so the marker
           // stays absent rather than claiming every commit is unpushed.
-          commits = page
+          // (`commits` already carries the decorations.)
         } else if (branch.ahead > 0) {
           // Bounded by the ahead count: usually a handful of commits.
           const unpushedRun = await runner.run(
@@ -1706,10 +1728,10 @@ export function createGitService(
           )
           if (unpushedRun.code === 0) {
             const unpushed = new Set(unpushedRun.stdout.split('\n').filter((line) => line !== ''))
-            commits = markPushed(page, unpushed)
+            commits = markPushed(commits, unpushed)
           }
         } else {
-          commits = page.map((commit) => ({ ...commit, pushed: true }))
+          commits = commits.map((commit) => ({ ...commit, pushed: true }))
         }
       }
 

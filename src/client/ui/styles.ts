@@ -148,6 +148,8 @@ export const cls = {
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
   commitMeta: `${P}-commit-meta`,
+  commitRefs: `${P}-commit-refs`,
+  commitRef: `${P}-commit-ref`,
   commitFields: `${P}-commit-fields`,
   commitFilesHead: `${P}-commit-files-head`,
   commitFile: `${P}-commit-file`,
@@ -1956,6 +1958,50 @@ export const css = `
   gap: 6px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+}
+
+/* Ref badges on a commit row. The strip may clip — the row's own information
+   (time, author, pushed marker) must never be pushed out by a busy commit — and
+   each badge ellipsizes on its own so a long ref name reads as itself. */
+.${cls.commitRefs} {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.${cls.commitRef} {
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  padding: 0 5px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Three inks, because the kind is what makes a badge readable: a tag, a local
+   branch and a remote-tracking branch are three different answers to "where does
+   this commit live". */
+.${cls.commitRef}[data-ref-kind='branch'] {
+  color: var(--dsw-alias-brand-primary);
+}
+
+.${cls.commitRef}[data-ref-kind='remote'] {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.${cls.commitRef}[data-ref-kind='tag'] {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.${cls.commitRef}[data-ref-kind='more'] {
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .${cls.marker} {

@@ -385,6 +385,45 @@ describe('git service branches and history', () => {
     assert.equal(result.value.commits[0]?.pushed, false)
     assert.equal(result.value.commits[1]?.pushed, true)
   })
+
+  it('decorates a row with the refs that point at it, by kind', async () => {
+    const repo = makeRepo('svc-decorate')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    // Two tags on one commit — one annotated, so its ref names a tag object
+    // rather than the commit — a local branch, and a remote-tracking branch.
+    git(repo, ['tag', 'v0.1'])
+    git(repo, ['tag', '-a', 'v0.2', '-m', 'release'])
+    git(repo, ['branch', 'release/x'])
+    const remote = makeBareRemote('svc-decorate-remote')
+    git(repo, ['remote', 'add', 'origin', remote])
+    git(repo, ['push', '-q', 'origin', 'HEAD:refs/heads/upstream/main'])
+    git(repo, ['fetch', '-q', 'origin'])
+    // A second commit, so the tip is a row nothing points at.
+    write(repo, 'b.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+
+    const result = await serviceFor({ s1: repo }).log('s1', 0, 30)
+    assert.ok(result.ok)
+    assert.deepEqual(
+      result.value.commits[0]?.refs,
+      [{ kind: 'branch', name: currentBranch(repo) }],
+      'the tip carries the branch HEAD is on',
+    )
+
+    const decorated = result.value.commits.find((commit) => commit.oid === first)
+    assert.ok(decorated, 'the decorated commit is on the page')
+    assert.deepEqual(decorated.refs, [
+      { kind: 'branch', name: 'release/x' },
+      // The remote is named `origin`; the tracked branch inside it is `upstream/main`.
+      { kind: 'remote', name: 'origin/upstream/main' },
+      { kind: 'tag', name: 'v0.1' },
+      { kind: 'tag', name: 'v0.2' },
+    ])
+  })
 })
 
 describe('git service staged paths', () => {

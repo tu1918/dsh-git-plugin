@@ -30,7 +30,7 @@ import { buildGraph } from '../../core/commit-graph.ts'
 import type { GraphRow } from '../../core/commit-graph.ts'
 import { relativeTimeParts } from '../../core/format.ts'
 import type { GitRemoteClient, Result } from '../../core/ports.ts'
-import type { CommitDetail, CommitInfo } from '../../core/types.ts'
+import type { CommitDetail, CommitInfo, CommitRef, CommitRefKind } from '../../core/types.ts'
 import { cls } from './styles.ts'
 import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
@@ -51,6 +51,57 @@ const MAX_LOG_ROWS = 500
  * difference between it and the polling the panel refuses to do.
  */
 const CLOCK_TICK_MS = 30_000
+
+/** Refs a row shows before summarising the rest, and the locale key per kind. */
+const REFS_SHOWN = 3
+const REF_TITLE: Readonly<Record<CommitRefKind, 'ref.branch' | 'ref.remote' | 'ref.tag'>> = {
+  branch: 'ref.branch',
+  remote: 'ref.remote',
+  tag: 'ref.tag',
+}
+
+/**
+ * The ref badges of one commit row.
+ *
+ * They live on the meta line rather than beside the subject: a decorated commit
+ * can carry several refs (a release tag, the branch, a remote-tracking branch),
+ * and the subject is what the row is read for. Only the first few are drawn —
+ * `+N` stands for the rest and its tooltip names them — so a commit that is the
+ * target of many tags cannot push the row's own information out.
+ * @param props - The commit's refs and the panel's copy.
+ */
+function CommitRefs({
+  refs,
+  t,
+}: {
+  readonly refs: readonly CommitRef[]
+  readonly t: Translate
+}): ReactNode {
+  if (refs.length === 0) return null
+  return (
+    <span className={cls.commitRefs}>
+      {refs.slice(0, REFS_SHOWN).map((ref) => (
+        <span
+          key={`${ref.kind}:${ref.name}`}
+          className={cls.commitRef}
+          data-ref-kind={ref.kind}
+          title={`${ref.name} — ${t(REF_TITLE[ref.kind])}`}
+        >
+          {ref.name}
+        </span>
+      ))}
+      {refs.length > REFS_SHOWN && (
+        <span
+          className={cls.commitRef}
+          data-ref-kind="more"
+          title={refs.map((ref) => ref.name).join(', ')}
+        >
+          {t('ref.more', { count: refs.length - REFS_SHOWN })}
+        </span>
+      )}
+    </span>
+  )
+}
 
 /** Horizontal pitch of one graph lane, and the node's radius, in pixels. */
 const GRAPH_LANE_W = 10
@@ -370,6 +421,7 @@ function CommitRow({
             <span className={cls.commitSubject}>{commit.subject === '' ? '—' : commit.subject}</span>
           </span>
           <span className={cls.commitMeta} data-commit-meta="true">
+            <CommitRefs refs={commit.refs} t={t} />
             <span>{relative}</span>
             <span>·</span>
             <span>{commit.authorName}</span>

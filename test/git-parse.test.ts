@@ -22,8 +22,10 @@ import {
   parseBranches,
   parseLog,
   parseNumstat,
+  parseRefs,
   parseRemoteBranches,
   parseStashList,
+  withRefs,
   parseStatusV2,
 } from '../src/core/git-parse.ts'
 import type { CommitInfo, FileChange } from '../src/core/types.ts'
@@ -266,6 +268,74 @@ describe('parseBranches', () => {
   it('skips malformed lines instead of throwing', () => {
     assert.deepEqual(parseBranches('not-enough-fields\n'), [])
     assert.deepEqual(parseBranches(''), [])
+  })
+})
+
+describe('parseRefs (the history row’s decorations)', () => {
+  it('classifies a ref by its namespace and keeps only the short name', () => {
+    const raw = [
+      'aaa\x00\x00refs/heads/main\x00',
+      'aaa\x00\x00refs/remotes/upstream/main\x00',
+      'aaa\x00\x00refs/tags/v0.2.9\x00',
+    ].join('\n')
+    assert.deepEqual(parseRefs(raw).get('aaa'), [
+      { kind: 'branch', name: 'main' },
+      { kind: 'remote', name: 'upstream/main' },
+      { kind: 'tag', name: 'v0.2.9' },
+    ])
+  })
+
+  it('points an annotated tag at the commit it peels to, not at the tag object', () => {
+    const refs = parseRefs('tagobj\x00commit1\x00refs/tags/v1.0\x00\n')
+    assert.deepEqual(refs.get('commit1'), [{ kind: 'tag', name: 'v1.0' }])
+    assert.equal(refs.get('tagobj'), undefined)
+  })
+
+  it('drops a symbolic ref, which is a pointer rather than a branch', () => {
+    // `%(refname)` for refs/remotes/origin/HEAD is a real-looking name; only
+    // `%(symref)` says it is a pointer.
+    const raw =
+      'aaa\x00\x00refs/remotes/origin/HEAD\x00refs/remotes/origin/main\n' +
+      'aaa\x00\x00refs/remotes/origin/main\x00\n'
+    assert.deepEqual(parseRefs(raw).get('aaa'), [{ kind: 'remote', name: 'origin/main' }])
+  })
+
+  it('orders by kind then name, and skips namespaces it does not decorate', () => {
+    const raw = [
+      'aaa\x00\x00refs/tags/zzz\x00',
+      'aaa\x00\x00refs/heads/zzz\x00',
+      'aaa\x00\x00refs/heads/aaa\x00',
+      'aaa\x00\x00refs/notes/x\x00',
+      'aaa\x00\x00refs/remotes/origin/z\x00',
+      'short\x00record',
+    ].join('\n')
+    assert.deepEqual(parseRefs(raw).get('aaa'), [
+      { kind: 'branch', name: 'aaa' },
+      { kind: 'branch', name: 'zzz' },
+      { kind: 'remote', name: 'origin/z' },
+      { kind: 'tag', name: 'zzz' },
+    ])
+  })
+
+  it('answers nothing for no refs at all', () => {
+    assert.equal(parseRefs('').size, 0)
+  })
+
+  it('decorates the commits that carry a ref, and leaves the rest empty', () => {
+    const at = (oid: string): CommitInfo => ({
+      oid,
+      shortOid: oid,
+      subject: 'subject',
+      authorName: 'Ada',
+      authoredAt: '2026-09-11T10:00:00+08:00',
+      committedAt: '2026-09-11T10:00:00+08:00',
+      parents: [],
+      refs: [],
+      pushed: null,
+    })
+    const decorated = withRefs([at('aaa'), at('bbb')], parseRefs('aaa\x00\x00refs/tags/v1\x00'))
+    assert.deepEqual(decorated[0]?.refs, [{ kind: 'tag', name: 'v1' }])
+    assert.deepEqual(decorated[1]?.refs, [])
   })
 })
 

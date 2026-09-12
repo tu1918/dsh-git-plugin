@@ -25,6 +25,7 @@ function commit(oid: string, parents: readonly string[] = []): CommitInfo {
     authoredAt: '2026-09-11T10:00:00+08:00',
     committedAt: '2026-09-11T10:00:00+08:00',
     parents,
+    refs: [],
     pushed: null,
   }
 }

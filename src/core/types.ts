@@ -191,6 +191,35 @@ export interface RepoListing {
   readonly selected: string | null
 }
 
+/**
+ * What a ref decorating a commit is (FR-3.6's row, widened).
+ *
+ * The three namespaces git keeps apart are kept apart here too, because that is
+ * the only reliable way to tell them apart: `feature/x` and `origin/feature/x`
+ * are two different kinds of ref whose names differ only by a prefix, and a
+ * decoration string cannot say which is which without being told.
+ */
+export type CommitRefKind =
+  /** A local branch (`refs/heads/…`). */
+  | 'branch'
+  /** A remote-tracking branch (`refs/remotes/…`). */
+  | 'remote'
+  /** A tag, annotated or not (`refs/tags/…`). */
+  | 'tag'
+
+/**
+ * One ref that points at a commit, as the history row decorates it.
+ *
+ * `name` is the short form — `main`, `upstream/main`, `v0.2.9` — which is what a
+ * reader recognises; the kind is what the row colours and names in its tooltip.
+ */
+export interface CommitRef {
+  /** Which namespace the ref came from. */
+  readonly kind: CommitRefKind
+  /** Short ref name, as git prints it. */
+  readonly name: string
+}
+
 /** One commit row in the history list (FR-3.6). */
 export interface CommitInfo {
   /** Full commit object id. */
@@ -207,6 +236,14 @@ export interface CommitInfo {
   readonly committedAt: string
   /** Parent object ids, in order; more than one means a merge. */
   readonly parents: readonly string[]
+  /**
+   * Refs pointing at this commit — branches, remote-tracking branches and tags.
+   *
+   * Empty on most commits, and on every commit in a page the host could not read
+   * the refs for: the decoration is a convenience, and losing it must not cost
+   * the row. Ordered by kind (branch, remote, tag) and then by name.
+   */
+  readonly refs: readonly CommitRef[]
   /**
    * Whether the commit is on the upstream branch: `true` pushed, `false`
    * unpushed, `null` when no upstream makes the question unanswerable. The

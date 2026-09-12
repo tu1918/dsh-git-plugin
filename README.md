@@ -30,6 +30,7 @@ stash, the commit graph, undo, multi-repository — has shipped.
 | That list as a **file tree** — directories fold, single-child chains compact into one row, each directory carries its subtree's file count — or as a flat list; the choice is remembered per user | ✅ |
 | Branch rail: name, detached / unborn / upstream-gone, ↑ahead ↓behind | ✅ |
 | Recent commits: paged by look-ahead, pushed/unpushed marker, read only while its tab is showing | ✅ |
+| Each history row is decorated with the refs pointing at that commit — local branches, remote-tracking branches (`upstream/main`) and tags (`v0.2.9`) as badges on its second line, three inks for the three kinds, at most three plus a `+N` that names the rest. Read from the ref namespaces rather than from git's decoration string, which cannot tell a local branch with a slash from a remote-tracking branch | ✅ |
 | Auto-refresh from filesystem events — one recursive watch on the work tree, one on the git directory — pushed over SSE with *what* moved (`refs` / `index` / `worktree`); a file an agent writes shows up without touching `.git` at all | ✅ |
 | A state-file poll as the fallback when events are unavailable (network drives, platforms without recursive watch), and a `stat` of the same files when even that fails | ✅ |
 | Live git status/branches/log over `/git-panel/*` | ✅ |
@@ -128,7 +129,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 511 tests && build
+npm run check      # tsc --noEmit && 520 tests && build
 ```
 
 ## Install
