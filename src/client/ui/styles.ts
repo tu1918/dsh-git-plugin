@@ -92,6 +92,7 @@ export const cls = {
   note: `${P}-note`,
   historyList: `${P}-history-list`,
   commit: `${P}-commit`,
+  commitRow: `${P}-commit-row`,
   commitTop: `${P}-commit-top`,
   commitHash: `${P}-commit-hash`,
   commitSubject: `${P}-commit-subject`,
@@ -1117,7 +1118,27 @@ export const css = `
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* The hover band and the selected band. The row wrapper carries them because
+   both the entry button and the metadata line are part of "the row the pointer
+   is on" — a highlight that stopped at the title would make the caption look
+   like a different thing. The tokens are the GUI's own interactive aliases, the
+   same ones the built-in sidebars use for a hovered or current row. */
+.${cls.commitRow} {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 4px 12px 5px 22px;
+  border-radius: 6px;
+}
+
+.${cls.commitRow}:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.${cls.commitRow}[data-selected='true'] {
+  background: var(--dsw-alias-interactive-bg-active);
 }
 
 /* ── commit detail (FR-3.6) ─────────────────────────────────────────────── */
@@ -1168,7 +1189,8 @@ export const css = `
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 5px 0 3px 18px;
+  /* Aligned under the row above it: the row's own 22px gutter plus one step. */
+  padding: 5px 12px 3px 40px;
 }
 
 .${cls.commitFields} {

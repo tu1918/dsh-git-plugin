@@ -460,6 +460,28 @@ describe('the panel stylesheet', () => {
     assert.equal(tags.length, 1, 'a reload must replace the sheet, not stack a second copy')
   })
 
+  it('gives a commit row a hover band and a selected band', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // jsdom cannot resolve `var()`, so this asserts the RULES rather than a
+    // computed colour: the hover band and the "you are here" band are the visible
+    // half of a commit row being a control, and the tokens are the GUI's own
+    // interactive aliases (the same ones the built-in sidebars use).
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.commitRow}:hover\\s*\\{[^}]*--dsw-alias-interactive-bg-hover`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.commitRow}\\[data-selected='true'\\]\\s*\\{[^}]*--dsw-alias-interactive-bg-active`,
+        'u',
+      ),
+    )
+  })
+
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -2091,10 +2113,15 @@ describe('the commit detail (FR-3.6)', () => {
     assert.equal(document.activeElement, entry, 'the row must be reachable by keyboard')
     const row = must(container, `.${cls.commit}`)
     assert.equal(row.getAttribute('data-commit'), 'b'.repeat(40))
+    // The band that covers the row's two lines, and the state that keeps it lit
+    // while its detail is open.
+    const band = must(container, `.${cls.commitRow}`)
+    assert.equal(band.getAttribute('data-selected'), 'false')
 
     await click(entry)
     await flush()
     assert.equal(entry.getAttribute('aria-expanded'), 'true')
+    assert.equal(band.getAttribute('data-selected'), 'true')
 
     const panel = must(container, '[data-commit-detail]')
     const text = panel.textContent ?? ''
@@ -2112,6 +2139,7 @@ describe('the commit detail (FR-3.6)', () => {
     await click(entry)
     assert.equal(container.querySelector('[data-commit-detail]'), null)
     assert.equal(entry.getAttribute('aria-expanded'), 'false')
+    assert.equal(band.getAttribute('data-selected'), 'false')
     await click(entry)
     assert.equal(calls.entries.length, 1)
   })

@@ -333,7 +333,20 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | **历史里的每条提交改成真正的 `<button>`**（原来是带 `role="button"` 的 `div` + 手写 Enter/Space 处理）。理由是后续要对**具体提交**做操作（M5 的 drop/squash/reset、FR-3.8 的撤销最近提交），这条行就是那些操作的把手：真按钮自带焦点、原生 Enter/Space 激活、可直接挂 `aria-expanded`，不必再手写键盘分支去追平鼠标分支。行容器新增 `data-commit={完整 oid}` 作为操作寻址用的身份（显示仍是短 hash） | `ui/History.tsx` 的 `CommitRow` + `styles.ts` 的 `.dgp-commit-top`（补按钮 reset：`width: 100%`、去边框/背景、`font: inherit`、`text-align: left`、`focus-visible` 描边）；测试断言 `tagName === 'BUTTON'`、可 `focus()`、`aria-expanded` 随点击翻转、`data-commit` 是完整 oid |
 | **FR-1.3 落地：变更文件按文件树展示**，并保留平铺列表与一个常显的切换按钮（文档要求「支持列表/树形两种展示模式切换（树形按目录折叠）」，所以两种都在）。**默认是树形**——产品方最新口径（文档没有规定默认值）；选择与目录折叠都写进 `localStorage`（`dsh-git-panel/view-mode`、`dsh-git-panel/collapsed-dirs`），像 diff 布局与分组折叠一样是偏好 | 纯函数 `core/change-tree.ts`（按 `/` 嵌套、**目录优先**、按 git 的字节序而非本机 locale 排序、把「只有一个子目录且自己没有文件」的链压成一行如 `deep/nested/dir`、目录带整棵子树的文件计数）→ `ui/ChangeGroup.tsx` 的 `Group`/`TreeNodeView`（**两种形状都在 Group 里**，因为两个容器都要用；缩进是外层 `treeNode` 的 `padding-left`，行自己的内边距仍归样式表，深度步长 14px）→ `ui/change-view.ts`（模式 + 折叠目录的读写与 `dirKey(area, path)`：每组各建自己的树，所以在「已暂存」里折叠 `src` 不会折叠「更改」里的）→ 状态栏末端一个 `aria-pressed` 的切换按钮（VS Code 把视图动作放在视图标题栏，本插件没有标题栏，就放在状态栏；字形画的是**将要切到**的那一侧） |
 | 树的折叠状态是在嵌套里逐层渲染的（`TreeNodeView` 递归），行内动作与点行开 diff 都沿用 `ChangeRow`——树只改变路径**怎么画**，从不改变动作带着**哪个路径**走；因此树里的文件行不再重复目录前缀（`showDirectory={false}`），tooltip 仍是完整路径（FR-1.2） | `ui/ChangeGroup.tsx` + 测试断言树内 `+` 暂存的是完整仓库相对路径、点行读的也是同一个 path |
+| **提交行的悬停/选中底色**（对齐同 profile 的 `dsh-better-sidebar`「文件变动 → Git」lens 里提交行的效果：hover 用 `--dsw-alias-interactive-bg-hover`、当前项用 `--dsw-alias-interactive-bg-active`）。做法是把「入口按钮 + 元信息行」包进一个 `commitRow`，**详情块留在这个包裹之外**——底色覆盖「指针所在的那一行」两行文字，而展开的详情不该被一起点亮；`data-selected` 跟着展开状态走，折叠即熄灭 | `ui/History.tsx` + `styles.ts` 的 `.dgp-commit-row`（同时把 `.dgp-commit` 的 4/12/5/22 内边距移到这一层，详情块改为 40px 左缩进对齐）。测试断言 `data-selected` 随开合翻转；底色是 CSS 规则，jsdom 解析不了 `var()`，因此按**规则文本 + token 名**断言（这与「批量按钮必须常显」那条用 computed opacity 的测试分属两种情形） |
 | **同一条约束留在这里，给下一步用**：那条操作条（drop / squash / reset / 复制 hash）必须是这个按钮的**兄弟节点**，不能是子节点——button 里套 button 是非法标记，内层在部分浏览器根本点不到。界面里已有的同类裁决在「变更分组的标题行」（`Group` 的批量按钮是 `groupToggle` 的兄弟，不是子节点） | `ui/History.tsx` 的注释与 `ChangeGroup.tsx` 的既有约定 |
+
+### 已登记、本次不做的后续工作
+
+以下三项都是产品方在提出「提交 entry 要像 better-sidebar 那样」时确认要**记录**的工作（本文档对
+`dsh-better-sidebar@0.19.0-alpha.1`「文件变动 → Git」lens 的走查结论，源文件在同一 profile 的
+`node_modules/dsh-better-sidebar/src/client/changes/GitLens.tsx`）。
+
+| 事项 | 内容与需要补的东西 |
+|---|---|
+| **① 点击提交行在底部 pane 预览该提交的差异** | 这正是 FR-3.6 的「可下钻看该提交的 diff」/ FR-7.2，也是它替代行内展开的做法（`onPreview(commitRefOf(entry))` → 共享底部 `DiffPane`）。需要：`DiffArea` 增加「按提交取 diff」的形态（如 `{kind:'commit', hash}`）、host 侧 `git show --no-color --no-ext-diff --no-textconv --unified=N <hash>`（**合并提交仍用 `-m --first-parent`**，与 `showCommit` 同口径）、以及多文件 patch 的渲染（它的 `git.commit-diff` 直接回整条 patch；我们要么让 `core/diff-parse.ts` 把一条 patch 切成多个文件段、要么按文件下钻 `git show <hash> -- <path>`）。做完这一项，行内的详情块可以退化成「文件清单 + 点击文件下钻」 |
+| **② 提交行的右键操作菜单** | 它的条目：查看提交差异 / 复制短哈希 / 复制完整哈希 / 复制提交信息 / 分隔线 / **还原此提交**（danger + 确认：「将在当前分支创建一个反转「{subject}」的新提交。」）/ **捡取此提交**（danger + 确认：「将「{subject}」的更改应用到当前分支。」）。复制类三项是纯客户端 clipboard，随时可做；还原/捡取属**改写历史**，与 FR-3.8 的撤销、M5 的 drop/squash/reset 同一批，需要 host 新路由 + §4.3 的确认（本插件的确认机制是 `ui/armed.ts`，不是原生 `confirm`） |
+| **③ 更改文件行的右键操作菜单** | 它的文件行菜单：在编辑器中打开 / 暂存·取消暂存（按该行所在的一侧）/ **放弃更改**（danger + 确认；未跟踪文件不提供）/ 复制相对路径 / 复制绝对路径。落到本插件的三处约束：**「打开编辑器」受 D21 限制**（本 profile 没有「按路径打开文件」的缝，本插件也没有 `--no-index` 之外的编辑器能力）；「放弃更改」是 FR-6.1，与 discard 一起排 M5；「复制绝对路径」需要 host 给出仓库根前缀（`RepoStatus.root` 已有，但客户端不该自己拼绝对路径）。另外**菜单本身的实现方式要先定**：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），要么在 `client/adapter/` 里包一层中性接口，要么像 `BranchPicker`/`PaneResizer` 那样手搓一个轻量弹层（含定位、Esc、点击外部关闭、键盘导航） |
 
 **M5 概要**：discard（二次确认「不可恢复」）、stash、提交图 SVG 泳道、撤销最近提交
 （未推送 `reset --mixed`／已推送 `revert`，执行前后端重新核实 —— FR-3.8）、多仓库扫描（FR-8），
