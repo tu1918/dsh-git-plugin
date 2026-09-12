@@ -320,71 +320,68 @@ export function StashGlyph({ size = 14, className }: GlyphProps): ReactNode {
 }
 
 /**
- * The page every file-kind glyph is drawn on: the body and its folded corner.
+ * What each kind draws, on its own.
  *
- * One outline, one mark per kind — the shape a reader learns once and then reads
- * at a glance, the way an editor's file-icon theme works. The mark always lives in
- * the lower half (x 5–11, y 8–13) so the kinds line up as a column.
+ * No shared outline on purpose. The first version drew every kind as a mark inside
+ * the same page, and the result was nine glyphs that read as one thing at 14px —
+ * reported from the running panel: "they all look the same at a glance". Now each
+ * kind IS its mark, drawn large in the 16x16 box (content in 3..13, so the 1.3
+ * stroke never clips), and only the fallback is a page.
  */
-const FILE_PAGE = (
-  <>
-    <path d="M3.8 2.2h5.1l3.3 3.3v8.3H3.8z" />
-    <path d="M8.9 2.2v3.3h3.3" />
-  </>
-)
-
-/** What each kind draws on that page; `file` deliberately draws nothing. */
 const FILE_MARKS: Readonly<Record<FileKind, ReactNode>> = {
-  // The two brackets a language is read through.
+  // Braces: the shape source code is written in, which is the question this row
+  // answers ("is this code?"), not which language it is. The left brace sits on the
+  // left and the right one on the right — a brace's spike points away from its own
+  // arms, so the two must not overlap or the pair reads as one knot.
   code: (
     <>
-      <path d="M7.2 8.4 5.8 10.4l1.4 2" />
-      <path d="M8.8 8.4l1.4 2-1.4 2" />
+      <path d="M7.2 3.2c-1.5 0-2.1 1-2.1 2.3v1.2c0 1.1-.4 1.7-1.3 1.9.9.2 1.3.8 1.3 1.9v1.2c0 1.3.6 2.3 2.1 2.3" />
+      <path d="M8.8 3.2c1.5 0 2.1 1 2.1 2.3v1.2c0 1.1.4 1.7 1.3 1.9-.9.2-1.3.8-1.3 1.9v1.2c0 1.3-.6 2.3-2.1 2.3" />
     </>
   ),
-  // A tag: what the file IS, rather than what it is written in. Kept clear of the
-  // page's own right edge (12.2) so the two outlines never read as one stroke.
+  // A tag: what the file IS, rather than what it is written in.
   markup: (
     <>
-      <path d="M7.6 8.8h2.6l1.2 1.6-1.2 1.6H7.6l-1.2-1.6z" />
-      <circle cx="7.8" cy="10.4" r=".6" />
+      <path d="M5.4 4.8h5.2l2.4 3.2-2.4 3.2H5.4L3 8z" />
+      <circle cx="6.4" cy="8" r=".9" />
     </>
   ),
   // A hash: the selector a stylesheet is addressed by.
-  style: <path d="M6.6 8.2l-.7 4.4M10.1 8.2l-.7 4.4M5.2 9.6h5.6M4.9 11.4h5.6" />,
+  style: <path d="M7.2 3.4 5.8 12.6M11 3.4 9.6 12.6M3.6 6.6h9.4M3 10.4h9.4" />,
   // A grid: the shape of anything structured.
-  data: (
-    <>
-      <path d="M5.4 8.6h5.2v4.6H5.4z" />
-      <path d="M5.4 10.9h5.2M8 8.6v4.6" />
-    </>
-  ),
+  data: <path d="M3.6 3.6h8.8v8.8H3.6zM3.6 8h8.8M8 3.6v8.8" />,
   // A horizon and a sun, in no frame: the frame is what the data grid already is.
   image: (
     <>
-      <path d="M5 12.8l2-2.4 1.4 1.5 1.1-1.1 1.5 2z" />
-      <circle cx="6.6" cy="9.1" r=".9" />
+      <path d="M3.2 12.8l3.4-4 2.2 2.5 1.8-2 2.6 3.5z" />
+      <circle cx="5.2" cy="5.4" r="1.2" />
     </>
   ),
   // Prose: three lines, the last one short.
-  doc: <path d="M5.6 8.8h4.8M5.6 10.6h4.8M5.6 12.4h2.8" />,
+  doc: <path d="M3.6 4.4h8.8M3.6 8h8.8M3.6 11.6h5" />,
   // A prompt and a cursor.
   shell: (
     <>
-      <path d="M5.8 8.8 7.4 10.4l-1.6 1.6" />
-      <path d="M8.8 12.2h2.4" />
+      <path d="M4 4.2 8.4 8.4 4 12.6" />
+      <path d="M9.2 12.6h3.2" />
     </>
   ),
   // Sliders: the settings the file holds, rather than data it holds.
   config: (
     <>
-      <path d="M5.2 9h5.6M5.2 12h5.6" />
-      <circle cx="7" cy="9" r=".9" />
-      <circle cx="9.6" cy="12" r=".9" />
+      <path d="M3.4 5.6h9.2M3.4 10.4h9.2" />
+      <circle cx="6.4" cy="5.6" r="1.4" />
+      <circle cx="9.6" cy="10.4" r="1.4" />
     </>
   ),
-  // Nothing: "I do not know" should look like a plain file, not like a guess.
-  file: null,
+  // The plain page — the only framed mark, and the honest answer for "I do not
+  // know": it should look like no claim at all.
+  file: (
+    <>
+      <path d="M4 2.6h5.2L12.8 6.4v7H4z" />
+      <path d="M9.2 2.6v3.8h3.6" />
+    </>
+  ),
 }
 
 /** Props for {@link FileKindGlyph}. */
@@ -396,17 +393,13 @@ export interface FileKindGlyphProps extends GlyphProps {
 /**
  * The glyph for one changed file's kind, drawn where the row's badge used to sit.
  *
+ * A row is 12px of text tall and the glyph is 14px wide: what a reader gets out of
+ * it is one glance, so each mark is drawn as large as the box allows.
+ *
  * @param props - The kind, the size, and an extra class.
  */
 export function FileKindGlyph({ kind, size = 14, className }: FileKindGlyphProps): ReactNode {
-  return stroke(
-    size,
-    className,
-    <>
-      {FILE_PAGE}
-      {FILE_MARKS[kind]}
-    </>,
-  )
+  return stroke(size, className, FILE_MARKS[kind])
 }
 
 /**
