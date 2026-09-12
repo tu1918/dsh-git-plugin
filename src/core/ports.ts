@@ -80,6 +80,15 @@ export type GitErrorCode =
   | 'not-merged'
   /** No language model is available in this composition, so FR-3.5 cannot run. */
   | 'no-llm'
+  /**
+   * The host refused a clipboard write.
+   *
+   * Not a git failure at all, and it lives in this union because this is where
+   * the panel keeps "a failure it can name": the copying menu entries report
+   * through the same action box every other operation does, so a refused write
+   * has to be a value that box can carry rather than a thrown exception.
+   */
+  | 'clipboard'
   /** The request itself was malformed. */
   | 'bad-request'
   /** The host-side handler threw. */

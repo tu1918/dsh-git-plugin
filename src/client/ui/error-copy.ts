@@ -71,6 +71,11 @@ export function errorCopy(
       // FR-3.5 cannot run here, and the reason is the deployment's, not the
       // user's — so it says which fact is missing rather than "try again".
       return { title: t('error.noLlm'), detail: undefined }
+    case 'clipboard':
+      // The copy entries' one failure: the browser refused the write (jsdom, an
+      // insecure context, a denied permission). The panel's own sentence, because
+      // there is no git output to forward.
+      return { title: t('error.clipboard'), detail: undefined }
     default:
       // git's own words, verbatim and with their newlines: FR-4.4.
       return {

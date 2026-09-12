@@ -23,7 +23,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 
 import { commitScopeOf } from '../../core/commit-scope.ts'
-import { lineCount } from '../../core/format.ts'
+import { lineCount, repoAbsolutePath } from '../../core/format.ts'
 import { statusSignature } from '../../core/status-signature.ts'
 import type { GitChangeKind, GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
 import type {
@@ -60,6 +60,7 @@ import { iconUrlsOf } from './file-icons.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './repo-change.tsx'
 import { canDiscard } from './row-actions.ts'
+import { writeClipboard } from './clipboard.ts'
 import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
 import { say, sentence, verbatim, type Sentence, type Translate } from './translate.ts'
@@ -134,6 +135,7 @@ type ActionOp =
   | 'generate'
   | 'undo'
   | 'stash'
+  | 'copy'
 
 /**
  * What the panel is doing, or last did, at the operation level.
@@ -169,17 +171,24 @@ interface FileRowMenu {
 }
 
 /**
- * The commit whose menu is open (FR-3.8's undo entry), and its anchor row.
+ * The commit whose menu is open (§9's commit menu), and its anchor row.
  *
  * The panel never checks whether the commit is STILL the newest: the history is
  * the bottom pane's reading, not this snapshot's, and the host re-resolves HEAD
  * at execution time — a stale row is refused there, with the reason beside the
  * list the way every other refusal lands.
+ *
+ * `canUndo` is the one thing the panel does decide locally, because it is not a
+ * staleness question: FR-3.8 undoes exactly the newest commit, and the bottom
+ * pane is what knows which row that is. The copying entries are on every row, so
+ * a menu exists either way.
  */
 interface CommitRowMenu {
   readonly kind: 'commit'
   readonly anchor: HTMLElement
   readonly commit: CommitInfo
+  /** Whether this row is the newest one, and so the one FR-3.8 may undo. */
+  readonly canUndo: boolean
 }
 
 /** One open row menu, of either kind the panel has. */
@@ -1365,15 +1374,40 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
-   * Open one commit row's menu (FR-3.8), anchored on the row that asked for it.
+   * Open one commit row's menu (§9's commit menu), anchored on the row that asked.
    * @param commit - The commit the menu acts on.
    * @param anchor - The row element, which the layer is measured from.
+   * @param canUndo - Whether this row is the newest, and so may carry FR-3.8's undo.
    */
-  const openCommitMenu = (commit: CommitInfo, anchor: HTMLElement): void => {
+  const openCommitMenu = (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean): void => {
     // Same one-layer rule as the file menu: Shift+F10 arrives without a press.
     setPickerOpen(false)
     setStashOpen(false)
-    setMenu({ kind: 'commit', anchor, commit })
+    setMenu({ kind: 'commit', anchor, commit, canUndo })
+  }
+
+  /**
+   * Put one value on the clipboard and say so (§10.2 order 6).
+   *
+   * Not routed through {@link perform}: a copy is not a repository operation, so
+   * there is nothing to re-read and no write to audit — but a host that refuses
+   * the write (an insecure context, a denied permission, jsdom) lands in the same
+   * action box as every other failure, which is the panel's one error path.
+   * @param label - The entry's own name, held as a sentence so the notice follows
+   *   the language like every other word on screen.
+   * @param value - The exact text to copy.
+   */
+  const copyToClipboard = async (label: Sentence, value: string): Promise<void> => {
+    if (await writeClipboard(value)) {
+      setAction({ kind: 'done', op: 'copy', label, summary: say('copy.done', { value }) })
+      return
+    }
+    setAction({
+      kind: 'failed',
+      op: 'copy',
+      label,
+      error: { code: 'clipboard', message: '' },
+    })
   }
 
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
@@ -1386,13 +1420,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * The entries of one file row's menu (§9's file menu).
    *
    * The row's own staging action comes first — `git add` under the name that fits
-   * the row (`mark resolved` for a conflict, FR-9.2) — and the destructive entry
-   * last, after a hairline, which is the shape §9's registered menus already have.
+   * the row (`mark resolved` for a conflict, FR-9.2) — then the destructive entry,
+   * then the two copying entries §9 lists (order 6), each group after a hairline.
    *
    * Discard appears exactly where `ui/row-actions.ts` says the row has a button for
    * it: the working-tree rows. It is an armed entry (`stayOpen`), so the first click
    * arms it and the menu stays up for the second — §4.3's two-click confirmation,
-   * with the entry itself becoming the confirmation.
+   * with the entry itself becoming the confirmation. The copies are on every row,
+   * because a path is copyable whatever its state.
    */
   const fileMenuEntries = (row: FileRowMenu): readonly MenuEntry[] => {
     const staging: MenuEntry =
@@ -1411,7 +1446,26 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             disabled: pending,
             onSelect: () => stage([row.entry.path]),
           }
-    if (!canDiscard(row.area)) return [staging]
+    const copies: readonly MenuEntry[] = [
+      { kind: 'separator' },
+      {
+        kind: 'item',
+        id: 'copyRelativePath',
+        label: t('copy.relativePath'),
+        onSelect: () => void copyToClipboard(say('copy.relativePath'), row.entry.path),
+      },
+      {
+        kind: 'item',
+        id: 'copyAbsolutePath',
+        label: t('copy.absolutePath'),
+        onSelect: () =>
+          void copyToClipboard(
+            say('copy.absolutePath'),
+            repoAbsolutePath(status.root, row.entry.path),
+          ),
+      },
+    ]
+    if (!canDiscard(row.area)) return [staging, ...copies]
     const key = discardKey(row.entry, row.area)
     const armedHere = armedKey === key
     return [
@@ -1436,24 +1490,52 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           discard(row.entry)
         },
       },
+      ...copies,
     ]
   }
 
   /**
-   * The entries of one commit row's menu (FR-3.8).
+   * The entries of one commit row's menu (§9's commit menu).
    *
-   * One entry today, and it is armed: undo is in §4.3's irreversible class (the
-   * revert of a published commit, explicitly), and the entry itself becomes the
-   * confirmation between the two clicks. Which sentence it arms with follows the
-   * row's own pushed marker — the client's last reading, and the same upstream
-   * basis the host re-asks at execution time, so the two cannot disagree about
-   * which undo is coming. Drop/squash/reset and revert/cherry-pick for other rows
-   * arrive with §10.2 orders 9.
+   * The three copying entries are on every row — a hash or a message is worth
+   * taking from any commit. Undo is not: it is FR-3.8's "only the newest", so it
+   * appears only when the row says it is that one, last and after a hairline, in
+   * §4.3's irreversible class. It arms rather than fires (the entry itself becomes
+   * the confirmation between the two clicks), and which sentence it arms with
+   * follows the row's own pushed marker — the client's last reading, and the same
+   * upstream basis the host re-asks at execution time, so the two cannot disagree
+   * about which undo is coming. Revert/cherry-pick for other rows arrive with
+   * §10.2 order 9.
    */
   const commitMenuEntries = (row: CommitRowMenu): readonly MenuEntry[] => {
+    const copies: readonly MenuEntry[] = [
+      {
+        kind: 'item',
+        id: 'copyShortHash',
+        label: t('copy.shortHash'),
+        onSelect: () => void copyToClipboard(say('copy.shortHash'), row.commit.shortOid),
+      },
+      {
+        kind: 'item',
+        id: 'copyFullHash',
+        label: t('copy.fullHash'),
+        onSelect: () => void copyToClipboard(say('copy.fullHash'), row.commit.oid),
+      },
+      {
+        kind: 'item',
+        id: 'copyMessage',
+        label: t('copy.message'),
+        // The history list reads `%s`, the subject line; the body is not on this
+        // side of the wire, so this copies what the row itself shows.
+        onSelect: () => void copyToClipboard(say('copy.message'), row.commit.subject),
+      },
+    ]
+    if (!row.canUndo) return copies
     const key = `undo:${row.commit.oid}`
     const armedHere = armedKey === key
     return [
+      ...copies,
+      { kind: 'separator' },
       {
         kind: 'item',
         id: 'undo',

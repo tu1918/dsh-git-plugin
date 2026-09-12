@@ -150,10 +150,11 @@ export interface BottomPaneProps {
    */
   readonly onCloseFile: (key: string) => void
   /**
-   * Open a commit row's menu (FR-3.8), owned by the panel above: the armed
-   * confirmation and the action feedback both live there.
+   * Open a commit row's menu (§9's commit menu), owned by the panel above: the
+   * armed confirmation and the action feedback both live there. `canUndo` says
+   * whether the row is the newest, which is the only one FR-3.8 may undo.
    */
-  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
+  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean) => void
   /**
    * Open one file of a commit as that commit changed it (FR-7.2).
    *

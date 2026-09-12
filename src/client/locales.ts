@@ -59,6 +59,13 @@ export const zh = {
   'menu.fileRow': '{path} 的操作',
   'menu.commitRow': '提交 {hash} 的操作',
 
+  'copy.relativePath': '复制相对路径',
+  'copy.absolutePath': '复制绝对路径',
+  'copy.shortHash': '复制短哈希',
+  'copy.fullHash': '复制完整哈希',
+  'copy.message': '复制提交信息',
+  'copy.done': '已复制：{value}',
+
   'select.check': '选中 {path}',
   'select.uncheck': '取消选中 {path}',
   'select.checkDir': '选中「{path}」中的全部文件',
@@ -223,6 +230,7 @@ export const zh = {
   'error.dirtyWorktree': '工作区有未提交的更改，git 拒绝覆盖它们。可以先贮藏，再继续。',
   'error.notMerged': '这个分支还有未合并的提交。确实要删除，请在分支列表里再点一次删除。',
   'error.noLlm': '这个部署没有配置可用的语言模型，因此无法生成提交信息。',
+  'error.clipboard': '浏览器拒绝写入剪贴板。',
 } as const
 
 /** English dictionary, checked against the Chinese key set. */
@@ -260,6 +268,13 @@ export const en: Record<GitPanelKey, string> = {
 
   'menu.fileRow': 'Actions for {path}',
   'menu.commitRow': 'Actions for commit {hash}',
+
+  'copy.relativePath': 'Copy relative path',
+  'copy.absolutePath': 'Copy absolute path',
+  'copy.shortHash': 'Copy short hash',
+  'copy.fullHash': 'Copy full hash',
+  'copy.message': 'Copy commit message',
+  'copy.done': 'Copied: {value}',
 
   'select.check': 'Select {path}',
   'select.uncheck': 'Unselect {path}',
@@ -431,6 +446,7 @@ export const en: Record<GitPanelKey, string> = {
   'error.notMerged':
     'That branch has commits nothing else reaches. Click delete again in the branch list to discard them.',
   'error.noLlm': 'This deployment has no language model configured, so no message can be written.',
+  'error.clipboard': 'The browser refused to write to the clipboard.',
 }
 
 /** Every key the panel can translate. */

@@ -210,10 +210,11 @@ function CommitRow({
   readonly selected: boolean
   readonly onSelect: () => void
   /**
-   * Open the row's menu, anchored on the row element (FR-3.8).
+   * Open the row's menu, anchored on the row element (§9's commit menu).
    *
-   * Present only on the NEWEST commit — undo is FR-3.8's "仅最新一条", and a row
-   * with no entries gets no menu rather than an empty one.
+   * Every row carries the copying entries, and the panel above decides whether
+   * this particular row may also undo. Absent only when nothing above owns a
+   * menu, in which case the row leaves the native context menu alone.
    */
   readonly onMenu?: (anchor: HTMLElement) => void
 }): ReactNode {
@@ -291,14 +292,15 @@ export interface HistoryPanelProps {
   /** Whether this panel is the one on screen, which is what starts the read. */
   readonly active: boolean
   /**
-   * Open a commit row's menu (FR-3.8's undo entry).
+   * Open a commit row's menu (§9's commit menu).
    *
    * The menu itself — its layer, its entries, its armed confirmation — belongs
    * to the panel, which owns the action feedback this operation reports through;
-   * this panel only decides WHICH rows carry one: the newest commit, because
-   * FR-3.8 undoes exactly that one.
+   * this panel only decides WHICH rows may undo: the newest commit, because
+   * FR-3.8 undoes exactly that one. It says so with `canUndo` rather than by
+   * withholding the menu, because the copying entries are on every row.
    */
-  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement) => void
+  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean) => void
   /**
    * Open one file of the selected commit as that commit changed it (FR-7.2).
    *
@@ -450,9 +452,9 @@ export function HistoryPanel({
             selected={commit.oid === openOid}
             onSelect={() => select(commit.oid)}
             onMenu={
-              onCommitMenu === undefined || commit.oid !== newestOid
+              onCommitMenu === undefined
                 ? undefined
-                : (anchor) => onCommitMenu(commit, anchor)
+                : (anchor) => onCommitMenu(commit, anchor, commit.oid === newestOid)
             }
           />
         ))}

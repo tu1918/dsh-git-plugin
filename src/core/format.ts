@@ -31,6 +31,25 @@ export function pathParts(path: string): PathParts {
   return { directory: path.slice(0, cut + 1), name: path.slice(cut + 1) }
 }
 
+/**
+ * Make a repo-relative path absolute, for the "copy absolute path" entry.
+ *
+ * The panel's own model is declared in `/`-separated, repo-relative terms
+ * (`core/types.ts`), so the join is done here rather than by the caller: the
+ * root comes from `git rev-parse --show-toplevel`, which on Windows reports
+ * `C:/work/repo`, and a root that did arrive with backslashes keeps them so the
+ * pasted path is what that platform's file dialogs expect. A trailing separator
+ * on the root is dropped first, which is the one way this could double one.
+ * @param root - Absolute repository root, as `RepoStatus.root` carries it.
+ * @param path - Repo-relative, `/`-separated path.
+ * @returns The path rooted at the repository, in the root's own separator style.
+ */
+export function repoAbsolutePath(root: string, path: string): string {
+  const base = root.replace(/[\\/]+$/, '')
+  const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  return `${base}${separator}${separator === '\\' ? path.replace(/\//g, '\\') : path}`
+}
+
 /** A relative age, in the unit a localiser can render. */
 export interface RelativeTimeParts {
   /** Signed magnitude: negative for a time in the past. */

@@ -7,7 +7,25 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { lineCount, pathParts, relativeTimeParts } from '../src/core/format.ts'
+import { lineCount, pathParts, relativeTimeParts, repoAbsolutePath } from '../src/core/format.ts'
+
+describe('repoAbsolutePath', () => {
+  it('roots a repo-relative path at the repository', () => {
+    assert.equal(repoAbsolutePath('/repo', 'deep/nested/dir/changed.ts'), '/repo/deep/nested/dir/changed.ts')
+  })
+
+  it('does not double the separator when the root carries one', () => {
+    assert.equal(repoAbsolutePath('/repo/', 'src/x.ts'), '/repo/src/x.ts')
+  })
+
+  it('follows the root’s own separator on a Windows-style root', () => {
+    // `git rev-parse --show-toplevel` reports forward slashes on Windows, and a
+    // root that arrived with backslashes keeps them, so the pasted path is what
+    // that platform's file dialogs expect rather than a mixture.
+    assert.equal(repoAbsolutePath('C:/work/repo', 'src/x.ts'), 'C:/work/repo/src/x.ts')
+    assert.equal(repoAbsolutePath('C:\\work\\repo', 'src/x.ts'), 'C:\\work\\repo\\src\\x.ts')
+  })
+})
 
 describe('pathParts', () => {
   it('splits a nested path, keeping the trailing separator on the directory', () => {

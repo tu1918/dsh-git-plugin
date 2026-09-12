@@ -114,7 +114,7 @@ const t = translator(en) as (key: keyof typeof en, vars?: Readonly<Record<string
  *
  * The panel's `t` is a prop rather than a module import precisely so a language
  * switch is a re-render with another translator; this is the other half of that
- * test (`the operation feedback` → the locale-switch case).
+ * test (`the action feedback follows a language switch`).
  */
 const tZh = translator(zh) as (key: keyof typeof zh, vars?: Readonly<Record<string, string | number>>) => string
 
@@ -607,6 +607,8 @@ afterEach(async () => {
     for (const root of pending) root.unmount()
   })
   document.body.textContent = ''
+  // A clipboard stub from one copying test must not answer the next one's.
+  removeClipboard()
 })
 
 after(() => {
@@ -1884,6 +1886,129 @@ describe('staging from the change list', () => {
   })
 })
 
+describe('the operation feedback (§4.3)', () => {
+  /**
+   * Press a button without {@link click}'s trailing `flush`.
+   *
+   * `flush` waits on a real timer, and the two tests below mock `setTimeout` to
+   * drive the notice's own clock — a flushed wait would never resolve under them.
+   * @param node - The button to press.
+   */
+  async function pressNow(node: Element): Promise<void> {
+    await act(async () => {
+      node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  it('re-renders a notice in the new language after a locale switch', async () => {
+    // The regression this guards: the action feedback used to hold a translated
+    // STRING, so a notice written under one dictionary kept that language while
+    // every other word on screen followed the switch. The panel's `t` is a prop,
+    // so switching is a re-render with the other translator — exactly this.
+    //
+    // `unstage` prints nothing, so the notice is the operation's own name, which
+    // is the clearest thing to watch change language.
+    const git = stubGit({})
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    rendered.push(root)
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    })
+    await settle()
+
+    await click(
+      must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
+    )
+    assert.equal(must(container, '[data-action-done="unstage"]').textContent, 'Unstage')
+
+    // The same notice, re-rendered from its key in the other dictionary.
+    await act(async () => {
+      root.render(h(StatusPanel, { sessionId: 's1', git, t: tZh, locale: 'zh' }))
+    })
+    await settle()
+    assert.equal(must(container, '[data-action-done="unstage"]').textContent, '取消暂存')
+  })
+
+  it('hangs over the column, and a success takes itself away after its time', async () => {
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const container = await render(
+        h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+      )
+      await settle()
+      await pressNow(
+        must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
+      )
+
+      const notice = must<HTMLElement>(container, '[data-action-done="unstage"]')
+      // A layer over the panel, not a band in the column: it is positioned
+      // against the panel's own box (`position: relative`) and the change list is
+      // still underneath it.
+      assert.equal(window.getComputedStyle(notice).position, 'absolute')
+      assert.ok(container.querySelector(`[data-group="staged"] .${cls.row}`), 'the list survives')
+
+      await act(async () => {
+        mock.timers.tick(NOTICE_DURATION_MS - 1)
+      })
+      assert.ok(container.querySelector('[data-action-done="unstage"]'), 'still there just before its time')
+
+      await act(async () => {
+        mock.timers.tick(1)
+      })
+      assert.equal(container.querySelector('[data-action-done="unstage"]'), null)
+    } finally {
+      mock.timers.reset()
+    }
+  })
+
+  it('keeps a refusal until its × is pressed, however long that is', async () => {
+    // FR-4.4: git's refusal is multi-line and the shortcut under it is a control.
+    // A time limit on either would take them away mid-read.
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      const container = await render(
+        h(StatusPanel, {
+          sessionId: 's1',
+          git: stubGit({
+            report: {
+              ok: false,
+              error: { code: 'git-failed', message: 'boom', detail: 'line one\nline two' },
+            },
+          }),
+          t,
+          locale: 'en',
+        }),
+      )
+      await settle()
+      await pressNow(must(container, `[data-group="untracked"] .${cls.rowActions} button`))
+
+      const notice = must<HTMLElement>(container, '[data-action-error="stage"]')
+      assert.equal(window.getComputedStyle(notice).position, 'absolute')
+      assert.equal(
+        must(notice, `.${cls.note}`).getAttribute('data-multiline'),
+        'true',
+        'git’s own lines reach the layer',
+      )
+
+      await act(async () => {
+        mock.timers.tick(NOTICE_DURATION_MS * 10)
+      })
+      assert.ok(container.querySelector('[data-action-error="stage"]'), 'a refusal waits to be read')
+
+      // The × is the only way out, and it is on the layer itself.
+      await act(async () => {
+        must(notice, `.${cls.tool}`).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      })
+      assert.equal(container.querySelector('[data-action-error="stage"]'), null)
+    } finally {
+      mock.timers.reset()
+    }
+  })
+})
+
 describe('selecting rows for batch actions', () => {
   /** The selection checkbox inside one row band. */
   function boxOf(row: Element): HTMLButtonElement {
@@ -2465,129 +2590,6 @@ describe('operation failures (§4.3)', () => {
 
     const notice = must(container, '[data-action-done="unstage"]')
     assert.equal(notice.textContent, 'Unstage')
-  })
-})
-
-describe('the operation feedback (§4.3)', () => {
-  /**
-   * Press a button without {@link click}'s trailing `flush`.
-   *
-   * `flush` waits on a real timer, and the two tests below mock `setTimeout` to
-   * drive the notice's own clock — a flushed wait would never resolve under them.
-   * @param node - The button to press.
-   */
-  async function pressNow(node: Element): Promise<void> {
-    await act(async () => {
-      node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    })
-    await settle()
-  }
-
-  it('re-renders a notice in the new language after a locale switch', async () => {
-    // The regression this guards: the action feedback used to hold a translated
-    // STRING, so a notice written under one dictionary kept that language while
-    // every other word on screen followed the switch. The panel's `t` is a prop,
-    // so switching is a re-render with the other translator — exactly this.
-    //
-    // `unstage` prints nothing, so the notice is the operation's own name, which
-    // is the clearest thing to watch change language.
-    const git = stubGit({})
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    rendered.push(root)
-    await act(async () => {
-      root.render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
-    })
-    await settle()
-
-    await click(
-      must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
-    )
-    assert.equal(must(container, '[data-action-done="unstage"]').textContent, 'Unstage')
-
-    // The same notice, re-rendered from its key in the other dictionary.
-    await act(async () => {
-      root.render(h(StatusPanel, { sessionId: 's1', git, t: tZh, locale: 'zh' }))
-    })
-    await settle()
-    assert.equal(must(container, '[data-action-done="unstage"]').textContent, '取消暂存')
-  })
-
-  it('hangs over the column, and a success takes itself away after its time', async () => {
-    mock.timers.enable({ apis: ['setTimeout'] })
-    try {
-      const container = await render(
-        h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
-      )
-      await settle()
-      await pressNow(
-        must(must(container, `[data-group="staged"] .${cls.row}`), `.${cls.rowActions} button`),
-      )
-
-      const notice = must<HTMLElement>(container, '[data-action-done="unstage"]')
-      // A layer over the panel, not a band in the column: it is positioned
-      // against the panel's own box (`position: relative`) and the change list is
-      // still underneath it.
-      assert.equal(window.getComputedStyle(notice).position, 'absolute')
-      assert.ok(container.querySelector(`[data-group="staged"] .${cls.row}`), 'the list survives')
-
-      await act(async () => {
-        mock.timers.tick(NOTICE_DURATION_MS - 1)
-      })
-      assert.ok(container.querySelector('[data-action-done="unstage"]'), 'still there just before its time')
-
-      await act(async () => {
-        mock.timers.tick(1)
-      })
-      assert.equal(container.querySelector('[data-action-done="unstage"]'), null)
-    } finally {
-      mock.timers.reset()
-    }
-  })
-
-  it('keeps a refusal until its × is pressed, however long that is', async () => {
-    // FR-4.4: git's refusal is multi-line and the shortcut under it is a control.
-    // A time limit on either would take them away mid-read.
-    mock.timers.enable({ apis: ['setTimeout'] })
-    try {
-      const container = await render(
-        h(StatusPanel, {
-          sessionId: 's1',
-          git: stubGit({
-            report: {
-              ok: false,
-              error: { code: 'git-failed', message: 'boom', detail: 'line one\nline two' },
-            },
-          }),
-          t,
-          locale: 'en',
-        }),
-      )
-      await settle()
-      await pressNow(must(container, `[data-group="untracked"] .${cls.rowActions} button`))
-
-      const notice = must<HTMLElement>(container, '[data-action-error="stage"]')
-      assert.equal(window.getComputedStyle(notice).position, 'absolute')
-      assert.equal(
-        must(notice, `.${cls.note}`).getAttribute('data-multiline'),
-        'true',
-        'git’s own lines reach the layer',
-      )
-
-      await act(async () => {
-        mock.timers.tick(NOTICE_DURATION_MS * 10)
-      })
-      assert.ok(container.querySelector('[data-action-error="stage"]'), 'a refusal waits to be read')
-
-      // The × is the only way out, and it is on the layer itself.
-      await act(async () => {
-        must(notice, `.${cls.tool}`).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-      })
-      assert.equal(container.querySelector('[data-action-error="stage"]'), null)
-    } finally {
-      mock.timers.reset()
-    }
   })
 })
 
@@ -3476,10 +3478,15 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
     // A menu, named for the row it belongs to.
     assert.equal(menu.getAttribute('role'), 'menu')
     assert.match(menu.getAttribute('aria-label') ?? '', /deep\/nested\/dir\/changed\.ts/)
-    // The working-tree row offers its own staging action and the destructive one,
-    // with a hairline between them (§9's menu shape).
-    assert.deepEqual(menuLabels(menu), ['Stage', 'Discard changes'])
-    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
+    // The working-tree row offers its own staging action, the destructive one,
+    // then the two copying entries (order 6), each group after a hairline.
+    assert.deepEqual(menuLabels(menu), [
+      'Stage',
+      'Discard changes',
+      'Copy relative path',
+      'Copy absolute path',
+    ])
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 2)
   })
 
   it('runs the action on the file the row stands for, and closes', async () => {
@@ -3504,11 +3511,16 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
     await settle()
 
     const staged = await openRowMenu(container, 'staged')
-    assert.deepEqual(menuLabels(staged), ['Unstage'])
+    assert.deepEqual(menuLabels(staged), ['Unstage', 'Copy relative path', 'Copy absolute path'])
     await click(must(staged, '[role="menuitem"]'))
 
     const untracked = await openRowMenu(container, 'untracked')
-    assert.deepEqual(menuLabels(untracked), ['Stage', 'Discard changes'])
+    assert.deepEqual(menuLabels(untracked), [
+      'Stage',
+      'Discard changes',
+      'Copy relative path',
+      'Copy absolute path',
+    ])
     await click(must(untracked, '[role="menuitem"]'))
 
     assert.deepEqual(calls.entries, ['unstage:src/staged.ts', 'stage:notes.md'])
@@ -3523,7 +3535,11 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
 
     const menu = await openRowMenu(container, 'conflicted')
     // The command is `git add` either way; the entry says what that means here.
-    assert.deepEqual(menuLabels(menu), ['Mark resolved'])
+    assert.deepEqual(menuLabels(menu), [
+      'Mark resolved',
+      'Copy relative path',
+      'Copy absolute path',
+    ])
     await click(must(menu, '[role="menuitem"]'))
     assert.deepEqual(calls.entries, ['stage:both.txt'])
   })
@@ -3590,6 +3606,33 @@ describe('the row menu (§9’s file menu, M5a order 1)', () => {
     assert.equal(container.querySelector('[data-branch-picker]'), null)
     assert.ok(container.querySelector('[data-menu="true"]'))
   })
+
+  it('copies the row’s path, relative and absolute (order 6)', async () => {
+    const clipboard = stubClipboard()
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The relative entry copies the repo-relative path the model already holds.
+    let menu = await openRowMenu(container, 'unstaged')
+    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][2] as HTMLElement)
+    assert.equal(container.querySelector('[data-menu="true"]'), null, 'a copy closes the menu')
+    assert.deepEqual(clipboard.writes, ['deep/nested/dir/changed.ts'])
+
+    // The absolute one roots it at `RepoStatus.root` — the host never has to be
+    // asked, because the panel already has the prefix.
+    menu = await openRowMenu(container, 'unstaged')
+    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][3] as HTMLElement)
+    assert.deepEqual(clipboard.writes, [
+      'deep/nested/dir/changed.ts',
+      '/repo/deep/nested/dir/changed.ts',
+    ])
+    assert.match(
+      must(container, '[data-action-done="copy"]').textContent ?? '',
+      /Copied: \/repo\/deep\/nested\/dir\/changed\.ts/,
+    )
+  })
 })
 
 describe('discarding a change from its row (FR-6.1, §4.3)', () => {
@@ -3635,10 +3678,11 @@ describe('discarding a change from its row (FR-6.1, §4.3)', () => {
       const buttons = [...row.querySelectorAll(`.${cls.rowActions} button`)]
       assert.equal(buttons.length, 1, `${area} has one button, not two`)
     }
-    // ...and the menu agrees with the row: no entry, no hairline.
+    // ...and the menu agrees with the row: no discard entry, no hairline before
+    // it, but the copying entries that belong to every row are still there.
     const stagedMenu = await openRowMenu(container, 'staged')
-    assert.deepEqual(menuLabels(stagedMenu), ['Unstage'])
-    assert.equal(stagedMenu.querySelectorAll('[role="separator"]').length, 0)
+    assert.deepEqual(menuLabels(stagedMenu), ['Unstage', 'Copy relative path', 'Copy absolute path'])
+    assert.equal(stagedMenu.querySelectorAll('[role="separator"]').length, 1)
   })
 
   it('arms inside the row menu, which stays up for the second click', async () => {
@@ -3704,8 +3748,36 @@ async function openHistoryMenu(container: HTMLElement, index = 0): Promise<HTMLE
   return must<HTMLElement>(container, '[data-menu="true"]')
 }
 
-describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () => {
-  it('opens a one-entry danger menu on the newest commit, and nowhere else', async () => {
+/**
+ * Install a recording clipboard, and return what it was asked to write.
+ *
+ * jsdom has no Clipboard API and no `execCommand`, so the copying entries would
+ * otherwise always report a refusal; the tests that assert a successful copy put
+ * this in place first. It is a property of `navigator` rather than of the module,
+ * because `ui/clipboard.ts` reaches for the browser's own object.
+ * @returns The list the writes land in, in order.
+ */
+function stubClipboard(): { readonly writes: string[] } {
+  const writes: string[] = []
+  Object.defineProperty(window.navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: (text: string): Promise<void> => {
+        writes.push(text)
+        return Promise.resolve()
+      },
+    },
+  })
+  return { writes }
+}
+
+/** Put the document back to jsdom's default: no clipboard at all, so writes fail. */
+function removeClipboard(): void {
+  Reflect.deleteProperty(window.navigator, 'clipboard')
+}
+
+describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
+  it('offers the copying entries on every row, and undo only on the newest', async () => {
     const older = { ...commitFixture(), oid: 'e'.repeat(40), shortOid: 'eeeeeee' }
     const container = await render(
       // Newest first, as `git log` reports it.
@@ -3717,20 +3789,73 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
     // A menu, named for the commit it belongs to.
     assert.equal(menu.getAttribute('role'), 'menu')
     assert.match(menu.getAttribute('aria-label') ?? '', /bbbbbbb/)
-    const items = [...menu.querySelectorAll('[role="menuitem"]')]
-    assert.equal(items.length, 1, 'undo is the only entry so far')
-    assert.equal(items[0]?.textContent, 'Undo this commit')
-    assert.equal(items[0]?.getAttribute('data-danger'), 'true')
+    // The copies first, then — only because this is the newest row — the armed
+    // undo after a hairline.
+    assert.deepEqual(menuLabels(menu), [
+      'Copy short hash',
+      'Copy full hash',
+      'Copy commit message',
+      'Undo this commit',
+    ])
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
+    const undo = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    assert.equal(undo.textContent, 'Undo this commit')
 
-    // The older row has no menu at all: FR-3.8 undoes the newest commit, so a
-    // row with no entries gets no empty menu.
+    // The older row still has a menu — the copies are FR-3.8's and order 6's two
+    // different questions — but nothing irreversible in it.
     await keyDown(menu, { key: 'Escape' })
-    const rows = [...container.querySelectorAll<HTMLElement>(`.${cls.commitRow}`)]
-    await act(async () => {
-      rows[1]?.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
-    })
+    const olderMenu = await openHistoryMenu(container, 1)
+    assert.deepEqual(menuLabels(olderMenu), [
+      'Copy short hash',
+      'Copy full hash',
+      'Copy commit message',
+    ])
+    assert.equal(olderMenu.querySelectorAll('[role="separator"]').length, 0)
+    assert.equal(olderMenu.querySelector('[data-danger="true"]'), null)
+  })
+
+  it('copies the row’s hash and message to the clipboard (order 6)', async () => {
+    const clipboard = stubClipboard()
+    const older = { ...commitFixture(), oid: 'e'.repeat(40), shortOid: 'eeeeeee' }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [commitFixture(), older] }), t, locale: 'en' }),
+    )
     await settle()
-    assert.equal(container.querySelector('[data-menu="true"]'), null)
+
+    // Short hash, then full hash, then the subject — the row's own three values.
+    let menu = await openHistoryMenu(container)
+    await click(must(menu, '[role="menuitem"]'))
+    assert.equal(container.querySelector('[data-menu="true"]'), null, 'a copy closes the menu')
+    assert.deepEqual(clipboard.writes, ['bbbbbbb'])
+
+    menu = await openHistoryMenu(container)
+    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][1] as HTMLElement)
+    assert.deepEqual(clipboard.writes, ['bbbbbbb', 'b'.repeat(40)])
+
+    // The older row copies ITS values, not the newest row's.
+    menu = await openHistoryMenu(container, 1)
+    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][2] as HTMLElement)
+    assert.deepEqual(clipboard.writes, ['bbbbbbb', 'b'.repeat(40), 'a commit subject'])
+
+    // The notice says what landed on the clipboard.
+    const done = must(container, '[data-action-done="copy"]')
+    assert.match(done.textContent ?? '', /a commit subject/)
+  })
+
+  it('reports a refused clipboard write beside the list, and copies nothing', async () => {
+    // jsdom has neither Clipboard API nor `execCommand`, so the write is refused.
+    removeClipboard()
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ log: [commitFixture()] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openHistoryMenu(container)
+    await click(must(menu, '[role="menuitem"]'))
+
+    const box = must(container, '[data-action-error="copy"]')
+    assert.match(box.textContent ?? '', /refused to write to the clipboard/)
+    assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 1, 'the list survives')
   })
 
   it('arms first with the reset sentence for an unpushed commit; only the second click undoes', async () => {
@@ -3743,7 +3868,8 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
 
     let menu = await openHistoryMenu(container)
     const layer = must<HTMLElement>(container, '[data-popover="true"]')
-    await click(must(menu, '[role="menuitem"]'))
+    const undoEntry = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    await click(undoEntry)
 
     // §4.3's first click: armed, and the entry itself says what the second click
     // does — for an unpublished commit, the changes return to the working tree.
@@ -3784,7 +3910,7 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
     await settle()
 
     const menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"]'))
+    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
     const armed = must<HTMLElement>(container, '[role="menuitem"][data-danger="true"]')
     // Published history is not rewritten: the confirmation says a NEW commit
     // undoes the old one.
@@ -3809,6 +3935,14 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
     const menu = must<HTMLElement>(container, '[data-menu="true"]')
     assert.equal(document.activeElement, menu)
     assert.equal(must<HTMLElement>(menu, '[role="menuitem"]').dataset.active, 'true')
+
+    // The copies come first, so the keyboard walks to the last entry — the armed
+    // undo — before Enter means undo.
+    await keyDown(menu, { key: 'End' })
+    assert.equal(
+      must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]').dataset.active,
+      'true',
+    )
 
     await keyDown(menu, { key: 'Enter' })
     assert.deepEqual(calls.entries, [], 'the first activation only arms')
@@ -3837,7 +3971,7 @@ describe('undoing the newest commit from its history row (FR-3.8, §4.3)', () =>
     await settle()
 
     const menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"]'))
+    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
     await click(must(container, '[role="menuitem"][data-danger="true"]'))
 
     // The refusal is a reachable state (the history moved under the row), and
