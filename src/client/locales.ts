@@ -175,6 +175,7 @@ export const zh = {
   'bottom.tabs': '提交历史与差异',
   'bottom.resize': '拖动调整下方区域高度',
   'bottom.collapse': '收起下方区域',
+  'bottom.closeFile': '关闭「{path}」',
   'history.loadMore': '加载更多',
   'history.empty': '提交之后，历史会显示在这里。',
   'history.pushed': '已在远端',
@@ -193,7 +194,6 @@ export const zh = {
   'history.openFile': '查看「{path}」在这次提交中的差异',
 
   'diff.open': '打开 {path} 的差异',
-  'diff.close': '返回变更列表',
   'diff.reload': '重新读取差异',
   'diff.layout': '差异布局',
   'diff.layoutInline': '上下对照',
@@ -379,6 +379,7 @@ export const en: Record<GitPanelKey, string> = {
   'bottom.tabs': 'Commits and diff',
   'bottom.resize': 'Drag to resize the bottom pane',
   'bottom.collapse': 'Collapse the bottom pane',
+  'bottom.closeFile': 'Close {path}',
   'history.loadMore': 'Load more',
   'history.empty': 'Commits will show up here.',
   'history.pushed': 'On the remote',
@@ -398,7 +399,6 @@ export const en: Record<GitPanelKey, string> = {
   'history.openFile': 'Open {path} as this commit changed it',
 
   'diff.open': 'Open the diff of {path}',
-  'diff.close': 'Back to the change list',
   'diff.reload': 'Read the diff again',
   'diff.layout': 'Diff layout',
   'diff.layoutInline': 'Unified (inline)',

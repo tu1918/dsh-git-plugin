@@ -38,7 +38,6 @@ import type { Translate } from './translate.ts'
 import { errorCopy } from './error-copy.ts'
 import {
   ArrowDownGlyph,
-  CloseGlyph,
   RefreshGlyph,
   SpinnerGlyph,
   SplitGlyph,
@@ -323,8 +322,6 @@ export interface DiffViewProps {
    * expanded large diff offers no way back.
    */
   readonly onCollapse?: () => void
-  /** Leave the diff and go back to the change list. */
-  readonly onClose: () => void
   /** Read the file again. */
   readonly onReload: () => void
   /** True while a read is in flight, so a reload cannot be started twice. */
@@ -336,6 +333,10 @@ export interface DiffViewProps {
  *
  * Pure: it renders exactly what it is handed, so the same component can draw a
  * commit's file later (FR-7.2) without a fetch of its own.
+ *
+ * Its header carries the diff's OWN operations and nothing else — the layout
+ * pair and the reload. Closing is the tab strip's business (each tab has its own
+ * ×), so this row never doubles as a way out of the pane.
  * @param props - The diff and the panel's callbacks.
  */
 export function DiffView({
@@ -346,7 +347,6 @@ export function DiffView({
   expanded,
   onExpand,
   onCollapse,
-  onClose,
   onReload,
   busy,
 }: DiffViewProps): ReactNode {
@@ -397,15 +397,6 @@ export function DiffView({
         >
           {busy ? <SpinnerGlyph className={cls.spinnerGlyph} size={12} /> : <RefreshGlyph />}
         </button>
-        <button
-          type="button"
-          className={cls.tool}
-          title={t('diff.close')}
-          aria-label={t('diff.close')}
-          onClick={onClose}
-        >
-          <CloseGlyph />
-        </button>
       </div>
 
       {diff.binary ? (
@@ -455,7 +446,21 @@ export interface DiffPaneProps {
   readonly t: Translate
   /** Aborted when the tab closes; cancels the read. */
   readonly signal?: AbortSignal
-  /** Leave the diff and go back to the change list. */
+  /**
+   * Whether this pane is the one on screen (several may be open at once).
+   *
+   * Only the pane on screen answers Escape: hidden panes are still mounted, and
+   * each of them listening on the document would close every open diff at once,
+   * which is not what "put this one away" means. Defaults to true, so a caller
+   * with a single diff says nothing.
+   */
+  readonly active?: boolean
+  /**
+   * Leave this diff, which is what Escape does.
+   *
+   * The pane's own header carries no close control: closing belongs to the tab
+   * that owns the diff, so the header row stays "diff operations only".
+   */
   readonly onClose: () => void
 }
 
@@ -466,10 +471,11 @@ export interface DiffPaneProps {
  * the diff never moves focus into itself, so a listener on the container would
  * never hear a key. Capture order also means the pane answers before anything
  * deeper that also treats Escape as "go back".
- * @param onClose - Called when Escape is pressed.
+ * @param onClose - Called when Escape is pressed, or `null` to bind nothing.
  */
-function useEscapeToClose(onClose: () => void): void {
+function useEscapeToClose(onClose: (() => void) | null): void {
   useEffect(() => {
+    if (onClose === null) return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
@@ -498,6 +504,7 @@ export function DiffPane({
   git,
   t,
   signal,
+  active = true,
   onClose,
 }: DiffPaneProps): ReactNode {
   const [diff, setDiff] = useState<FileDiff | null>(null)
@@ -572,7 +579,7 @@ export function DiffPane({
     writeDiffLayout(next)
   }, [])
 
-  useEscapeToClose(onClose)
+  useEscapeToClose(active ? onClose : null)
 
   const reload = useCallback((): void => setReloadNonce((value) => value + 1), [])
 
@@ -598,15 +605,6 @@ export function DiffPane({
           >
             <RefreshGlyph />
           </button>
-          <button
-            type="button"
-            className={cls.tool}
-            title={t('diff.close')}
-            aria-label={t('diff.close')}
-            onClick={onClose}
-          >
-            <CloseGlyph />
-          </button>
         </div>
         <div className={cls.status}>
           <p className={cls.statusTitle}>{title}</p>
@@ -627,15 +625,6 @@ export function DiffPane({
             {path}
           </span>
           <span className={cls.spacer} />
-          <button
-            type="button"
-            className={cls.tool}
-            title={t('diff.close')}
-            aria-label={t('diff.close')}
-            onClick={onClose}
-          >
-            <CloseGlyph />
-          </button>
         </div>
         <p className={cls.diffState} aria-busy="true">
           <SpinnerGlyph className={cls.spinnerGlyph} size={12} /> {t('loading')}
@@ -653,7 +642,6 @@ export function DiffPane({
       expanded={expanded}
       onExpand={() => setExpanded(true)}
       onCollapse={() => setExpanded(false)}
-      onClose={onClose}
       onReload={reload}
       busy={busy}
     />

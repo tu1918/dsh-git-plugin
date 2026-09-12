@@ -44,7 +44,8 @@ import { Menu, type MenuEntry } from './menu.tsx'
 import { Popover } from './popover.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
-import { BottomPane, type OpenFile } from './BottomPane.tsx'
+import { BottomPane, openFileKey, type BottomTab, type OpenFile } from './BottomPane.tsx'
+import { readBottomPane } from './bottom-view.ts'
 import {
   dirKey,
   readCollapsedDirs,
@@ -558,14 +559,23 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const [message, setMessage] = useState('')
   const [action, setAction] = useState<ActionState>({ kind: 'idle' })
   /**
-   * The file whose diff is open, or `null` while the change list is showing.
+   * The diffs that are open, in the order their tabs were opened (FR-2.1, FR-7.2).
    *
-   * The target travels with the path: a change-list row opens a working
-   * comparison, and FR-7.2's drill-down opens one file as a commit changed it.
-   * The "is this file still changed?" check below applies only to the first kind
-   * — a commit diff has no change-list row to return to.
+   * A list rather than one file: the dock's strip is the panel's editor area, and
+   * reading a commit means walking its file list without closing the last diff.
+   * The target travels with each path, so a working comparison and a commit's
+   * reading of the same file are two entries rather than one that overwrites.
    */
-  const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  const [openFiles, setOpenFiles] = useState<readonly OpenFile[]>([])
+  /**
+   * Which bottom tab is showing, or `null` while the dock is folded to its strip.
+   *
+   * Read from storage for the same reason the height is: a dock that folds itself
+   * on every reload is one the user has to re-open every time.
+   */
+  const [bottomTab, setBottomTab] = useState<BottomTab | null>(() =>
+    readBottomPane().expanded ? { kind: 'history' } : null,
+  )
   /** Whether the branch picker is unfolded (FR-4.1). */
   const [pickerOpen, setPickerOpen] = useState(false)
   /** Whether the stash list is unfolded (FR-6.2). */
@@ -730,12 +740,14 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }, [])
 
   // A different session is a different repository, so neither the draft nor the
-  // last operation's result belongs to it — and neither does an open diff, which
-  // describes a file in the old repository.
+  // last operation's result belongs to it — and neither do the open diffs, which
+  // describe files in the old repository. The dock itself stays where it was: a
+  // user who had the pane open keeps it open, on the history.
   useEffect(() => {
     setMessage('')
     setAction({ kind: 'idle' })
-    setOpenFile(null)
+    setOpenFiles([])
+    setBottomTab((current) => (current === null ? null : { kind: 'history' }))
     setPickerOpen(false)
     setMenu(null)
     setBranchRefusal(null)
@@ -757,7 +769,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }, [sessionId, disarm])
 
   // A file committed or discarded while its diff is open no longer has a row to
-  // return to, so the view is dropped rather than left showing a diff of
+  // return to, so that tab is dropped rather than left showing a diff of
   // something the change list no longer lists. The check waits for a settled
   // read: during a refresh the group is briefly the old one, and clearing then
   // would close the pane on every keystroke of a `git add`.
@@ -767,16 +779,21 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // this rule would close it the instant it opened. Its staleness is the host's
   // to answer, the same way an expired undo row's is.
   useEffect(() => {
-    if (openFile === null || openFile.target.area === 'commit') return
     if (busy || snapshot === null || snapshot.kind !== 'ready') return
     // Listed in ANY group, not just the one it was opened from: staging a file
     // moves it between groups, and the diff should survive that.
     const { groups } = snapshot.status
-    const listed = CHANGE_AREAS.some((area) =>
-      groups[area].some((entry) => entry.path === openFile.path),
-    )
-    if (!listed) setOpenFile(null)
-  }, [openFile, snapshot, busy])
+    setOpenFiles((current) => {
+      const kept = current.filter(
+        (file) =>
+          file.target.area === 'commit' ||
+          CHANGE_AREAS.some((area) => groups[area].some((entry) => entry.path === file.path)),
+      )
+      // The same array when nothing changed: a new one would re-render the whole
+      // dock on every status read.
+      return kept.length === current.length ? current : kept
+    })
+  }, [snapshot, busy])
 
   // The same rule for an open menu: the row it hangs from can leave the list
   // under it — another window commits or discards the file — and a menu over a
@@ -1211,19 +1228,33 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
+   * Show one file's diff, opening its tab if it is not already open (FR-2.1).
+   *
+   * The row IS the open menu's anchor, and a press on the anchor is not an
+   * "outside" press — so without the layer clearing the menu would stay up over
+   * the diff it just opened. The same goes for the two layers the rail opens: a
+   * row can be activated by Enter, which the layer's pointerdown listener never
+   * sees.
+   * @param file - The path and the comparison to read it with.
+   */
+  const showDiff = (file: OpenFile): void => {
+    const key = openFileKey(file)
+    setMenu(null)
+    setPickerOpen(false)
+    setStashOpen(false)
+    setOpenFiles((current) =>
+      current.some((entry) => openFileKey(entry) === key) ? current : [...current, file],
+    )
+    setBottomTab({ kind: 'file', key })
+  }
+
+  /**
    * Open one row's diff (FR-2.1).
    * @param entry - The row that was activated.
    * @param area - The group it was activated in, which picks the comparison.
    */
   const openDiff = (entry: FileChange, area: ChangeArea): void => {
-    // The row IS the open menu's anchor, and a press on the anchor is not an
-    // "outside" press — so without this the menu would stay up over the diff it
-    // just opened. The same goes for the two layers the rail opens: a row can be
-    // activated by Enter, which the layer's pointerdown listener never sees.
-    setMenu(null)
-    setPickerOpen(false)
-    setStashOpen(false)
-    setOpenFile({ path: entry.path, target: diffAreaOf(area) })
+    showDiff({ path: entry.path, target: diffAreaOf(area) })
   }
 
   /**
@@ -1235,10 +1266,29 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param path - The file the user picked.
    */
   const openCommitFile = (commit: CommitInfo, path: string): void => {
-    setMenu(null)
-    setPickerOpen(false)
-    setStashOpen(false)
-    setOpenFile({ path, target: { area: 'commit', hash: commit.oid } })
+    showDiff({ path, target: { area: 'commit', hash: commit.oid } })
+  }
+
+  /**
+   * Close one open diff (the × in the diff's own header).
+   *
+   * Its neighbour takes the strip over, or the history when it was the last one:
+   * closing a diff is not a reason to put the whole pane away, so the dock stays
+   * open either way.
+   * @param key - Which open diff to drop.
+   */
+  const closeFile = (key: string): void => {
+    const index = openFiles.findIndex((file) => openFileKey(file) === key)
+    const next = openFiles.filter((file) => openFileKey(file) !== key)
+    setOpenFiles(next)
+    setBottomTab((current) => {
+      if (current === null || current.kind !== 'file' || current.key !== key) return current
+      // The tab to the right, or the one to the left when the last tab closed.
+      const neighbour = next[Math.min(index, next.length - 1)]
+      return neighbour === undefined
+        ? { kind: 'history' }
+        : { kind: 'file', key: openFileKey(neighbour) }
+    })
   }
 
   /**
@@ -1738,17 +1788,19 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}
         </div>
         {/* One region for everything that is not the change list: the recent
-            commits and the diff of the row that was clicked share it as two tabs
-            (VS Code keeps the list and the editor apart; this panel has no editor
-            area, so they take turns in the same box). */}
+            commits and every open diff share it as one strip of tabs (VS Code
+            keeps the list and the editor apart; this panel has no editor area, so
+            they take turns in the same box). */}
         <BottomPane
           sessionId={sessionId}
           git={git}
           t={t}
           locale={locale}
           signal={signal}
-          openFile={openFile}
-          onCloseDiff={() => setOpenFile(null)}
+          openFiles={openFiles}
+          tab={bottomTab}
+          onTab={setBottomTab}
+          onCloseFile={closeFile}
           onCommitMenu={openCommitMenu}
           onOpenCommitFile={openCommitFile}
         />

@@ -1110,14 +1110,25 @@ export const css = `
   white-space: nowrap;
 }
 
+/* FR-1.2: a long path loses directories, never the file name. The directory's
+   shrink weight is a hundred times the name's, so the shared shortfall is taken
+   out of the directory first; only when it is gone does the name itself shorten
+   — and then it ends in an ellipsis rather than being chopped mid-letter by the
+   container's own clip. */
 .${cls.pathDir} {
-  flex: none;
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
 }
 
 .${cls.pathName} {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
 }
 
 /* The row's own '+/−' is the panel's most repeated click, so it gets more room
@@ -1423,20 +1434,31 @@ export const css = `
   max-height: min(40vh, calc(100% - ${DOCK_RESERVED}px));
 }
 
+/* The strip itself scrolls once enough diffs are open to outgrow the panel: a tab
+   that ran off the edge would be an open file nobody can get back to. The
+   history tab is marked resident so it is never the one squeezed out. */
 .${cls.bottomTabs} {
   display: flex;
   flex: none;
   align-items: center;
   gap: 2px;
   padding: 2px 6px 2px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   background: var(--dsw-alias-bg-layer-1);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
 /* A tab is mostly a label; the selected one is marked by the label's own colour
    and a rule under it, the way an editor's tabs read, rather than by a filled
-   pill that would shout in a panel this quiet. */
+   pill that would shout in a panel this quiet. It shrinks to a floor and then the
+   strip scrolls, so a long name costs the label an ellipsis rather than pushing
+   the other tabs out of reach. */
 .${cls.bottomTab} {
+  flex: 0 1 auto;
+  min-width: 44px;
   max-width: 160px;
   overflow: hidden;
   padding: 4px 8px;
@@ -1453,6 +1475,10 @@ export const css = `
   cursor: pointer;
 }
 
+.${cls.bottomTab}[data-resident='true'] {
+  flex: none;
+}
+
 .${cls.bottomTab}:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
@@ -1463,19 +1489,50 @@ export const css = `
   box-shadow: inset 0 -1.5px 0 var(--dsw-alias-brand-primary);
 }
 
-/* The diff's tab carries its own close button, which is a sibling so the tab
-   itself stays a plain button (a button inside a button is invalid). */
+/* One diff tab and its own close control, as SIBLINGS: a button inside a button
+   is invalid markup and the inner one is not reliably clickable.
+
+   The × keeps its width while hidden, so revealing it never nudges the label, and
+   it appears when the pointer or the keyboard is on THIS tab — which is what makes
+   a strip of tabs closable one at a time without every tab carrying a permanent
+   piece of chrome. Visibility rather than plain transparency: a hidden control
+   must not be a target, or a stray tap on a tab's right edge would close it.
+
+   Keyboard reaches it the same way: focusing the tab's label puts :focus-within
+   on the group, which reveals the ×, and the next Tab lands on it. */
 .${cls.bottomTabGroup} {
   display: inline-flex;
-  max-width: 180px;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 180px;
   align-items: center;
+  border-radius: 4px 4px 0 0;
+}
+
+.${cls.bottomTabGroup}:hover,
+.${cls.bottomTabGroup}:focus-within {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The band is the group's now; the label keeps only its hover ink. */
+.${cls.bottomTabGroup} .${cls.bottomTab}:hover {
+  background: transparent;
 }
 
 .${cls.bottomTabGroup} .${cls.tool} {
-  width: 20px;
-  height: 20px;
+  flex: none;
+  width: 18px;
+  height: 18px;
   margin-left: -4px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.${cls.bottomTabGroup}:hover .${cls.tool},
+.${cls.bottomTabGroup}:focus-within .${cls.tool} {
+  visibility: visible;
+  opacity: 1;
 }
 
 .${cls.bottomBody} {
@@ -1773,16 +1830,23 @@ export const css = `
 
 /* Same rule as the change list (FR-1.2): the directory clips, the file name
    never does — it is the part a reader is looking for. */
+/* Same rule as the change rows': the directory gives way first, and a file name
+   too long even for the full width ends in an ellipsis instead of being cut
+   mid-letter. */
 .${cls.diffPathDir} {
-  flex: none;
+  flex: 0 100 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
   text-overflow: ellipsis;
 }
 
 .${cls.diffPathName} {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
 }
 
 /* The counts take git's own colours; the diff view is exactly where the
@@ -2032,6 +2096,7 @@ export const css = `
   .${cls.spinner} { animation-duration: 2400ms; }
   .${cls.spinnerGlyph} { animation-duration: 2400ms; }
   .${cls.groupCaret} { transition: none; }
+  .${cls.bottomTabGroup} .${cls.tool} { transition: none; }
 }
 `
 

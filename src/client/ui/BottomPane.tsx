@@ -1,10 +1,12 @@
 /**
- * The bottom pane: one region, two tabs — the recent commits and the diff of the
- * file that was opened.
+ * The bottom pane: one region, one strip of tabs — the recent commits, plus one
+ * tab per open diff.
  *
- * "Opened" covers both ways in: a change row (FR-2.1), and one file of a commit
- * read against that commit (FR-7.2). They are the same kind of reading — one
- * file's changes — so they share the tab rather than each growing a surface.
+ * "Opened" covers both ways into a diff: a change row (FR-2.1), and one file of a
+ * commit read against that commit (FR-7.2). They are the same kind of reading —
+ * one file's changes — so they share the strip rather than each growing a
+ * surface, and more than one may be open at a time: the strip is this panel's
+ * editor area, and comparing two files means having both in front of you.
  *
  * ## Why tabs instead of a stacked diff
  *
@@ -14,6 +16,14 @@
  * kind of thing — "read something about this repository that is not the change
  * list" — so they share one region and one height, and switching between them
  * costs a click instead of a scroll.
+ *
+ * ## Who owns the tab
+ *
+ * The tab is the panel's state, not this pane's: opening a diff is what a row or
+ * a commit's file list decides, and a file may leave the change list while its
+ * diff is open. This component renders the strip and the bodies from what it is
+ * handed; only the height is its own. The two are one value there and here alike
+ * — the dock is folded exactly when there is no tab.
  *
  * ## The height
  *
@@ -25,10 +35,10 @@
  * defaults live in the stylesheet, keyed by `data-tab`, so a window resize keeps
  * meaning what it meant.
  *
- * The dock's own state — whether it is open and how tall it was dragged — is a
- * preference rather than component state (`bottom-view.ts`), because a pane that
- * closes itself on every page load is one the user has to re-open every time. It
- * opens on the history tab by default.
+ * The dock's height is a preference rather than component state
+ * (`bottom-view.ts`), because a pane that re-sizes itself on every page load is
+ * one the user has to push back every time. It opens on the history tab by
+ * default.
  *
  * ## The tab is the switch
  *
@@ -72,8 +82,16 @@ import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
 import { CloseGlyph } from './icons.tsx'
 
-/** Which tab of the bottom pane is showing. */
-export type BottomTab = 'history' | 'diff'
+/**
+ * Which tab of the bottom pane is showing.
+ *
+ * `history` is the commit list; a `file` tab names ONE open diff by its key. The
+ * dock is folded exactly when the tab is `null`, so "which tab" and "is it open"
+ * remain one value.
+ */
+export type BottomTab =
+  | { readonly kind: 'history' }
+  | { readonly kind: 'file'; readonly key: string }
 
 /** One change-list row or commit file whose diff is open. */
 export interface OpenFile {
@@ -81,10 +99,22 @@ export interface OpenFile {
   readonly path: string
   /**
    * Which comparison the row stands for (FR-2.2), or the commit FR-7.2 drilled
-   * into. Both shapes of the panel's diff live in this one tab, so the target
-   * travels with the path rather than the pane growing a second mode.
+   * into. Both shapes of the panel's diff live in this one tab strip, so the
+   * target travels with the path rather than the pane growing a second mode.
    */
   readonly target: DiffTarget
+}
+
+/**
+ * The identity of one open diff: the path AND the comparison it is read with.
+ *
+ * Two entries with the same path but different targets are two different
+ * readings, and they get two tabs — the same reason `diffTargetKey` exists.
+ * @param file - One entry of the open-file list.
+ * @returns A key unique per open diff.
+ */
+export function openFileKey(file: OpenFile): string {
+  return `${file.path}\u0000${diffTargetKey(file.target)}`
 }
 
 /** What the pane is handed. */
@@ -99,10 +129,26 @@ export interface BottomPaneProps {
   readonly locale: string
   /** Aborted when the tab closes; cancels in-flight reads. */
   readonly signal?: AbortSignal
-  /** The file whose diff is open, or `null` when no row has been chosen. */
-  readonly openFile: OpenFile | null
-  /** Drop the diff tab and fold the pane back to its strip. */
-  readonly onCloseDiff: () => void
+  /**
+   * The diffs that are open, in the order their tabs were opened.
+   *
+   * More than one, because the strip is this panel's editor area: comparing two
+   * files means having both open, not ping-ponging through a single tab. Every
+   * one of them stays mounted while the dock is expanded, so switching back is a
+   * paint rather than another git call.
+   */
+  readonly openFiles: readonly OpenFile[]
+  /** Which tab is showing, or `null` when the dock is folded to its strip. */
+  readonly tab: BottomTab | null
+  /** Show a tab, or fold the dock with `null`. */
+  readonly onTab: (next: BottomTab | null) => void
+  /**
+   * Drop one open diff — what the diff's own × does (FR-2.1).
+   *
+   * The strip carries no × of its own any more: the close control lives in the
+   * diff's header, next to the path it closes.
+   */
+  readonly onCloseFile: (key: string) => void
   /**
    * Open a commit row's menu (FR-3.8), owned by the panel above: the armed
    * confirmation and the action feedback both live there.
@@ -122,7 +168,7 @@ export interface BottomPaneProps {
 
 /**
  * The tabbed bottom pane.
- * @param props - The session, the client, the selected file, and the copy.
+ * @param props - The session, the client, the open diffs, and the selected tab.
  */
 export function BottomPane({
   sessionId,
@@ -130,68 +176,66 @@ export function BottomPane({
   t,
   locale,
   signal,
-  openFile,
-  onCloseDiff,
+  openFiles,
+  tab,
+  onTab,
+  onCloseFile,
   onCommitMenu,
   onOpenCommitFile,
 }: BottomPaneProps): ReactNode {
   /**
-   * The active tab, which is also whether the pane is open: `null` is the strip.
+   * How tall the dock was dragged, or `null` for the stylesheet's per-tab default.
    *
-   * Whether that is open comes from storage — a dock that folds itself on every
-   * reload is one the user has to re-open every time — and so does the height it
-   * was dragged to.
+   * The dock's own state is a preference rather than component state
+   * (`bottom-view.ts`), because a pane that re-sizes itself on every page load is
+   * one the user has to push back every time. Whether it is OPEN is not read here
+   * — that is the tab, and the tab belongs to the panel above, which is where a
+   * file gets opened in the first place.
    */
-  const [active, setActive] = useState<BottomTab | null>(() =>
-    readBottomPane().expanded ? 'history' : null,
-  )
-  /** `null` means "not dragged yet": the stylesheet's per-tab default applies. */
   const [height, setHeight] = useState<number | null>(() => readBottomPane().height)
+  const expanded = tab !== null
 
   useEffect(() => {
-    writeBottomPane({ expanded: active !== null, height })
-  }, [active, height])
+    writeBottomPane({ expanded, height })
+  }, [expanded, height])
 
-  // A row that was just clicked is what the user wants to look at, so the pane
-  // opens on it — that is the whole interaction the change list promises.
-  useEffect(() => {
-    if (openFile === null) return
-    setActive('diff')
-  }, [openFile])
-
-  const expanded = active !== null
   /**
-   * The tab whose panel is showing.
+   * The file whose diff is showing, or `null` when the history is.
    *
-   * The only case where it differs from {@link active}: the diff tab is the open
-   * file, and the panel clears that file on its own when the row leaves the change
-   * list (it was committed, or discarded). Pointing at a tab that no longer exists
-   * would leave the body empty, so the dock falls back to the history rather than
-   * showing a blank pane — and, since the user did not close it, it stays open.
+   * The only case where it differs from the tab: a file tab can name an entry the
+   * panel has since dropped (the row was committed or discarded). Pointing at a
+   * tab that no longer exists would leave the body empty, so the dock falls back
+   * to the history rather than showing a blank pane — and, since the user did not
+   * close it, it stays open.
    */
-  const shown: BottomTab =
-    active === 'diff' && openFile === null ? 'history' : (active ?? 'history')
+  const shownFile =
+    tab !== null && tab.kind === 'file'
+      ? (openFiles.find((file) => openFileKey(file) === tab.key) ?? null)
+      : null
+  /** The tab's kind, which is what `data-tab` and the height defaults key on. */
+  const shownKind: 'history' | 'diff' = shownFile === null ? 'history' : 'diff'
 
-  const select = useCallback((next: BottomTab): void => {
-    // The active tab is a toggle: a second click puts the pane away. That is the
-    // fold gesture the chevron used to carry, and the only non-drag one.
-    setActive((current) => (current === next ? null : next))
-  }, [])
+  const select = useCallback(
+    (next: BottomTab): void => {
+      // The active tab is a toggle: a second click puts the pane away. That is the
+      // fold gesture the chevron used to carry, and the only non-drag one.
+      const same =
+        tab !== null &&
+        (next.kind === 'history'
+          ? tab.kind === 'history'
+          : tab.kind === 'file' && tab.key === next.key)
+      onTab(same ? null : next)
+    },
+    [onTab, tab],
+  )
 
-  const closeDiff = useCallback((): void => {
-    onCloseDiff()
-    // The tab is gone, so nothing is active and the pane folds — what the × has
-    // always meant.
-    setActive(null)
-  }, [onCloseDiff])
-
-  const name = openFile === null ? '' : pathParts(openFile.path).name
+  const lastOpen = openFiles[openFiles.length - 1]
 
   return (
     <div
       className={cls.bottom}
       data-bottom=""
-      data-tab={shown}
+      data-tab={shownKind}
       data-expanded={String(expanded)}
       // Folded, the pane is its strip: an explicit height would leave a blank
       // body, so it is only applied while a panel is showing — and it comes back
@@ -216,9 +260,9 @@ export function BottomPane({
         reserved={DOCK_RESERVED}
         onResize={(next) => {
           setHeight(next)
-          // Dragging the folded strip open needs a tab to show: the diff if the
-          // panel has one open, the history otherwise.
-          setActive((current) => current ?? (openFile === null ? 'history' : 'diff'))
+          // Dragging the folded strip open needs a tab to show: the newest diff
+          // if the panel has one open, the history otherwise.
+          onTab(tab ?? (lastOpen === undefined ? { kind: 'history' } : { kind: 'file', key: openFileKey(lastOpen) }))
         }}
       />
       <div className={cls.bottomTabs} role="tablist" aria-label={t('bottom.tabs')}>
@@ -226,77 +270,100 @@ export function BottomPane({
           type="button"
           role="tab"
           className={cls.bottomTab}
-          aria-selected={expanded && shown === 'history'}
-          data-active={expanded && shown === 'history' ? 'true' : undefined}
+          // The one tab that is always there: it must not be squeezed out of the
+          // strip by however many diffs are open.
+          data-resident="true"
+          aria-selected={expanded && shownKind === 'history'}
+          data-active={expanded && shownKind === 'history' ? 'true' : undefined}
           // The hint appears only while this tab is the one showing, because that
           // is when a click means "put the pane away" rather than "show it".
-          title={expanded && shown === 'history' ? t('bottom.collapse') : undefined}
-          onClick={() => select('history')}
+          title={expanded && shownKind === 'history' ? t('bottom.collapse') : undefined}
+          onClick={() => select({ kind: 'history' })}
         >
           {t('history.title')}
         </button>
-        {openFile !== null && (
-          // The label and its close button are siblings, never nested: a button
-          // inside a button is invalid markup and the inner one is not reliably
-          // clickable.
-          <span className={cls.bottomTabGroup} data-active={expanded && shown === 'diff' ? 'true' : undefined}>
-            <button
-              type="button"
-              role="tab"
-              className={cls.bottomTab}
-              aria-selected={expanded && shown === 'diff'}
-              title={openFile.path}
-              onClick={() => select('diff')}
-            >
-              {name}
-            </button>
-            <button
-              type="button"
-              className={cls.tool}
-              title={t('diff.close')}
-              aria-label={t('diff.close')}
-              onClick={closeDiff}
-            >
-              <CloseGlyph />
-            </button>
-          </span>
-        )}
+        {openFiles.map((file) => {
+          const key = openFileKey(file)
+          const on = shownFile !== null && openFileKey(shownFile) === key
+          return (
+            // The label and its close control are SIBLINGS, never nested: a button
+            // inside a button is invalid markup and the inner one is not reliably
+            // clickable. The × is revealed by hovering or focusing this tab, so the
+            // strip stays quiet until the pointer is on the tab it would close.
+            <span key={key} className={cls.bottomTabGroup}>
+              <button
+                type="button"
+                role="tab"
+                className={cls.bottomTab}
+                aria-selected={expanded && on}
+                // The active-state attribute lives on the tab itself, so the rule
+                // that draws the underline under it has something to match: put on a
+                // wrapper, the selected diff would have no underline at all.
+                data-active={expanded && on ? 'true' : undefined}
+                // The full path, because the label may be shortened (FR-1.2).
+                title={file.path}
+                onClick={() => select({ kind: 'file', key })}
+              >
+                {pathParts(file.path).name}
+              </button>
+              <button
+                type="button"
+                className={cls.tool}
+                data-close-tab={file.path}
+                // Named per file: a strip of buttons all reading "close this diff"
+                // would tell a screen reader nothing about which one it is on.
+                title={t('bottom.closeFile', { path: file.path })}
+                aria-label={t('bottom.closeFile', { path: file.path })}
+                onClick={() => onCloseFile(key)}
+              >
+                <CloseGlyph />
+              </button>
+            </span>
+          )
+        })}
         <span className={cls.spacer} />
       </div>
       {expanded && (
         <div className={cls.bottomBody}>
-          {/* Both panels stay mounted and the inactive one is hidden, rather than
-              rendered on demand: a tab that forgets its commits, its loaded pages
-              and its scroll position the moment you look at the other one is not
-              a tab — and switching back would spend another git call. */}
-          <div className={cls.bottomScroll} data-shown={String(shown === 'history')}>
+          {/* Every open panel stays mounted and the inactive ones are hidden,
+              rather than rendered on demand: a tab that forgets its commits, its
+              loaded pages, its scroll position or its fold the moment you look at
+              another one is not a tab — and switching back would spend another git
+              call. The cost is one re-read per open diff when the repository
+              really moves, which is the price of the tab the user opened. */}
+          <div className={cls.bottomScroll} data-shown={String(shownFile === null)}>
             <HistoryPanel
               sessionId={sessionId}
               git={git}
               t={t}
               locale={locale}
               signal={signal}
-              active={expanded && shown === 'history'}
+              active={expanded && shownFile === null}
               onCommitMenu={onCommitMenu}
               onOpenCommitFile={onOpenCommitFile}
             />
           </div>
-          {openFile !== null && (
-            <div className={cls.bottomDiff} data-shown={String(shown === 'diff')}>
-              <DiffPane
-                // Keyed by target so switching files remounts the pane: a fold or
-                // a layout read must not leak from the file that was open before.
-                key={`${openFile.path}\u0000${diffTargetKey(openFile.target)}`}
-                sessionId={sessionId}
-                path={openFile.path}
-                target={openFile.target}
-                git={git}
-                t={t}
-                signal={signal}
-                onClose={closeDiff}
-              />
-            </div>
-          )}
+          {openFiles.map((file) => {
+            const key = openFileKey(file)
+            const on = shownFile !== null && openFileKey(shownFile) === key
+            return (
+              <div key={key} className={cls.bottomDiff} data-shown={String(on)}>
+                <DiffPane
+                  sessionId={sessionId}
+                  path={file.path}
+                  target={file.target}
+                  git={git}
+                  t={t}
+                  signal={signal}
+                  // Only the pane on screen answers Escape: several hidden panes
+                  // each listening on the document would close every open diff at
+                  // once, which is not what "close this one" means.
+                  active={on}
+                  onClose={() => onCloseFile(key)}
+                />
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

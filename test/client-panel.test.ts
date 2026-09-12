@@ -665,6 +665,60 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('ellipsizes a file name too long for its tab or its diff header', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Reported from the running panel: "文件名超长的需要省略". A name longer than
+    // the box has to end in an ellipsis rather than be chopped mid-letter by the
+    // container's own clip — the tab because it is a tab, the diff header and the
+    // change row because that is where the file is named.
+    for (const name of [cls.bottomTab, cls.diffPathName, cls.pathName]) {
+      assert.match(
+        sheet,
+        new RegExp(`\\.${name}\\s*\\{[^}]*overflow: hidden[^}]*text-overflow: ellipsis`, 'u'),
+        `${name} must ellipsize`,
+      )
+    }
+    // And the DIRECTORY is the side that gives way first (FR-1.2): its shrink
+    // weight is a hundred times the name's, so the name is the last thing to lose
+    // a character — and it ends in an ellipsis when it finally does.
+    for (const [dir, name] of [
+      [cls.pathDir, cls.pathName],
+      [cls.diffPathDir, cls.diffPathName],
+    ] as const) {
+      assert.match(sheet, new RegExp(`\\.${dir}\\s*\\{[^}]*flex: 0 100 auto`, 'u'))
+      assert.match(sheet, new RegExp(`\\.${name}\\s*\\{[^}]*flex: 0 1 auto`, 'u'))
+    }
+  })
+
+  it('reveals a diff tab’s × only while the pointer or the keyboard is on it', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Asked for after the first multi-tab build: "hover 到标签条上的某个 tab 时候，
+    // 显示 × 进行关闭". It keeps its width while hidden, so revealing it never nudges
+    // the label, and it is revealed by the tab it belongs to rather than by the
+    // whole strip. `visibility` and not plain transparency: a control nobody can
+    // see must not be a target, or a stray tap on a tab's right edge would close it.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.bottomTabGroup} \\.${cls.tool}\\s*\\{[^}]*visibility: hidden[^}]*opacity: 0`,
+        'u',
+      ),
+    )
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.bottomTabGroup}:hover \\.${cls.tool},\\s*\\.${cls.bottomTabGroup}:focus-within \\.${cls.tool}\\s*\\{[^}]*visibility: visible[^}]*opacity: 1`,
+        'u',
+      ),
+    )
+  })
+
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -4406,6 +4460,143 @@ describe('the commit’s own file diff (FR-7.2)', () => {
     status = { ok: true, value: { ...withFile, branch: { ...withFile.branch, oid: 'c'.repeat(40) } } }
     await publish(['refs'])
     assert.equal(diffCalls.length, 2, 'a moved ref must re-read the commit diff')
+  })
+})
+
+/* ── the dock’s diff tabs: more than one open at a time ─────────────────── */
+
+/** The × that one diff tab reveals on hover: it lives in that tab's own group. */
+function tabCloseButton(container: HTMLElement, path: string): HTMLButtonElement {
+  return must<HTMLButtonElement>(container, `[data-close-tab="${path}"]`)
+}
+
+/** Whether each mounted diff is the one on screen, in tab order. */
+function shownDiffs(container: HTMLElement): (string | null)[] {
+  return [...container.querySelectorAll<HTMLElement>(`.${cls.bottomDiff}`)].map((node) =>
+    node.getAttribute('data-shown'),
+  )
+}
+
+describe('the dock’s diff tabs (FR-2.1)', () => {
+  it('keeps every opened file open, one tab each, and switches between them for free', async () => {
+    const diffCalls: string[] = []
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ diffCalls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    await click(must(container, `[data-group="staged"] .${cls.row}`))
+    await flush()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await flush()
+
+    // One tab per open file, after the resident history tab; the earlier diff is
+    // still mounted, so going back to it costs no git call.
+    const tabs = [...container.querySelectorAll<HTMLElement>(`.${cls.bottomTab}`)]
+    assert.deepEqual(
+      tabs.map((tab) => tab.textContent),
+      ['Recent commits', 'staged.ts', 'changed.ts'],
+    )
+    assert.deepEqual(diffCalls, ['index:src/staged.ts@3', 'worktree:deep/nested/dir/changed.ts@3'])
+    assert.equal(container.querySelectorAll(`.${cls.diffView}`).length, 2)
+    assert.deepEqual(shownDiffs(container), ['false', 'true'])
+
+    await click(tabs[1] as Element)
+    await flush()
+    assert.deepEqual(shownDiffs(container), ['true', 'false'])
+    assert.equal(diffCalls.length, 2, 'switching tabs is not a re-read')
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-tab'), 'diff')
+  })
+
+  it('marks the showing tab, and gives every diff tab its own × to reveal', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The selected-state attribute has to sit on the TAB: the rule that draws the
+    // underline matches it, and on a wrapper the selected diff would have none
+    // (reported from the running panel: "最近提交 has the blue line, the diff
+    // doesn't").
+    let tabs = [...container.querySelectorAll<HTMLElement>(`.${cls.bottomTab}`)]
+    assert.equal(tabs[0]?.getAttribute('data-active'), 'true')
+    // Nothing to close yet: the one resident tab is the history, and it is not a
+    // diff. (Closed by clicking the tab again, which folds the pane.)
+    assert.equal(container.querySelectorAll(`.${cls.bottomTabs} .${cls.tool}`).length, 0)
+
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await flush()
+    tabs = [...container.querySelectorAll<HTMLElement>(`.${cls.bottomTab}`)]
+    assert.equal(tabs[0]?.getAttribute('data-active'), null, 'the history gives the mark up')
+    assert.equal(tabs[1]?.getAttribute('data-active'), 'true')
+
+    // One × per diff tab, named after the file it closes. It is hidden until the
+    // pointer (or the keyboard) is on THAT tab — a rule in the stylesheet, since
+    // jsdom cannot resolve a hover.
+    const close = tabCloseButton(container, 'deep/nested/dir/changed.ts')
+    assert.equal(must(container, `.${cls.bottomTabs} .${cls.tool}`).getAttribute('data-close-tab'), 'deep/nested/dir/changed.ts')
+    assert.match(close.getAttribute('aria-label') ?? '', /deep\/nested\/dir\/changed\.ts/u)
+    // The diff's own header keeps its operations only — no second way out of the
+    // pane, which is what "差异操作这行就只进行差异操作" asked for.
+    const head = must(container, `.${cls.diffView} .${cls.diffHead}`)
+    assert.deepEqual(
+      [...head.querySelectorAll<HTMLElement>('button')].map((button) => button.getAttribute('aria-label')),
+      ['Unified (inline)', 'Side by side', 'Read the diff again'],
+    )
+  })
+
+  it('closes only the tab whose × was pressed, and hands over to its neighbour', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="staged"] .${cls.row}`))
+    await flush()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await flush()
+
+    await click(tabCloseButton(container, 'deep/nested/dir/changed.ts'))
+    await flush()
+
+    // The other diff takes the strip over; closing one tab is not a reason to put
+    // the whole pane away.
+    const tabs = [...container.querySelectorAll<HTMLElement>(`.${cls.bottomTab}`)]
+    assert.deepEqual(
+      tabs.map((tab) => tab.textContent),
+      ['Recent commits', 'staged.ts'],
+    )
+    assert.equal(tabs[1]?.getAttribute('data-active'), 'true')
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
+
+    // The last one closes back to the history, still open: the user closed a diff,
+    // not the dock.
+    await click(tabCloseButton(container, 'src/staged.ts'))
+    await flush()
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-tab'), 'history')
+    assert.equal(must(container, `.${cls.bottom}`).getAttribute('data-expanded'), 'true')
+    assert.equal(must(container, `.${cls.bottomTab}`).getAttribute('data-active'), 'true')
+  })
+
+  it('closes only the showing diff on Escape, not every open one', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="staged"] .${cls.row}`))
+    await flush()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await flush()
+
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+
+    // Every open diff is mounted, so a document-level Escape must be answered by
+    // the one on screen alone — the hidden panes stay open.
+    assert.equal(container.querySelectorAll(`.${cls.diffView}`).length, 1)
+    assert.equal(must(container, `.${cls.diffView}`).getAttribute('data-diff-area'), 'index')
   })
 })
 

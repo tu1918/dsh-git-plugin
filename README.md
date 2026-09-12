@@ -38,8 +38,8 @@ message, and a commit detail.
 | Changes and Untracked are sections of ONE scrolling list rather than drawers of their own: the panel has a single resize grip (the dock's), and each section's header pins itself to the top of that scroller, so a partially scrolled list still says which section you are in | ✅ |
 | A clean working tree is stated by the sections themselves: Changes and Untracked stay on screen counting zero (the paragraph that used to say "no uncommitted changes" is gone), and only the staged drawer needs a note, because its header alone does not say why it is empty | ✅ |
 | A group with no rows offers no bulk action — except the staged drawer, which keeps its button on screen, disabled, with the empty note as the explanation | ✅ |
-| One bottom pane, two tabs — recent commits and the selected file's diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping both tabs' content loaded; the fold and the height are remembered | ✅ |
-| Diff view: click a change row → the diff opens as the bottom pane's second tab (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
+| One bottom pane, one strip of tabs — recent commits, plus one tab per open diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping every open tab's content loaded; the fold and the height are remembered. Any number of diffs may be open at once, a tab is marked by the same rule as the history tab, and hovering (or focusing) a diff tab reveals that tab's own × — closing one file is not closing the pane | ✅ |
+| Diff view: click a change row → the diff opens as a tab of the bottom pane (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered; the diff's own header carries its operations only (layout, reload), and a long file name is ellipsized in the tab and in the diff header, with the directory giving way first (FR-1.2) | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
@@ -110,7 +110,7 @@ Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 428 tests && build
+npm run check      # tsc --noEmit && 434 tests && build
 ```
 
 ## Install
