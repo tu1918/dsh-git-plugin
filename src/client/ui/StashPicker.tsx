@@ -105,7 +105,7 @@ export function StashPicker({
             <div className={cls.stashActions}>
               <button
                 type="button"
-                className={cls.ghost}
+                className={cls.accent}
                 disabled={busy}
                 title={t('stash.applyHint', { selector: entry.selector })}
                 onClick={() => onApply(entry, false)}
@@ -114,7 +114,7 @@ export function StashPicker({
               </button>
               <button
                 type="button"
-                className={cls.ghost}
+                className={cls.accent}
                 disabled={busy}
                 title={t('stash.popHint', { selector: entry.selector })}
                 onClick={() => onApply(entry, true)}
@@ -154,7 +154,14 @@ export function StashPicker({
 
       <div className={cls.stashCreate}>
         {!saving && (
-          <button type="button" className={cls.ghost} disabled={busy} onClick={() => setSaving(true)}>
+          // Accent ink: this is the layer's own action, not one of its footnotes —
+          // the two inks are kept apart on purpose (see the `.accent` rule).
+          <button
+            type="button"
+            className={cls.accent}
+            disabled={busy}
+            onClick={() => setSaving(true)}
+          >
             {t('stash.save')}
           </button>
         )}

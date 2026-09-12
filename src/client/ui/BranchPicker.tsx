@@ -165,7 +165,11 @@ export function BranchPicker({
 
       <div className={cls.branchCreate}>
         {!creating && (
-          <button type="button" className={cls.ghost} onClick={() => setCreating(true)}>
+          // The accent, not the ghost ink: this IS the layer's second action, and
+          // in the tertiary the panel reserves for footnotes it read as one more
+          // sentence rather than as something to press (reported from the running
+          // panel).
+          <button type="button" className={cls.accent} onClick={() => setCreating(true)}>
             {t('branch.create')}
           </button>
         )}

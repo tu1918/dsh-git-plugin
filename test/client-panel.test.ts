@@ -629,6 +629,26 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('paints an action in the GUI’s link ink, and keeps the footnote ink separate', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Two borderless text controls, two inks — reported from the running panel:
+    // "新建分支" and "贮藏当前更改" were the footnote colour, so nothing looked
+    // clickable. `.ghost` stays tertiary (a cancel, a fold), `.accent` takes the
+    // token DSH itself paints clickable text with, so a skin still decides.
+    assert.match(sheet, new RegExp(`\\.${cls.ghost}\\s*\\{[^}]*--dsw-alias-label-tertiary`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.accent}\\s*\\{[^}]*--dsw-alias-link`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.accent}:hover:not\\(:disabled\\)\\s*\\{[^}]*--dsw-alias-interactive-bg-hover`,
+        'u',
+      ),
+    )
+  })
+
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -2755,7 +2775,7 @@ describe('the branch picker (FR-4.1–4.3)', () => {
     await settle()
 
     const picker = await openPicker(container)
-    await click(must(picker, `.${cls.ghost}`))
+    await click(must(picker, `.${cls.accent}`))
     const input = must<HTMLInputElement>(picker, `.${cls.branchInput}`)
     await typeIntoInput(input, 'feat/new')
     await click(must(picker, 'button[type="submit"]'))
@@ -2764,7 +2784,7 @@ describe('the branch picker (FR-4.1–4.3)', () => {
     // Again, this time starting from a branch rather than from HEAD (FR-4.2's
     // other half). `base: ''` in the log is the wire's "from the current HEAD".
     const again = await openPicker(container)
-    await click(must(again, `.${cls.ghost}`))
+    await click(must(again, `.${cls.accent}`))
     await typeIntoInput(must<HTMLInputElement>(again, `.${cls.branchInput}`), 'feat/from-main')
     await selectOption(must<HTMLSelectElement>(again, `.${cls.branchSelect}`), 'main')
     await click(must(again, 'button[type="submit"]'))
@@ -3472,8 +3492,9 @@ describe('the stash list (FR-6.2, §4.3)', () => {
     assert.match(picker.textContent ?? '', /WIP on main: aaaa111 first/)
     assert.match(picker.textContent ?? '', /On main: older work/)
     // Each entry offers both ways to bring it back, and the destructive one is
-    // not one of them.
-    const labels = [...picker.querySelectorAll(`.${cls.ghost}`)].map((button) => button.textContent)
+    // not one of them. Both are accent-inked: they are the row's actions, not
+    // footnotes (that is the fix for "I could not tell this text was clickable").
+    const labels = [...picker.querySelectorAll(`.${cls.accent}`)].map((button) => button.textContent)
     assert.deepEqual(labels.slice(0, 4), ['Apply', 'Pop', 'Apply', 'Pop'])
   })
 
@@ -3485,7 +3506,7 @@ describe('the stash list (FR-6.2, §4.3)', () => {
     await settle()
 
     const picker = await openStashes(container)
-    const save = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.ghost}`)].find(
+    const save = [...picker.querySelectorAll<HTMLButtonElement>(`.${cls.accent}`)].find(
       (button) => button.textContent === 'Stash current changes…',
     )
     assert.ok(save, 'the list offers a way to stash the worktree')
@@ -3520,7 +3541,7 @@ describe('the stash list (FR-6.2, §4.3)', () => {
 
     const picker = await openStashes(container)
     const rows = [...picker.querySelectorAll<HTMLElement>(`.${cls.stashRow}`)]
-    await click(must(rows[0] as Element, `.${cls.ghost}`))
+    await click(must(rows[0] as Element, `.${cls.accent}`))
 
     // A selector is a position another window can shift; the id is what the
     // panel sends, and the host resolves it again.
@@ -3531,7 +3552,7 @@ describe('the stash list (FR-6.2, §4.3)', () => {
       'Applied stash@{0}',
     )
 
-    const pops = [...rows[1]!.querySelectorAll<HTMLButtonElement>(`.${cls.ghost}`)]
+    const pops = [...rows[1]!.querySelectorAll<HTMLButtonElement>(`.${cls.accent}`)]
     await click(pops[1] as Element)
     assert.equal(acts()[1], `stashApply:${'e'.repeat(40)}:pop`)
     assert.equal(
@@ -3585,6 +3606,34 @@ describe('the stash list (FR-6.2, §4.3)', () => {
       must(picker, '[data-stash-empty="true"]').textContent,
       'There are no stashes yet.',
     )
+  })
+
+  it('paints the text that opens a form as an action, and a form’s cancel as a footnote', async () => {
+    // Reported from the running panel: 新建分支 / 贮藏当前更改 were plain text —
+    // the same ink as the sentence beside them — so neither looked clickable. Both
+    // are `.accent` now, and the footnote ink stays for the controls that really
+    // are secondary.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    assert.equal(must(picker, `.${cls.accent}`).textContent, 'New branch…')
+    await click(must(picker, `.${cls.accent}`))
+    const cancel = [...picker.querySelectorAll(`.${cls.ghost}`)].find(
+      (button) => button.textContent === 'Cancel',
+    )
+    assert.ok(cancel, 'the form’s own cancel stays a footnote')
+
+    // The other layer the complaint named. Opening it closes the branch list —
+    // one layer at a time — which is that rule seen from the other side.
+    const stashes = await openStashes(container)
+    const save = [...stashes.querySelectorAll(`.${cls.accent}`)].find(
+      (button) => button.textContent === 'Stash current changes…',
+    )
+    assert.ok(save, 'the stash layer’s own action is accent-inked too')
+    assert.equal(container.querySelector('[data-branch-picker]'), null)
   })
 })
 

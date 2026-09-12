@@ -1491,11 +1491,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
                 would have overwritten — and appears whenever a switch is known to
                 be blocked by local work, which is the one failure a stash clears.
                 Not armed: the work it removes from the worktree is put on the
-                stack this panel lists, so the same layer's "apply" undoes it. */}
+                stack this panel lists, so the same layer's "apply" undoes it.
+                Accent ink, because it is the way on rather than a footnote to the
+                failure. */}
             {stashSwitch !== null && (
               <button
                 type="button"
-                className={cls.ghost}
+                className={cls.accent}
                 disabled={pending}
                 title={t('stash.andSwitchHint', { name: stashSwitch })}
                 onClick={() => stashAndSwitch(stashSwitch)}

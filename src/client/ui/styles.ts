@@ -96,6 +96,7 @@ export const cls = {
   groupToggle: `${P}-group-toggle`,
   groupCaret: `${P}-group-caret`,
   ghost: `${P}-ghost`,
+  accent: `${P}-accent`,
   row: `${P}-row`,
   badge: `${P}-badge`,
   path: `${P}-path`,
@@ -670,6 +671,41 @@ export const css = `
 
 .${cls.ghost}:disabled:hover {
   background: transparent;
+}
+
+/* ── a text action ──────────────────────────────────────────────────────── */
+
+/* The panel has two kinds of borderless text control and they must not look
+   alike. ghost is a FOOTNOTE — a form's cancel, a fold, a group's bulk button —
+   and keeps label-tertiary. accent is an ACTION: the entry that opens a layer's
+   form ("new branch…", "stash current changes…"), a stash row's apply/pop, the
+   way out of a refused switch. Reported from the running panel: both were
+   painted tertiary, so a user could not tell which text was clickable. The
+   action takes the GUI's OWN link token — the ink DSH paints its clickable text
+   with — so it is the theme, not this plugin, that decides what "this is
+   clickable" looks like. */
+.${cls.accent} {
+  flex: none;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-link, var(--dsw-alias-brand-primary));
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Same hover band every other pointer target in the panel takes; the ink stays
+   the link colour, because "you can click this" is the statement being made. */
+.${cls.accent}:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.${cls.accent}:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
 }
 
 /* ── the staged list, and the change list below it ──────────────────────── */
