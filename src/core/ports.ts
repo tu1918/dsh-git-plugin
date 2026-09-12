@@ -45,6 +45,14 @@ export interface GitPanelError {
   readonly message: string
   /** Raw multi-line git output, when there is any. */
   readonly detail?: string
+  /**
+   * The remote origin a credential failure was about, when there is one.
+   *
+   * git names it in its own refusal (`could not read Username for
+   * 'https://host'`); the host parses it out so the panel can address the
+   * credential it is about to ask for without re-reading git's prose itself.
+   */
+  readonly remote?: string
 }
 
 /** Every failure the panel recognises. */
@@ -65,6 +73,17 @@ export type GitErrorCode =
   | 'nothing-to-commit'
   /** The remote has commits this branch does not, so the push was refused (FR-5.4). */
   | 'non-fast-forward'
+  /**
+   * The remote wanted credentials and git had nobody to ask.
+   *
+   * The host runs git with `GIT_TERMINAL_PROMPT=0` (a request must not hang on a
+   * prompt no one can see), so an HTTPS remote with no stored credential fails
+   * here instead. The panel answers with a form and retries; see
+   * {@link GitPanelError.remote} for the origin it asks about.
+   */
+  | 'auth-required'
+  /** This composition has no credential provider, so a credential cannot be saved. */
+  | 'credentials-unavailable'
   /** The operation left the repository mid-merge with unmerged paths (FR-5.3). */
   | 'conflict'
   /**
@@ -116,10 +135,31 @@ export interface GitRunResult {
   readonly spawnFailed: boolean
 }
 
+/**
+ * Everything needed to answer git's credential prompts for one call.
+ *
+ * The helper file is static and holds no secret; the values ride in the child
+ * process environment, which git's askpass protocol is built around. See
+ * `host/askpass.ts` for why the prompt is matched on the origin.
+ */
+export interface GitAskPass {
+  /** Absolute path of the helper executable git should run. */
+  readonly helper: string
+  /** JSON `origin → {username,password}` the helper reads from its environment. */
+  readonly map: string
+}
+
 /** Options for one `git` invocation. */
 export interface GitRunOptions {
   /** Absolute directory to run in. */
   readonly cwd: string
+  /**
+   * Credentials to inject for this call, when any apply.
+   *
+   * Absent means git runs exactly as before — no askpass, no environment
+   * addition — so a repository with no stored credential is unaffected.
+   */
+  readonly askpass?: GitAskPass
   /** Deadline in milliseconds; the process is killed past it. */
   readonly timeoutMs?: number
   /** Cap on captured stdout bytes. */
@@ -193,6 +233,45 @@ export interface HostPorts {
    * @returns The model's text, or why there is none.
    */
   generateText(prompt: string, signal?: AbortSignal): Promise<Result<string>>
+  /**
+   * Where an HTTPS credential is kept, when the composition has somewhere to put it.
+   *
+   * Optional for the same reason `generateText`'s model is: the panel mounts and
+   * works in a host that has no credential provider, and only the save path has
+   * to explain itself. The values never cross this port in a log line — the
+   * service audits the origin and nothing else.
+   */
+  readonly credentials?: GitCredentialStore
+}
+
+/** One username/password pair for an HTTP(S) remote. */
+export interface GitCredential {
+  /** The user name git should send. */
+  readonly username: string
+  /** The password — in practice a personal access token for most forges. */
+  readonly password: string
+}
+
+/**
+ * Durable storage for remote credentials, addressed by origin.
+ *
+ * Kept deliberately narrow: read one, write one. There is no enumeration here
+ * because nothing in the panel lists stored credentials, and the fewer ways the
+ * values can be observed, the better.
+ */
+export interface GitCredentialStore {
+  /**
+   * Resolve the credential for one origin.
+   * @param origin - `scheme://host[:port]`.
+   * @returns The credential, `null` when none is stored, or why the read failed.
+   */
+  read(origin: string): Promise<Result<GitCredential | null>>
+  /**
+   * Store (or replace) the credential for one origin.
+   * @param origin - `scheme://host[:port]`.
+   * @param credential - The pair to store.
+   */
+  save(origin: string, credential: GitCredential): Promise<Result<void>>
 }
 
 /** What the host exposes to the browser over the wire (doc §5.4). */
@@ -344,6 +423,24 @@ export interface WorkspaceGitService {
    * @param signal - Cancels the request when the tab goes away.
    */
   sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Store the credential for one of this repository's remote origins.
+   *
+   * The origin is re-checked against the repository's own configured remotes
+   * before anything is written, so a caller cannot use the panel to fill this
+   * plugin's credential namespace with arbitrary hosts.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param remote - The origin git named in its refusal.
+   * @param username - The user name to send.
+   * @param password - The password or personal access token.
+   */
+  saveCredential(
+    sessionId: string,
+    remote: string,
+    username: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void>>
   /**
    * Switch HEAD to an existing local branch (FR-4.1).
    *
@@ -642,6 +739,21 @@ export interface GitRemoteClient {
    * @param signal - Cancels the request when the tab goes away.
    */
   sync(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  /**
+   * Store the credential for one of this repository's remote origins.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param remote - The origin git named in its refusal.
+   * @param username - The user name to send.
+   * @param password - The password or personal access token.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  saveCredential(
+    sessionId: string,
+    remote: string,
+    username: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void>>
   /**
    * Switch HEAD to an existing local branch (FR-4.1).
    * @param sessionId - Opaque session identity, supplied by the slot.

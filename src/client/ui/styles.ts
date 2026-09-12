@@ -64,6 +64,11 @@ export const cls = {
   branchRemoteRow: `${P}-branch-remote-row`,
   branchRemoteName: `${P}-branch-remote-name`,
   branchRemoteSubject: `${P}-branch-remote-subject`,
+  credential: `${P}-credential`,
+  credentialHead: `${P}-credential-head`,
+  credentialLabel: `${P}-credential-label`,
+  credentialInput: `${P}-credential-input`,
+  credentialActions: `${P}-credential-actions`,
   branchFooter: `${P}-branch-footer`,
   fileIcon: `${P}-file-icon`,
   fileIconImg: `${P}-file-icon-img`,
@@ -432,8 +437,37 @@ export const css = `
   gap: 5px;
 }
 
+/* The credential form lives inside a failure notice (see ui/CredentialPrompt),
+   so it is as narrow as the notice and stacks like the other small forms here. */
+.${cls.credential} {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.${cls.credentialHead} {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.${cls.credentialLabel} {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.credentialActions} {
+  display: flex;
+  gap: 6px;
+}
+
 .${cls.branchInput},
 .${cls.stashInput},
+.${cls.credentialInput},
 .${cls.branchSelect} {
   box-sizing: border-box;
   padding: 3px 6px;

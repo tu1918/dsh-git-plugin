@@ -281,6 +281,8 @@ function stubGit(options: {
   discard?: Result<OperationReport>
   /** What `fetch` answers, for the no-remote refusal path. */
   fetch?: Result<OperationReport>
+  /** What `saveCredential` answers, for its own refusal path. */
+  saveCredential?: Result<void>
   /** What `undoCommit` answers; a reset of the newest commit by default. */
   undoCommit?: Result<UndoResult>
   /** What the stash listing answers; one entry by default (FR-6.2). */
@@ -354,6 +356,10 @@ function stubGit(options: {
     sync: () => {
       note('sync')
       return Promise.resolve(report)
+    },
+    saveCredential: (_sessionId, remote, username) => {
+      note(`saveCredential:${remote}:${username}`)
+      return Promise.resolve(options.saveCredential ?? { ok: true, value: undefined })
     },
     checkout: (_sessionId, name) => {
       note(`checkout:${name}`)
@@ -2608,6 +2614,107 @@ describe('the sync actions (FR-5.1)', () => {
     assert.match(box.textContent ?? '', /no remote to fetch from/)
     // A refused operation leaves the change list where it was (§4.3).
     assert.equal(container.querySelectorAll(`.${cls.badge}`).length, 4)
+  })
+})
+
+describe('the credential form (HTTPS remotes)', () => {
+  /** A git client whose fetch is refused for credentials on the first attempt. */
+  function refusedFirst(remote: string, calls: ActionLog): GitRemoteClient {
+    let attempts = 0
+    return {
+      ...stubGit({ calls }),
+      fetch: () => {
+        calls.entries.push('fetch')
+        attempts += 1
+        return Promise.resolve(
+          attempts === 1
+            ? {
+                ok: false as const,
+                error: {
+                  code: 'auth-required' as const,
+                  message: 'needs a credential',
+                  detail: `fatal: could not read Username for '${remote}': terminal prompts disabled`,
+                  remote,
+                },
+              }
+            : { ok: true as const, value: { summary: '', detail: '' } },
+        )
+      },
+    }
+  }
+
+  /** Open the panel and press the rail's fetch button. */
+  async function openFetch(git: GitRemoteClient): Promise<HTMLElement> {
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    await click(railActions(container)[1] as HTMLButtonElement)
+    await flush()
+    return container
+  }
+
+  it('asks for the pair when git cannot, then saves it and retries the same fetch', async () => {
+    const calls: ActionLog = { entries: [] }
+    const remote = 'https://codeup.aliyun.com'
+    const container = await openFetch(refusedFirst(remote, calls))
+
+    // The refusal explains itself and carries the form, in the same notice.
+    assert.match(container.textContent ?? '', /remote wants a username and password/u)
+    const form = must(container, `[data-credential="${remote}"]`)
+    const fields = [...form.querySelectorAll<HTMLInputElement>('input')]
+    assert.equal(fields.length, 2)
+    assert.equal(fields[1]?.type, 'password', 'a token must not be shown in clear text')
+
+    await typeIntoInput(fields[0] as HTMLInputElement, 'ada')
+    await typeIntoInput(fields[1] as HTMLInputElement, 'token-123')
+    await click(must(form, 'button[type="submit"]'))
+    await flush()
+
+    // The save is its own request; then the very same fetch is retried.
+    assert.deepEqual(calls.entries, ['fetch', `saveCredential:${remote}:ada`, 'fetch'])
+    assert.equal(container.querySelector('[data-credential]'), null, 'the form goes once it worked')
+  })
+
+  it('cancels without storing anything', async () => {
+    const calls: ActionLog = { entries: [] }
+    const remote = 'https://host.example'
+    const container = await openFetch(refusedFirst(remote, calls))
+    const form = must(container, `[data-credential="${remote}"]`)
+    await click(must(form, `.${cls.ghost}`))
+    await flush()
+
+    assert.equal(container.querySelector('[data-credential]'), null)
+    assert.deepEqual(calls.entries, ['fetch'], 'no save and no retry')
+  })
+
+  it('keeps the form when the credential itself cannot be saved', async () => {
+    const calls: ActionLog = { entries: [] }
+    const remote = 'https://host.example'
+    const git: GitRemoteClient = {
+      ...refusedFirst(remote, calls),
+      saveCredential: (_sessionId, _remote, _username) => {
+        calls.entries.push('saveCredential')
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'credentials-unavailable',
+            message: 'this deployment has no credential provider, so the credential cannot be saved',
+          },
+        })
+      },
+    }
+    const container = await openFetch(git)
+    const form = must(container, `[data-credential="${remote}"]`)
+    const fields = [...form.querySelectorAll<HTMLInputElement>('input')]
+    await typeIntoInput(fields[0] as HTMLInputElement, 'ada')
+    await typeIntoInput(fields[1] as HTMLInputElement, 'token')
+    await click(must(form, 'button[type="submit"]'))
+    await flush()
+
+    // The deployment's own sentence is shown, and the form stays so the pair is
+    // not lost — but the failed operation is NOT retried.
+    assert.match(container.textContent ?? '', /no credential provider/u)
+    assert.notEqual(container.querySelector('[data-credential]'), null)
+    assert.deepEqual(calls.entries, ['fetch', 'saveCredential'])
   })
 })
 

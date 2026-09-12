@@ -9,7 +9,8 @@ Built to the requirements document, and currently through **M5b order 7**: the
 foundation, a read-only panel, the commit loop (stage → commit → push), the diff
 view, branch management with the merge state, an AI-written commit message, a
 commit detail — then M5a's discard / undo / stash and M5b's commit-file
-drill-down, copy entries, and the commit graph. What remains of M5b: rewriting a
+drill-down, copy entries, and the commit graph, alongside fetch, a read-only
+remote-branch list, and HTTPS credentials. What remains of M5b: rewriting a
 commit (drop / squash / reset), multi-repository scanning, and the v1.0 release
 pass.
 
@@ -36,6 +37,7 @@ pass.
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
 | Fetch every remote — a dashed ↓ beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
+| HTTPS credentials. A remote that wants one and has none is named as such (`auth-required`, with the origin git itself printed), and the same failure notice grows a username / password form. "Save and retry" stores the pair through the harness's own credential seam — `ctx.credentials`, so the provider owns where the value lives, and this profile's local provider writes its own 0600 document rather than us inventing a store — and then retries the very operation that failed. Every later push/pull/fetch/sync resolves the stored credential and hands it to git through `GIT_ASKPASS`, with `GIT_TERMINAL_PROMPT=0` unchanged so nothing can ever hang on a prompt. The value never reaches a log line | ✅ |
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
 | UI in zh + en | ✅ |
 | Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
@@ -89,13 +91,14 @@ them.
 ```
 src/core/      pure TypeScript: types, ports, git parsers, argument validation,
                the commit-scope decision, the unified-diff parser, the change
-               list as a file tree, and the AI commit message's
-               prompt/truncation/cleaning
+               list as a file tree, credential addressing (an origin → a record
+               id), and the AI commit message's prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, git state probe (filesystem events with a
-               polling fallback), git directory lookup
+               polling fallback), git directory lookup, askpass helper
   adapter/     the only place the host names DSH (webServer, sessions, logger,
-               and the model services `llm` + `agentDefaultModel`)
+               the credential seam, and the model services
+               `llm` + `agentDefaultModel`)
 src/client/    browser half
   adapter/     the only place the browser names DSH (slots, tabs, locale) or a URL
   ui/          pure React over ports; no DSH import at all
@@ -108,16 +111,20 @@ outside an `adapter/` directory. One bare specifier is allowlisted in `src/core`
 `vscode-diff`, VS Code's diff engine extracted into a zero-dependency MIT package,
 which is what FR-2.3 asks for by name (see `docs/plan.md` D12).
 
-Since M4 the host bundle also carries one runtime `@deepseek-ai/*` import:
-`host/adapter/llm.ts` uses the harness's own `BlockAssembler` and
-`createUserMessage` rather than reimplementing stream assembly, and declares
-`@deepseek-ai/dsh-llm` as a peer dependency (see `docs/plan.md` D23).
+The host bundle carries two runtime `@deepseek-ai/*` imports, both behind an
+adapter. `host/adapter/llm.ts` uses the harness's own `BlockAssembler` and
+`createUserMessage` rather than reimplementing stream assembly
+(`@deepseek-ai/dsh-llm`, D23). `host/adapter/credentials.ts` stores HTTPS
+credentials through the harness's credential seam, `ctx.credentials`, rather
+than a store of this plugin's own (`@deepseek-ai/dsh-credentials`, D44). Both
+are peer dependencies; a composition that mounts neither still mounts the panel,
+and the features that need them explain themselves instead of failing silently.
 
 ## Check
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 470 tests && build
+npm run check      # tsc --noEmit && 493 tests && build
 ```
 
 ## Install
@@ -212,6 +219,14 @@ npm test
   coalesced into one report, a strategy that fails at start and one that gives up
   while running (both handing over to the next), a released subscription going
   quiet, and the polling fallback's two signals
+- `test/host-auth-flow.test.ts` — the credential path end to end: a real
+  `git fetch` against a real HTTP server that answers 401 until Basic
+  credentials arrive. Without a stored credential the failure is `auth-required`
+  with the origin git named; storing one in the map makes the same fetch succeed
+  and really move `refs/remotes/origin/<branch>`. Also the store's checks — an
+  origin the repository does not have, a remote that is not a bare origin, and a
+  deployment with no credential provider — and the audit line's refusal to carry
+  the value
 - `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, and the
   panel mounting in a composition with no language model at all
 - `test/client-panel.test.ts` — the panel rendered in jsdom: groups, badges, path

@@ -183,6 +183,8 @@ export function createGitRemoteClient(): GitRemoteClient {
     pull: (sessionId, signal) => mutate<OperationReport>('/pull', { session: sessionId }, signal),
     fetch: (sessionId, signal) => mutate<OperationReport>('/fetch', { session: sessionId }, signal),
     sync: (sessionId, signal) => mutate<OperationReport>('/sync', { session: sessionId }, signal),
+    saveCredential: (sessionId, remote, username, password, signal) =>
+      mutate<void>('/saveCredential', { session: sessionId, remote, username, password }, signal),
 
     checkout: (sessionId, name, signal) =>
       mutate<OperationReport>('/checkout', { session: sessionId, name }, signal),

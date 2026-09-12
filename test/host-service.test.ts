@@ -28,7 +28,7 @@ import { createGitService } from '../src/host/git-service.ts'
 import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
 import { createGitProbe } from '../src/host/git-probe.ts'
 import { createFileIconRegistry } from '../src/host/file-icons.ts'
-import type { HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
+import type { GitCredential, HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
 import type { DiffTarget } from '../src/core/types.ts'
 import {
   cleanupRepos,
@@ -975,6 +975,49 @@ describe('the mutation routes', () => {
 
       // A mutation reachable by GET would be reachable by an <img> tag.
       const viaGet = await fetch(`${harness.origin}/git-panel/fetch?session=s1`)
+      assert.equal(viaGet.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('stores a remote credential over POST, and refuses the same operation over GET', async () => {
+    const repo = makeRepo('routes-credential')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    git(repo, ['remote', 'add', 'origin', 'https://codeup.aliyun.com/group/repo.git'])
+
+    const stored = new Map<string, GitCredential>()
+    const ports: HostPorts = {
+      ...SILENT,
+      credentials: {
+        read: (origin) => Promise.resolve({ ok: true, value: stored.get(origin) ?? null }),
+        save: (origin, credential) => {
+          stored.set(origin, credential)
+          return Promise.resolve({ ok: true, value: undefined })
+        },
+      },
+    }
+    const harness = await startHarness({ s1: repo }, ports)
+    try {
+      const response = await post(harness, '/git-panel/saveCredential', {
+        session: 's1',
+        remote: 'https://codeup.aliyun.com',
+        username: 'ada',
+        password: 'token-123',
+      })
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean }
+      assert.equal(body.ok, true)
+      // The route reaches the store, not a stub.
+      assert.deepEqual(stored.get('https://codeup.aliyun.com'), {
+        username: 'ada',
+        password: 'token-123',
+      })
+
+      // A secret must not travel on a GET, which a link or an image could trigger.
+      const viaGet = await fetch(`${harness.origin}/git-panel/saveCredential?session=s1`)
       assert.equal(viaGet.status, 405)
     } finally {
       await harness.close()

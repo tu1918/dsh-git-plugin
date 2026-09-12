@@ -85,6 +85,7 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'pull',
   'fetch',
   'sync',
+  'saveCredential',
   'checkout',
   'createBranch',
   'deleteBranch',
@@ -464,6 +465,15 @@ export function registerGitPanelRoutes(
         const name = stringOf(body, 'name')
         if (!name.ok) return name
         return await service.deleteBranch(sessionId, name.value, body['force'] === true)
+      }
+      case 'saveCredential': {
+        const remote = stringOf(body, 'remote')
+        if (!remote.ok) return remote
+        const username = stringOf(body, 'username')
+        if (!username.ok) return username
+        const password = stringOf(body, 'password')
+        if (!password.ok) return password
+        return await service.saveCredential(sessionId, remote.value, username.value, password.value)
       }
       case 'continueMerge':
         return await service.continueMerge(sessionId)

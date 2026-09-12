@@ -66,6 +66,7 @@ import { useArmedKey } from './armed.ts'
 import { cls } from './styles.ts'
 import { say, sentence, verbatim, type Sentence, type Translate } from './translate.ts'
 import { NOTICE_DURATION_MS, Notice } from './notice.tsx'
+import { CredentialPrompt } from './CredentialPrompt.tsx'
 import {
   ArrowDownGlyph,
   ArrowUpGlyph,
@@ -161,6 +162,22 @@ type ActionState =
       readonly summary: Sentence | null
     }
   | { readonly kind: 'failed'; readonly op: ActionOp; readonly label: Sentence; readonly error: GitPanelError }
+
+/**
+ * A credential the panel is asking for, after an HTTPS operation failed.
+ *
+ * The operation is remembered as a thunk rather than re-derived: the retry has
+ * to be the SAME call (a fetch is a fetch; a sync is pull-then-push), and the
+ * label is kept so the retry's notice reads exactly as the first attempt's did.
+ */
+interface CredentialRequest {
+  readonly op: ActionOp
+  readonly label: Sentence
+  /** The origin git named, which is what the host will store against. */
+  readonly remote: string
+  /** Re-run the operation that failed. */
+  readonly retry: () => Promise<void>
+}
 
 /** The change-list row whose menu is open, and the element its layer hangs from. */
 interface FileRowMenu {
@@ -599,6 +616,15 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const [message, setMessage] = useState('')
   const [action, setAction] = useState<ActionState>({ kind: 'idle' })
   /**
+   * The credential the panel is asking for, or `null`.
+   *
+   * Set when an operation fails with `auth-required`, cleared by a successful
+   * save (which retries), by cancel, by dismissing the notice, and by starting
+   * any other operation — a form for a remote the user has moved on from would
+   * be an answer to a question nobody asked any more.
+   */
+  const [credential, setCredential] = useState<CredentialRequest | null>(null)
+  /**
    * The diffs that are open, in the order their tabs were opened (FR-2.1, FR-7.2).
    *
    * A list rather than one file: the dock's strip is the panel's editor area, and
@@ -800,7 +826,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * function on every render would restart the timer on every render — and the
    * panel re-renders whenever the repository moves, which is always.
    */
-  const dismissNotice = useCallback((): void => setAction({ kind: 'idle' }), [])
+  const dismissNotice = useCallback((): void => {
+    setAction({ kind: 'idle' })
+    // The credential form lives inside the failure notice, so dismissing the
+    // notice dismisses it too.
+    setCredential(null)
+  }, [])
 
   // A different session is a different repository, so neither the draft nor the
   // last operation's result belongs to it — and neither do the open diffs, which
@@ -886,6 +917,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       operation: () => Promise<Result<Sentence | null>>,
     ): Promise<void> => {
       setAction({ kind: 'running', op, label })
+      // Any new operation retires an old credential form: the failure it was
+      // answering is no longer the one on screen.
+      setCredential(null)
       let result: Result<Sentence | null>
       try {
         result = await operation()
@@ -905,6 +939,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       }
       if (!result.ok) {
         setAction({ kind: 'failed', op, label, error: result.error })
+        // A remote that wanted a credential is the one failure the panel can
+        // offer to fix in place: remember how to re-run the operation and which
+        // origin git named, so the form beside the refusal can answer it.
+        if (result.error.code === 'auth-required' && result.error.remote !== undefined) {
+          const remote = result.error.remote
+          setCredential({ op, label, remote, retry: () => perform(op, label, operation) })
+        }
         return
       }
       setAction({ kind: 'done', op, label, summary: result.value })
@@ -914,6 +955,31 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     },
     [reload],
   )
+
+  /**
+   * Store a typed credential and retry the operation that asked for it.
+   *
+   * The save is its own request, so the secret travels once and the retry is the
+   * plain operation it always was. A failed save lands in the same notice with
+   * the host's own sentence — a deployment with no credential provider is the
+   * case that produces one.
+   * @param username - What the user typed.
+   * @param password - What the user typed; a token, in practice.
+   */
+  const submitCredential = (username: string, password: string): void => {
+    const request = credential
+    if (request === null) return
+    void (async () => {
+      setAction({ kind: 'running', op: request.op, label: request.label })
+      const saved = await git.saveCredential(sessionId, request.remote, username, password, signal)
+      if (!saved.ok) {
+        setAction({ kind: 'failed', op: request.op, label: request.label, error: saved.error })
+        return
+      }
+      setCredential(null)
+      await request.retry()
+    })()
+  }
 
   /**
    * Re-read the stash stack (FR-6.2).
@@ -1780,6 +1846,18 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               >
                 {t('stash.andSwitch', { name: stashSwitch })}
               </button>
+            )}
+            {/* The form for a remote that asked for a credential: it sits in the
+                notice that reported the refusal, so the reason and the answer are
+                the same card (§4.1 forbids a modal). */}
+            {credential !== null && (
+              <CredentialPrompt
+                remote={credential.remote}
+                t={t}
+                busy={pending}
+                onSubmit={submitCredential}
+                onCancel={() => setCredential(null)}
+              />
             )}
           </Notice>
         )}

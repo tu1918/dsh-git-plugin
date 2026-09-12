@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import {
   validateBranchBase,
   validateBranchName,
+  validateCredential,
   validateHash,
   validateMessage,
   validatePaths,
@@ -239,5 +240,41 @@ describe('stash message validation (FR-6.2)', () => {
       assert.equal(result.ok, false, `expected ${JSON.stringify(message)} to be refused`)
       assert.equal(result.ok ? '' : result.error.code, 'bad-request')
     }
+  })
+})
+
+describe('credential validation (HTTPS remotes)', () => {
+  it('accepts a bare origin and returns both fields as sent', () => {
+    const result = validateCredential('https://host:8443', 'ada', '  tok en  ')
+    assert.ok(result.ok)
+    assert.deepEqual(result.value, {
+      origin: 'https://host:8443',
+      username: 'ada',
+      password: '  tok en  ',
+    })
+  })
+
+  it('refuses a remote that is not a bare HTTP(S) origin', () => {
+    // git's prompt names only the origin; a URL with a path, a user, or another
+    // scheme is not the thing a credential can be addressed by.
+    for (const remote of [
+      'https://host/group/repo.git',
+      'https://user@host',
+      'git@github.com:owner/repo.git',
+      '',
+      7,
+    ]) {
+      const result = validateCredential(remote, 'ada', 'token')
+      assert.equal(result.ok, false, `expected ${JSON.stringify(remote)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+  })
+
+  it('refuses an empty or NUL-bearing field, and one that is a document', () => {
+    assert.equal(validateCredential('https://host', '', 'token').ok, false)
+    assert.equal(validateCredential('https://host', 'ada', '').ok, false)
+    assert.equal(validateCredential('https://host', 'a\u0000b', 'token').ok, false)
+    assert.equal(validateCredential('https://host', 'ada', 'x'.repeat(4097)).ok, false)
+    assert.equal(validateCredential('https://host', 7, 'token').ok, false)
   })
 })

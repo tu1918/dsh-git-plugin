@@ -24,6 +24,7 @@
  */
 
 import type { Result } from './ports.ts'
+import { originOf } from './remote-origin.ts'
 
 /** Longest commit message accepted, in UTF-16 code units. */
 const MAX_MESSAGE_LENGTH = 64 * 1024
@@ -239,4 +240,76 @@ export function validateMessage(message: unknown): Result<string> {
     return reject('the commit message is too long')
   }
   return { ok: true, value: message }
+}
+
+/**
+ * Longest username or password accepted, in UTF-16 code units.
+ *
+ * The wire body is already capped at 1 MiB, so this only stops one field from
+ * being a document. Both are returned exactly as sent — a token is not a phrase
+ * to be tidied, and whitespace can be meaningful in one.
+ */
+const MAX_CREDENTIAL_LENGTH = 4 * 1024
+
+/** A credential for one remote origin, after validation. */
+export interface GitCredentialInput {
+  /** The origin the credential belongs to, exactly as git names it. */
+  readonly origin: string
+  /** The user name to send. */
+  readonly username: string
+  /** The password or personal access token. */
+  readonly password: string
+}
+
+/**
+ * Validate one field of a credential.
+ * @param value - Whatever the request carried.
+ * @param label - Field name, for the rejection sentence.
+ * @returns The accepted value, or the reason to refuse.
+ */
+function credentialField(value: unknown, label: string): Result<string> {
+  if (typeof value !== 'string' || value === '') {
+    return reject(`the ${label} is required`)
+  }
+  if (value.includes('\u0000')) {
+    return reject(`the ${label} may not contain a NUL character`)
+  }
+  if (value.length > MAX_CREDENTIAL_LENGTH) {
+    return reject(`the ${label} is too long`)
+  }
+  return { ok: true, value }
+}
+
+/**
+ * Validate a credential a user typed for an HTTPS remote.
+ *
+ * The remote must be a bare HTTP(S) origin — the same string git puts in its
+ * prompt and the same one this plugin addresses the record by, so nothing here
+ * has to interpret a path. Whether that origin is one of the repository's own
+ * remotes is a separate question the host answers, because it needs the
+ * repository (§5.5's "the host re-checks").
+ * @param remote - Whatever the request carried for `remote`.
+ * @param username - Whatever the request carried for `username`.
+ * @param password - Whatever the request carried for `password`.
+ * @returns The accepted credential, or the reason to refuse it.
+ */
+export function validateCredential(
+  remote: unknown,
+  username: unknown,
+  password: unknown,
+): Result<GitCredentialInput> {
+  if (typeof remote !== 'string' || remote === '') {
+    return reject('the remote origin is required')
+  }
+  if (originOf(remote) !== remote) {
+    return reject(`the remote must be an HTTP(S) origin, such as https://host: ${remote}`)
+  }
+  const acceptedUser = credentialField(username, 'username')
+  if (!acceptedUser.ok) return acceptedUser
+  const acceptedPassword = credentialField(password, 'password')
+  if (!acceptedPassword.ok) return acceptedPassword
+  return {
+    ok: true,
+    value: { origin: remote, username: acceptedUser.value, password: acceptedPassword.value },
+  }
 }

@@ -234,6 +234,12 @@ export const zh = {
   'error.notMerged': '这个分支还有未合并的提交。确实要删除，请在分支列表里再点一次删除。',
   'error.noLlm': '这个部署没有配置可用的语言模型，因此无法生成提交信息。',
   'error.clipboard': '浏览器拒绝写入剪贴板。',
+  'error.authRequired': '远端需要用户名与密码，面板不弹终端，所以 git 无法询问。在下面填入即可重试。',
+  'credential.title': '{remote} 需要凭据',
+  'credential.username': '用户名',
+  'credential.password': '密码或访问令牌',
+  'credential.save': '保存并重试',
+  'credential.cancel': '取消',
 } as const
 
 /** English dictionary, checked against the Chinese key set. */
@@ -453,6 +459,13 @@ export const en: Record<GitPanelKey, string> = {
     'That branch has commits nothing else reaches. Click delete again in the branch list to discard them.',
   'error.noLlm': 'This deployment has no language model configured, so no message can be written.',
   'error.clipboard': 'The browser refused to write to the clipboard.',
+  'error.authRequired':
+    'The remote wants a username and password, and this panel has no terminal to prompt on. Fill them in below and retry.',
+  'credential.title': '{remote} needs a credential',
+  'credential.username': 'Username',
+  'credential.password': 'Password or access token',
+  'credential.save': 'Save and retry',
+  'credential.cancel': 'Cancel',
 }
 
 /** Every key the panel can translate. */

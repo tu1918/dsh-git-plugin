@@ -67,6 +67,16 @@ export function errorCopy(
       // says what is true but not what to do. The picker has already armed the
       // forced click, so this sentence points at it.
       return { title: t('error.notMerged'), detail: undefined }
+    case 'auth-required':
+      // The panel cannot prompt on a terminal, so it asks here instead: the
+      // title says what is missing and the form beside it is the answer. git's
+      // own words stay as the detail — they name the host, which is the one
+      // fact the user needs to check against what they are about to type.
+      return { title: t('error.authRequired'), detail: error.detail }
+    case 'credentials-unavailable':
+      // Nothing to add to the host's own sentence: the deployment is missing a
+      // capability, and no retry of the user's will change that.
+      return { title: error.message, detail: undefined }
     case 'no-llm':
       // FR-3.5 cannot run here, and the reason is the deployment's, not the
       // user's — so it says which fact is missing rather than "try again".

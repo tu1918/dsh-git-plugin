@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（56 个源文件）、`test/`（20 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 470 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 493 项测试 + 两个打包产物
 
 ---
 
@@ -138,6 +138,7 @@ discard 与 undoCommit 在 M5a。
 | **D37** | FR-1.2 写的徽标字母是 `M/A/D/R/U/?`（git 自己的记号） | 徽标用**状态的英文首字母**，并照 VS Code 给冲突一个字母：未跟踪 `?` → **`U`**，冲突（unmerged）→ **`!`**。字母表于是是 `M/T/A/D/R/C/U/!`（`core/git-parse.ts` 的 `BadgeLetter`），**一个字母一个状态**，徽标不再需要「读它所在的分组」才能解释；颜色与 tooltip 都直接按字母取。中间实现过一版「`U` 兼指未跟踪与冲突 + `data-state` 分开配色」，定稿为 `!` 后那一层（`ChangeState`/`badgeStateOf`/`data-state`）已删除 | 产品方先要求「『?』改成『U』。都用状态的英文首字母」，随后要求「看 vscode 是怎么处理的」。**实测本机 VS Code**（`/mnt/d/codes/Microsoft VS Code/*/resources/app/extensions/git/dist/main.js` 的 `getStatusLetter` / `getStatusText` / `getStatusColor`）：字母是 `M/T/A/D/R/C/U/!`，**未跟踪 = `U`、冲突 = `!`**；冲突 tooltip 按 7 种细分（`Conflict: Both Modified` …）；`strikeThrough` 对删除与三种「被删」冲突为真；staged 行另用 `stageModifiedResourceForeground` / `stageDeletedResourceForeground`。冲突只能取 `!`——`C` 已被 copied 占用，`M`/`U` 也已名花有主。**没有跟的两处**：① VS Code 把字母画在文件名的标签里（workbench 的 SCM 行模板是 `[icon] label · .actions · .decoration-icon`），即字母在操作按钮**左边**；产品方选择保留「状态列贴在行最右、操作在它左边」（见 D36）；② 它的重命名/复制用偏绿的 `renamedResourceForeground`，我们仍用语义蓝（DSH 的 token 里没有那套装饰色） |
 | **D38** | FR-1.2 的内置 9 类图标是代码里的，没有配置面 | 图标映射改成**用户可配**：`$DSH_HOME/git-panel-icons.yml`（可用 `config.fileIconsPath` 改）里一行一个 `扩展名: SVG 文件路径`。host 侧新增 `core/icon-config.ts`（YAML 子集解析器，纯函数）+ `host/file-icons.ts`（读文件、校验、按 mtime+size 缓存、按需重读），路由新增 `GET /git-panel/fileIcons` 一次把**已读到的** SVG 全量下发；客户端 `ui/file-icons.ts` 把每个文档转成 `data:` URL，行内按扩展名命中就用 `<img>` 画、否则回落内置 glyph（`customIconFor` 一条规则） | 产品方要求「改成用户可配的映射，用 yml 配置，后缀为 key，path 为 value」。**四处有意选择**：① **独立文件而不是塞进 profile patch**（产品方选定）——路径仍可由 `Config.fileIconsPath` 覆盖，测试与特殊部署都能指；默认 `$DSH_HOME/git-panel-icons.yml`，`~/` 会展开。② **不引 YAML 依赖**，手写只认「一行一个 `ext: path`、`#` 注释、引号值」的子集：需要的是扁平字符串映射，引入解析器（并给 core 的零依赖守卫开白名单，见 D12）换来的是这个文件用不上的锚点/嵌套/多行。③ **浏览器只被下发 SVG 文本、自己转 `data:` URL 交给 `<img>`**：图片是静态上下文（脚本与外链都不执行），配置里的文件因此永远不进入面板 DOM，也就没有 `dangerouslySetInnerHTML` + 净化器这一层；一次请求带全部图标，避免「一行一条请求」。④ **读得到就替换、读不到就回落**：限制 64 KiB/个、64 个、必须含 `<svg`，每条被拒绝的路径都在 host 日志里说明原因——图标静默缺失是最难查的那种失败 |
 | **D39** | §9②③ 把复制类条目列为菜单的一部分；§10.2 顺序 6 说它们是「纯客户端 clipboard」 | 五条复制条目全部落地：文件行菜单加「复制相对路径 / 复制绝对路径」（顺序 1 那张菜单，D36 的路径列不变），提交行菜单加「复制短哈希 / 复制完整哈希 / 复制提交信息」。**四处决定**：① **提交菜单现在挂在每一行上**，不再只挂最新一行——复制属于任何提交，FR-3.8 的撤销仍只由最新行提供（`canUndo` 随行下传，不再用「有没有菜单」表达「能不能撤销」）；② **「复制提交信息」复制的是 subject 首行**，因为历史列表读的就是 `%s`（`CommitInfo.subject`），提交正文不在客户端——要复制全文得让 host 多读一次 `%B`，那与顺序 6「纯客户端」的定位相悖；③ **剪贴板自己写**（`ui/clipboard.ts`：Clipboard API 优先，`execCommand` 回退，两者都没有就返回 `false`），不把 primitives 的 `writeClipboard` 包一层 adapter——依赖方向第 3 条不允许 `ui/**` 碰 DSH，而 `document`/`navigator` 本来就是 ui 直接用的浏览器能力；④ **写失败也是普通失败**：`GitErrorCode` 新增 `clipboard`，拒绝的写入在面板同一条错误通道里说一句，而不是静默或抛异常 | 产品方按 §10.2 顺序 6 下令。**两处代价**：① 提交菜单从「只有一行有」变成「每行都有」，顺序 3 的验收测试按新契约重写（旧契约「老行没有菜单」不再成立，但「老行不能撤销」仍成立，只是改由条目断言）；② `repoAbsolutePath`（`core/format.ts`）按根自己的分隔符风格拼接——`git rev-parse --show-toplevel` 在 Windows 上给 `C:/…`，若根本身就是反斜杠那就补反斜杠，粘出去的路径才与该平台的文件对话框一致 |
+| **D44** | §5.5 只说「`GIT_TERMINAL_PROMPT=0`，凭据缺失快速失败」，§11 登记了「凭据缺失只报 git 原文」；文档没有「让用户输入凭据」这一条 | 新增 **`auth-required` 错误分类 + 面板内凭据表单 + 用 DSH 的凭据缝持久化**：host 每次 push/pull/fetch/sync 前**现解析**该仓库已配置 remote 的 origin 对应的凭据，经 `GIT_ASKPASS`（静态 helper 文件 + 环境里的 JSON map）注入，`GIT_TERMINAL_PROMPT=0` 不变；失败时面板在**失败通知内**长出用户名/口令表单（`type=password`，非模态），「保存并重试」把凭据经 `POST /git-panel/saveCredential` 写入 `ctx.credentials`（`grant` 记录，scope `ui-git-panel`，id 由 origin 派生），随后重跑**原来那次操作** | 产品方要求「加一个登录弹窗」，并先让我查 DSH 有没有密钥接口——**有**：`ctx.credentials`（`@deepseek-ai/dsh-credentials`）是抽象缝，本 profile 经 `dsh-base` 已挂 `dsh-credentials-local`。**四处决定**：① **按 origin 寻址而不是完整 URL**：实测 git 的提示串是 `Username for 'http://127.0.0.1:PORT'`（**路径被去掉**），这是它能区分的最细粒度，所以凭据也按 origin 存（同主机多仓库共用一份，正好是 PAT 的常态）；② **记录用 `grant`**：缝里 `grant.payload` 是「owner 自定义、可过 JSON 往返」的不透明数据，而 `api-key` 是给模型 provider 的形状；`describeRecord`/`listRecords` 只给存在性、不给值；③ **不自己开密码库**：值归 provider——本地 provider 写 `$DSH_HOME/.credentials.yaml`（0600，对他人可读会**拒绝启动**），换 keychain provider 时本插件一行不改；④ **不做** SSH、一次性不保存模式、代理/证书配置。**代价**：本地 provider 今天仍是**明文 YAML**——用这个缝**不等于加密**，换来的只是「存储位置归 provider」；同主机不同仓库要不同凭据做不到（git 的提示串只到 origin）；`ctx.credentials` 缺失的部署里弹窗明说无法保存 |
 | **D43** | FR-4.1 只说分支下拉「列出所有本地分支」；文档没有远程分支的展示 | 分支选择器新增一个**只读**的「远程分支」区：新读方法 `remoteBranches` + `GET /git-panel/remoteBranches`（`for-each-ref refs/remotes`），每行 `origin/xxx` + 该提交的 subject，**不是按钮、没有任何点击行为**；空时一句「没有远程分支（先获取一次）」。**检出远程分支（rebase onto origin / drop local commits）推迟**，等 FR-9 冲突处理做完再做（§10.3 待办） | 产品方先要求「可切换远程、像 IDEA 一样让用户选 rebase onto origin 还是 drop local commits」，随后自己收窄为「先只读，等冲突处理做完再弄」——rebase 与 drop 都可能进入冲突态，先有冲突 UI 才能安全收尾。**三处决定**：① **只读行不用 `<button>`**：面板对它还没有动作，一个看起来能按却没有动作的行比一句标签更糟；测试断言该区里没有 button、点它不产生任何调用；② **用 `%(symref)` 判符号引用，而不是按名字**——`%(refname:short)` 把 `refs/remotes/origin/HEAD` 缩成 `origin`（实测，按 `/HEAD` 后缀过滤会漏），符号 ref 必须由 `%(symref)` 非空来认出；③ **惰性读取、随快照重读**：只在选择器打开时读，并以 snapshot 为依赖——探测的 `refs` 报告与面板自己的 fetch 都会 `reload()`，于是取完东西列表自己就更新了。**代价**：不拆 remote/branch（远程名本身可能含 `/`），所以暂不支持按远程分组；检出时「去掉 `origin/` 前缀后的重名规则」也留到那时再定 |
 | **D42** | FR-5.1 的同步动作只有三个（拉取 / 推送 / 同步），文档没有 fetch | 新增第四个动作**获取所有远程**：`git fetch --all`，挂在分支行、紧挨「拉取」左边，字形是**虚线 ↓**；`POST /git-panel/fetch`；仓库没有远程时以 `bad-request` 说明而不是静默成功。**不做 `--prune`** | 产品方要求在面板里能 fetch，并指定「第四个小按钮、虚线 ↓」「fetch 所有远程」——参考 IDEA 的 Fetch All Remotes。三处决定：① **`--all` 而不是默认远程**：分支行只描述一条分支，但 ↑↓ 计数、○/● 标记与 `upstreamGone` 都读 `refs/remotes`，而一个仓库可以配多个远程；② **不 prune**：prune 会删掉远端已不存在的远程跟踪 ref，那不是「按一下获取」隐含同意的动作——留一条过期的 `origin/xxx` 比删一个 ref 意外更小，真要清理是另一条命令；③ **无远程先问一次 `git remote`**：`git fetch --all` 在没有远程时**退出 0 且一个字节都不打印**（实测），不问就会宣布一次没发生的获取。**代价**：远程分支的名字仍然不进分支选择器（FR-4.1 只要求本地分支）——fetch 看得见的效果是 ↑↓ 计数、○/● 标记与 `upstreamGone`；要「取回一个远程分支」得像 git 一样先 `checkout -b`（本插件今天没有这条路径，见 §12） |
 | **D41** | FR-7.1「历史列表旁内嵌 SVG 泳道图（分叉开新道、合并收道），分页不断线」 | 泳道分配是 core 的纯函数 `core/commit-graph.ts`（`buildGraph`：一行给出 `lane`/`from`/`to`/`edges`/`lanes`），渲染是每行一个内联 SVG（`ui/History.tsx` 的 `GraphCell`），**没有新增 host 路由**——`CommitInfo.parents` 从 M1 起就在 `LOG_FORMAT` 里，本项是纯客户端 + core。三处决定：① **每行一个 SVG、y 用百分比**（`0%`→`50%`→`100%`）、不设 viewBox：行高由文字决定，百分比让线段在不知道高度的情况下连到相邻行，`align-self: stretch` + `display: block` 保证不留缝；② **分页不断线是「对全部已加载提交跑一次」的结果**，不是补丁——分配是从新到旧的一趟、每行只依赖它上面的行，所以第 2 页只是把图**延长**，第 1 页逐字节不变（测试钉住）；③ **条带宽度 = 所有行的最大泳道数**（上限 8），每行共用同一个数——否则某一行开了新道就会把自己那行的 hash 推右，整列 hash 对不齐 | 文档只要求「分叉开新道、合并收道、分页不断线」，没规定颜色、也没规定图在行内还是行外。**颜色的代价**：DSH 的 token 集里**没有图表调色板**，泳道只能借语义色（brand / business / success / warn / gray 按车道取模循环，刻意避开 error 红——一条红线会读成对提交的警告）；车道号只要线还在就不变，所以一条线的颜色跨行稳定，被回收的车道可能与前一条同色。**另外两条实现选择**：① 颜色按**目标**车道取——合并的斜线用它汇入/开出的那道色，与下方竖线一致；② 上限 8 是防「多父 octopus 合并」把提交信息挤出面板，超出部分被裁掉（真实历史远在 8 以下） |
@@ -247,6 +248,11 @@ discard 与 undoCommit 在 M5a。
   参数数组 + `--` 分隔，无 shell 插值。
 - **配置里的图标**（D38）：浏览器拿到的 SVG 只来自它**没有**参与指定的地方——图标路径在 host 自己的配置文件里，客户端只带 session id；下发前校验「像 SVG / ≤64 KiB / ≤64 个」，并且只以 `data:` URL 交给 `<img>`（图片是静态上下文，脚本与外链都不执行），配置里的文件因此不进入面板 DOM。
 - **复制类条目只写本机剪贴板**（顺序 6）：路径、哈希、提交首行由客户端直接写系统剪贴板，**不经过 host、不出网络**；写失败（非安全上下文、权限被拒、jsdom）在面板里说一句。它是用户主动的一次数据外带，且带的是面板屏幕上已经显示的东西。
+- **HTTPS 凭据**（D44）：**只有 origin、用户名、口令**过 `POST /git-panel/saveCredential`
+  （同源 + loopback + 1 MiB body，与其它写操作同一条网关），host 再核对该 origin 是本仓库
+  已配置 remote 的；值由 DSH 的凭据缝保管，**审计日志只记 origin**，值绝不进日志；注入时
+  只进 git 子进程的环境（helper 文件里没有秘密），`GIT_TERMINAL_PROMPT=0` 不变。没有 provider
+  的部署里保存会被明确拒绝。
 - **审计日志**：每个写操作记一行（`stage`/`unstage` 记路径数，`commit` 记
   short oid 与 subject，`push`/`pull` 记分支与仓库根，`stash push`/`apply`/`pop`/`drop`
   记选择器、id 与仓库根——drop 还记 subject，因为条目随后就从列表里消失了）。
@@ -683,6 +689,28 @@ FR-7.1 的三条要求（分叉开道、合并收道、分页不断线）落成�
 
 **待办**：把只读行变成「检出远程分支」，依赖 FR-9，登记在 §10.3。
 
+### 验收期新增：HTTPS 凭据（登录表单 + DSH 凭据缝，2026-09-13）
+
+起因是实测：`fetch` 一个 HTTPS 远端报 `could not read Username … terminal prompts
+disabled`。`GIT_TERMINAL_PROMPT=0` 是防挂死的硬要求，但这样一来 git 没人可问；
+产品方要求加登录弹窗，并先确认 DSH 有没有密钥接口——有，见 D44。
+
+| 落点 | 内容 |
+|---|---|
+| `core/remote-origin.ts`（新） | `originOf(url)`：HTTP(S) → `scheme://host[:port]`（去路径/去 userinfo/省默认端口），其余（SSH、scp 形、`git://`、读不出来的）→ `null`；`credentialRecordId(origin)`：`r-<slug>-<FNV-1a 8 位>`，满足缝的 `^[a-z][a-z0-9-]*$`。手写 FNV-1a 而不是 `node:crypto`，因为 core 不许引 Node 内建 |
+| `core/validate.ts` | `validateCredential(remote, username, password)`：remote 必须是**裸 origin**（`originOf(remote) === remote`），用户名/口令非空、禁 NUL、各 ≤4 KiB；两个值**原样返回**（token 不是要用 trim 打理的短语） |
+| `core/ports.ts` | `GitErrorCode` + `auth-required` / `credentials-unavailable`；`GitPanelError` + 可选 `remote`；`GitRunOptions` + `askpass`；`HostPorts` + 可选 `credentials: GitCredentialStore`；两个端口各加 `saveCredential(...)` |
+| `src/host/adapter/credentials.ts`（新，唯一命名 `@deepseek-ai/dsh-credentials` 的地方） | `createGitCredentials(ctx)`：`ctx.get('credentials')`（可选，像 `llm`）；读 → `readRecord(credentialKey('ui-git-panel', id))` 取 `grant.payload`；写 → `modifyRecord(...)` 写回 `grant`。没有 provider：读答「没有」、写答 `credentials-unavailable`。别的 kind / 形状不对的 payload 一律读作「没有」 |
+| `src/host/askpass.ts`（新） | 把**不含任何秘密**的静态 helper 写进 0700 临时目录（POSIX 带 shebang，Windows 用 `.cmd` 包一层），退出时清理；helper 从 `GIT_PANEL_CREDENTIALS`（origin → 凭据的 JSON）取值，按提示串里的 URL **解析出 origin** 再查表（所以 `https://user@host` 的提示也命中） |
+| `git-exec.ts` | `options.askpass` 存在时设 `GIT_ASKPASS` / `GIT_PANEL_CREDENTIALS` / `GIT_ASKPASS_REQUIRE=force`；**不存在时主动删掉这三个变量**，不让启动 shell 里的 askpass 掺进来。`GIT_TERMINAL_PROMPT=0` 始终不变 |
+| `host/git-service.ts` | `remoteOrigins(cwd)`（`config --get-regexp '^remote\..*\.(url\|pushurl)$'`）、`askpassFor(cwd)`（**每次操作现解析**，不跨操作缓存——缝的契约就是改了的凭据下一次操作生效）；push/pull/fetch 三条命令传 askpass（sync 走两者，自然继承）。分类新增 `auth-required`，并从 git 输出里 `'…'` 引号中的 URL 解析出 `error.remote`。`saveCredential`：先 `validateCredential`，再要求 origin **属于本仓库已配置的 remote**（不让调用方拿面板往我们的命名空间塞任意主机），审计只记 origin |
+| `host/adapter/routes.ts` + `client/adapter/git-client.ts` | `saveCredential` 进 `WRITE_OPERATIONS`（POST + 同源 + 1 MiB body），三个字段用 `stringOf` 取；GET 405 |
+| `ui/CredentialPrompt.tsx`（新）+ `ui/StatusPanel.tsx` | 失败为 `auth-required` 时记下 `{ op, label, remote, retry }` 并在**同一张失败通知里**渲染表单（非模态，§4.1）；「保存并重试」→ `saveCredential` → 重跑原操作；取消/关闭通知/开始其它操作都会收起表单。`errorCopy` 给两个新码各自的话 |
+| `package.json` | 新增 peer + dev dependency `@deepseek-ai/dsh-credentials@0.1.5-rc.1`（host bundle 第二个 `@deepseek-ai/*` 运行时 import，性质同 D23） |
+| 测试 | +23 项（493 总计）：core 9（`originOf`/`credentialRecordId` 6、`validateCredential` 3）；适配器 5（假 ctx：读写映射、别的 kind 读作没有、无 provider、抛异常）；服务层 9（**端到端**：真 git + 真 401 HTTP 服务——无凭据报 `auth-required` 且 `remote` 是 origin，存了 `user/pass` 后同一次 fetch 成功并真的写出 `refs/remotes/origin/<branch>`；`saveCredential` 成功且审计不含值、拒绝非本仓库 origin、拒绝非裸 origin、无 provider 明说；两张拒绝表各补一行）；路由 1；客户端 3（表单出现且口令是 `password` 类型、提交后「保存 → 重跑同一次 fetch」、取消不存不重跑、保存失败留在表单且不重跑） |
+
+**诚实保留**：本地 provider 是明文 YAML；同主机不同仓库要不同凭据做不到；SSH 与代理不在内。
+
 ### 验收期改动：操作反馈改成悬浮通知（2026-09-12，产品方提出）
 
 产品方要求：「把通知作为悬浮的一层，过指定时间自动关闭」，并确认**成功与失败都浮起**（失败要手动关）。
@@ -733,7 +761,7 @@ FR-7.1 的三条要求（分叉开道、合并收道、分页不断线）落成�
 | 5 兼容层的代价 | 接受。代价是简单功能也要过一道 ports；收益是 `core` 能在裸 Node 里测试 |
 | 新增 | **第三方 `webServer` 路由不在 DSH 鉴权范围内**（见 D6/§7）。凡是注册路由的插件都要自带网关 |
 | 新增 | **`commit.gpgsign=true` 的仓库里，面板提交可能卡在 gpg 密码提示上**，直到 15s deadline。`GIT_TERMINAL_PROMPT=0` 管不到 gpg。M2 不传 `--no-gpg-sign`（那会静默产生未签名提交，比超时更糟）；待办是识别这个失败并给出「请检查签名配置」的具体文案 |
-| 新增 | **凭据缺失的 push/pull 只报 git 原文**（`could not read Username … terminal prompts disabled`）。够用，但没有专门文案；等 M4 做远程同步完善时再分类 |
+| 新增 | **凭据缺失已分类并给出出路**（D44，2026-09-13）：`auth-required` + `error.remote`，面板在失败通知里给出用户名/口令表单，保存经 `ctx.credentials` 落在 DSH 自己的凭据缝（今天由本地 provider 写 `$DSH_HOME/.credentials.yaml`，0600），随后自动重跑原操作。已用一个真实的 401 git HTTP 服务端到端验证。**仍未覆盖**：SSH、代理、同主机多仓库不同凭据（git 提示串只到 origin）、以及本地 provider 的明文存储 |
 | 新增 | **`push`/`pull` 会走真实网络**，测试里只覆盖了 file transport 与裸仓库；https/ssh 未实机验证 |
 | 新增 | **插件首次有运行时依赖**（`vscode-diff`，MIT、零依赖，见 D12）。host bundle 仍 `packages: 'external'`，运行时由 profile 的 node_modules 解析；client bundle 不引用它（构建的产物纯度检查会挡住意外引入）。换实现或升级只影响 `core/diff-engine/marks.ts` |
 | 新增 | **`llm`/`agentDefaultModel` 故意不在 `inject` 里**：面板在没有模型的 composition 里照样挂载，只有 FR-3.5 那个按钮返回 `no-llm`。代价是这条路径的类型安全靠 `ctx.get()` 的松弛签名兜底，而不是靠 cordis 的依赖声明 |

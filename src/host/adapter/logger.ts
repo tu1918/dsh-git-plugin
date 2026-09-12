@@ -5,15 +5,17 @@
  * service and the route layer take the neutral port and never learn that DSH's
  * logger exists. If the logging API changes, only this file changes.
  *
- * `generateText` is here rather than in the git service because it is the same
- * kind of thing — a host capability the core describes in its own vocabulary —
- * and its own DSH naming lives in `./llm.ts`.
+ * `generateText` and the credential store are here rather than in the git
+ * service because they are the same kind of thing — host capabilities the core
+ * describes in its own vocabulary — and their own DSH naming lives in `./llm.ts`
+ * and `./credentials.ts`.
  *
  * @module dsh-git-panel/host/adapter/logger
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostPorts } from '../../core/ports.ts'
+import { createGitCredentials } from './credentials.ts'
 import { createTextGenerator } from './llm.ts'
 
 /** The name every line from this plugin carries in the DSH log. */
@@ -34,5 +36,8 @@ export function createHostPorts(ctx: Context): HostPorts {
       logger[level](message)
     },
     generateText: createTextGenerator(ctx),
+    // Optional by construction: the store answers "nothing stored" and a stated
+    // refusal to save when the composition mounts no credential provider.
+    credentials: createGitCredentials(ctx),
   }
 }

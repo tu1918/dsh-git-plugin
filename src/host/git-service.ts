@@ -14,6 +14,8 @@ import { join } from 'node:path'
 
 import { buildCommitMessagePrompt, cleanCommitMessage, truncateDiff } from '../core/commit-message.ts'
 import { parseUnifiedDiff } from '../core/diff-parse.ts'
+import { originOf } from '../core/remote-origin.ts'
+import { buildAskpass } from './askpass.ts'
 import {
   changedPathCount,
   groupsOf,
@@ -27,6 +29,8 @@ import {
   parseStatusV2,
 } from '../core/git-parse.ts'
 import type {
+  GitAskPass,
+  GitCredential,
   GitPanelError,
   GitRunResult,
   GitRunner,
@@ -54,6 +58,7 @@ import type {
 import {
   validateBranchBase,
   validateBranchName,
+  validateCredential,
   validateHash,
   validateMessage,
   validatePaths,
@@ -179,6 +184,16 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'a commit message may not be empty',
   },
   {
+    // An HTTPS remote that wanted a credential git had nobody to ask. The
+    // panel answers with a form and a retry, which it can only do if this is a
+    // code of its own rather than git's prose (see `authRemoteOf` for the
+    // origin it names).
+    pattern:
+      /could not read Username|Authentication failed|terminal prompts disabled|HTTP Basic: Access denied|Invalid username or (password|token)/iu,
+    code: 'auth-required',
+    message: 'the remote asked for a username and password, and this panel has none stored for it',
+  },
+  {
     pattern: /\[rejected\]|non-fast-forward|\(fetch first\)|failed to push some refs/iu,
     code: 'non-fast-forward',
     message: 'the remote has commits this branch does not, so the push was refused',
@@ -238,11 +253,35 @@ function fullOutput(outcome: GitRunResult): string {
  * @param outcome - The non-zero run.
  * @returns The failure to hand the browser, with git's own words as detail.
  */
+function authRemoteOf(outcome: GitRunResult): string | undefined {
+  // git quotes the URL in its own refusal (`could not read Username for
+  // 'https://host'`), which is the one place it names what the credential is
+  // for. The first quoted URL that parses as HTTP(S) is the origin to address.
+  for (const match of `${outcome.stderr}\n${outcome.stdout}`.matchAll(/'([^']+)'/gu)) {
+    const url = match[1]
+    if (url === undefined) continue
+    const origin = originOf(url)
+    if (origin !== null) return origin
+  }
+  return undefined
+}
+
 function classifyFailure(outcome: GitRunResult): GitPanelError {
   const text = `${outcome.stderr}\n${outcome.stdout}`
   for (const candidate of FAILURE_PATTERNS) {
     if (candidate.pattern.test(text)) {
-      return { code: candidate.code, message: candidate.message, detail: fullOutput(outcome) }
+      const error: GitPanelError = {
+        code: candidate.code,
+        message: candidate.message,
+        detail: fullOutput(outcome),
+      }
+      // Only a credential failure carries an origin: the panel uses it to
+      // address what it is about to store, and no other refusal has one.
+      if (candidate.code === 'auth-required') {
+        const remote = authRemoteOf(outcome)
+        if (remote !== undefined) return { ...error, remote }
+      }
+      return error
     }
   }
   // Nothing recognised: git's first line as the summary, everything as detail.
@@ -275,13 +314,14 @@ export function createGitService(
    * @param cwd - Directory to run in.
    * @param optionalLocks - Whether this call may take git's optional locks.
    */
-  const options = (cwd: string, optionalLocks: boolean) => ({
+  const options = (cwd: string, optionalLocks: boolean, askpass?: GitAskPass) => ({
     cwd,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
     // See GitRunOptions.optionalLocks: a read must not rewrite the index the
     // probe watches, and a write must be able to take its lock.
     optionalLocks,
+    ...(askpass === undefined ? {} : { askpass }),
   })
 
   /**
@@ -295,14 +335,16 @@ export function createGitService(
    * @param cwd - Directory to run in.
    * @param optionalLocks - Whether this call may take git's optional locks;
    *   every mutation passes `true`, every read leaves it `false`.
+   * @param askpass - Credentials to answer this call's HTTPS prompts with.
    * @returns The run, or the panel-level failure it mapped to.
    */
   async function run(
     args: readonly string[],
     cwd: string,
     optionalLocks = false,
+    askpass?: GitAskPass,
   ): Promise<Result<GitRunResult>> {
-    const outcome = await runner.run(args, options(cwd, optionalLocks))
+    const outcome = await runner.run(args, options(cwd, optionalLocks, askpass))
 
     if (outcome.spawnFailed) {
       return fail('git-missing', 'git is not installed, or not on this process’ PATH')
@@ -603,6 +645,61 @@ export function createGitService(
   }
 
   /**
+   * The origins of every URL this repository has configured.
+   *
+   * Read from git's config rather than from an argument the browser sent, so the
+   * set of origins a credential may be stored for is the repository's own.
+   * `--get-regexp` exits 1 with no output when nothing matches, which is the
+   * ordinary "no remote" answer rather than a failure.
+   * @param cwd - Repository root.
+   * @returns Distinct HTTP(S) origins, in config order.
+   */
+  async function remoteOrigins(cwd: string): Promise<readonly string[]> {
+    const outcome = await runner.run(
+      ['config', '--get-regexp', '^remote\\..*\\.(url|pushurl)$'],
+      options(cwd, false),
+    )
+    if (outcome.code !== 0) return []
+    const origins = new Set<string>()
+    for (const line of outcome.stdout.split('\n')) {
+      const url = line.replace(/^\S+\s+/u, '').trim()
+      if (url === '') continue
+      const origin = originOf(url)
+      if (origin !== null) origins.add(origin)
+    }
+    return [...origins]
+  }
+
+  /**
+   * Build the askpass payload for one call, from whatever is stored.
+   *
+   * Resolved per operation, never cached across them: the credential seam's own
+   * contract is that a changed value reaches the next operation without a
+   * restart, and a cache here would quietly break it. A read that fails is
+   * logged and skipped — git then fails with `auth-required`, which is the same
+   * place the user would have landed.
+   * @param cwd - Repository root.
+   * @returns The payload, or `undefined` when no credential applies.
+   */
+  async function askpassFor(cwd: string): Promise<GitAskPass | undefined> {
+    const store = ports.credentials
+    if (store === undefined) return undefined
+    const found = new Map<string, GitCredential>()
+    for (const origin of await remoteOrigins(cwd)) {
+      const credential = await store.read(origin)
+      if (!credential.ok) {
+        ports.log(
+          'warn',
+          `git-panel: could not read the credential for ${origin}: ${credential.error.message}`,
+        )
+        continue
+      }
+      if (credential.value !== null) found.set(origin, credential.value)
+    }
+    return await buildAskpass(found)
+  }
+
+  /**
    * Push the current branch, setting its upstream when it has none (FR-5.2).
    * @param sessionId - Session whose repository to act on.
    */
@@ -624,7 +721,7 @@ export function createGitService(
       if (!remote.ok) return remote
       args.push('--set-upstream', remote.value, info.name)
     }
-    const outcome = await run(args, root.value, true)
+    const outcome = await run(args, root.value, true, await askpassFor(root.value))
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: pushed ${info.name} in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
@@ -651,7 +748,12 @@ export function createGitService(
     // wording), and `--no-edit` stops that merge from asking an editor for its
     // message — without it, `git pull` waits for an editor until the deadline
     // kills it (probed).
-    const outcome = await run(['pull', '--no-rebase', '--no-edit'], root.value, true)
+    const outcome = await run(
+      ['pull', '--no-rebase', '--no-edit'],
+      root.value,
+      true,
+      await askpassFor(root.value),
+    )
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: pulled ${info.name} in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
@@ -681,10 +783,53 @@ export function createGitService(
     if (remotes.value.stdout.trim() === '') {
       return fail('bad-request', 'this repository has no remote to fetch from')
     }
-    const outcome = await run(['fetch', '--all'], root.value, true)
+    const outcome = await run(['fetch', '--all'], root.value, true, await askpassFor(root.value))
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: fetched every remote in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Store the credential for one of this repository's remote origins.
+   *
+   * Two independent checks before anything is written: the shapes (§5.5, via the
+   * core validator) and whether the origin is one this repository actually has —
+   * the browser sends an origin it read off git's own refusal, but it does not
+   * get to decide what this plugin's credential namespace accepts. The audit
+   * line names the origin and the repository root, never the value.
+   * @param sessionId - Session whose repository the credential is for.
+   * @param remote - The origin, as git named it.
+   * @param username - The user name to send.
+   * @param password - The password or token.
+   */
+  async function saveCredential(
+    sessionId: string,
+    remote: string,
+    username: string,
+    password: string,
+  ): Promise<Result<void>> {
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const valid = validateCredential(remote, username, password)
+    if (!valid.ok) return valid
+    const origins = await remoteOrigins(root.value)
+    if (!origins.includes(valid.value.origin)) {
+      return fail('bad-request', `this repository has no remote at ${valid.value.origin}`)
+    }
+    const store = ports.credentials
+    if (store === undefined) {
+      return fail(
+        'credentials-unavailable',
+        'this deployment has no credential provider, so the credential cannot be saved',
+      )
+    }
+    const saved = await store.save(valid.value.origin, {
+      username: valid.value.username,
+      password: valid.value.password,
+    })
+    if (!saved.ok) return saved
+    ports.log('info', `git-panel: stored a credential for ${valid.value.origin} in ${root.value}`)
+    return { ok: true, value: undefined }
   }
 
   /**
@@ -1333,6 +1478,7 @@ export function createGitService(
     pull: pullRepo,
     fetch: fetchRemotes,
     sync: syncRepo,
+    saveCredential,
     checkout,
     createBranch,
     deleteBranch,

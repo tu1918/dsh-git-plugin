@@ -693,6 +693,7 @@ describe('the full M2 flow', () => {
       service.pull('missing'),
       service.fetch('missing'),
       service.sync('missing'),
+      service.saveCredential('missing', 'https://host', 'user', 'password'),
       service.undoCommit('missing', 'a'.repeat(40)),
     ])
     for (const result of results) {
@@ -709,6 +710,7 @@ describe('the full M2 flow', () => {
       service.commit('s1', 'message'),
       service.push('s1'),
       service.fetch('s1'),
+      service.saveCredential('s1', 'https://host', 'user', 'password'),
       service.undoCommit('s1', 'a'.repeat(40)),
     ])
     for (const result of results) {
