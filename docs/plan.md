@@ -25,7 +25,7 @@
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
-| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 进行中：**顺序 1（行级菜单机制）、顺序 2（discard）、顺序 3（undoCommit）已交付**（见 §10.1）；剩 stash |
+| **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 **四个顺序全部交付、待产品方验收**：顺序 1 行级菜单机制、2 discard、3 undoCommit、4 stash（§10.1）；D20 有意留下的「贮藏后切换」随顺序 4 补回 FR-4.4 的受阻路径。`npm run check` 全绿（395 项测试）。**GUI 观感待人工确认**：宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效 |
 | **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | ⬜ 未开始 |
 
 ---
@@ -117,7 +117,7 @@ discard 与 undoCommit 在 M5a。
 | **D17** | §5.4 未规定 `diff` 的命令形状 | 固定 `--no-color --no-ext-diff --no-textconv --unified=N`，context 夹在 0–50 | 用户自己的 diff 配置会毁掉解析：外部 driver 输出解析器读不懂的语法，textconv 会把二进制文件转成文本——正好违反 FR-2.5 |
 | **D18** | §4.2 布局：分支行 → 提交框 → 变更分组 → 历史 | 基准是 VS Code 源代码管理视图，最终为：分支行 → **已暂存的更改（抽屉，常驻）** → **提交框** → **工作区列表**（冲突/更改/未跟踪）→ **底部 tab 区**（最近提交 / 所选文件的 diff）。中间经历过几版被推翻的顺序，以本行为准 | 产品方在 M3 验收后逐条调布局，最后定调「参考 VS Code」——那里没有需要发明的顺序：源代码管理视图就是 输入框 → 变更分组 → 图/历史。**唯一跟不了的一处**：VS Code 把 diff 开在编辑器区，而本插件只注册了右侧栏 tab（`sidebarRightTabs`，本 profile 的客户端包里没有主区 tab 的注册缝），所以 diff 停靠在最下、默认半屏——这也符合「点文件在提交框下方看 diff」的要求。**代价**：diff 是固定占位而不是占满 body，列表可用高度变小。**2026-09-12 由 D27 重做**：那两处「变小」不再是散落的几个数，而是 `ui/panel-layout.ts` 里的一本预算 |
 | **D19** | FR-3.2 只说「分组标题行提供组级批量操作」，没规定显隐 | M2 做成了 hover 才显形（`opacity: 0` → 1）；M3 验收后改为**常显**，并把分组名改成可省略号收缩、标题行 `min-width: 0` | 产品方在界面上**找不到**「全部暂存」——hover-only 的控件在窄侧栏里等于不存在，而同一份文档的 §4.2 示意图本来就把这两个操作画成可见控件。行内 `+`/`−` 保持 hover 显形不动：FR-3.1 明文要求「hover 显现」，那是需求本身的决定 |
-| **D20** | FR-4.4 要求切换分支受阻时提供「**贮藏后切换**」快捷项 | M4 **只做降级**：原样展示 git 的多行输出并说明工作区不干净，不提供一键贮藏。stash 本身是 FR-6.2，排在 M5a（§10.1 顺序 4） | 一键贮藏会写 `git stash`（动 `refs/stash` + 工作区），是 M5a 才交付的能力；在 M4 里半做它，等于把这个里程碑唯一的破坏性写操作藏在「切换失败」的补救路径里。产品方确认：先降级 |
+| **D20** | FR-4.4 要求切换分支受阻时提供「**贮藏后切换**」快捷项 | M4 **只做降级**：原样展示 git 的多行输出并说明工作区不干净，不提供一键贮藏。stash 本身是 FR-6.2，排在 M5a（§10.1 顺序 4）。**✅ 2026-09-12 已补回**：受阻路径现在长出一个「贮藏后切换到 {name}」按钮，一次点击做「`stash push -u` → 重试同一次切换」（D33/D34） | 一键贮藏会写 `git stash`（动 `refs/stash` + 工作区），是 M5a 才交付的能力；在 M4 里半做它，等于把这个里程碑唯一的破坏性写操作藏在「切换失败」的补救路径里。产品方确认：先降级 |
 | **D21** | FR-9.2 每个冲突文件提供「**打开文件**（调 DSH 文件编辑器）」与「标记已解决」 | M4 **不做打开文件**；冲突行只提供「标记已解决」（即 `+`，与 git 同一命令），路径仍可从行 tooltip 读出 | 本 profile 的文件区是 `dsh-better-sidebar`，它对外的缝只有 `registerTab`/`registerFileViewer`/`registerFileIcon`，没有「按路径打开编辑器」；`dsh-client-ui-open-in-app` 打开的是工作区目录给本地应用，也不对口。产品方确认：往后排 |
 | **D22** | FR-3.6 提交详情「完整信息、文件清单、每文件增删行、**可下钻看该提交的 diff**」 | M4 做前三项（行内展开），**下钻 diff 与提交改写（drop/squash/reset、FR-3.8 的撤销）不在 M4** | 下钻需要一个「按提交取 diff」的第三种 `DiffArea`（客户端与路由都要扩），而提交改写是另一类操作（重写历史）。产品方确认：提交详情具备初步功能即可，提交管理往后排 |
 | **D23** | §5.2 的意图是「DSH 名字只在 adapter 里，且最好是类型」 | `host/adapter/llm.ts` 引入了 `@deepseek-ai/dsh-llm` 的**运行时值**（`BlockAssembler`、`createUserMessage`），并把它声明为 peerDependency | 手写一份流式装配会复刻 harness 的块合并规则（工具调用截断、未知块、delta-only 协议都已在那层处理过），手写 message 形状则要跟住它的不可变创建契约。用宿主自己的装配器是唯一不会随宿主漂移的选择。**代价**：host bundle 首次带一个 `@deepseek-ai/*` 的运行时 import（此前只有 Node 内建 + `vscode-diff`），安装时必须能解析到宿主提供的 `dsh-llm`——`link:` 安装由本仓 devDependencies 提供，npm 安装由 peer 自动补齐 |
@@ -128,6 +128,12 @@ discard 与 undoCommit 在 M5a。
 
 | **D28** | §4.3「无变更显示**干净状态图标**」 | 干净状态不再由 body 里的一段文字表达（原实现是「没有未提交的更改」+「工作区与 HEAD 一致。」两个 `<p>`，而且本来也没有图标）：改成「更改」与「未跟踪的文件」两个分组**常驻**，用表头 + 计数 0 表达；提交框自己的 `commit.hintClean`（「没有可提交的更改。」）在提交按钮旁边说同一件事 | 产品方 2026-09-12 指出这段文字与分组表头重复（「这个能扔了吗」），要求删掉。常驻是**必需的配套**：只删文字不常驻的话，干净状态下 body 会是一片空白。**代价**：放弃了文档要求的「图标」，也少了一句「工作区与 HEAD 一致」的完整句子——现在干净状态 = 三个 0 + 提交框一句提示，§4.3 的意图（让人知道现在是干净的）仍然成立。顺带定下：空分组的批量按钮不再常显，只有 staged 抽屉保留（它有 `emptyNote` 解释那个灰按钮） |
 | **D29** | §5.4 的 `undoCommit(): { mode }` 是**无参**的 | 实现为 `undoCommit(hash)`：浏览器传它以为是最新提交的那个 hash，host 现读 `rev-parse HEAD` 并**要求两者相等**，不等则拒绝 | 「仅最新一条」若无参，则面板上一条过期行（点击之后 agent 又提交了一次）会撤销掉一个没人指着的提交。hash 是「点击落在哪一行」的证据，host 的重核是「该行仍然是最新」的证据——FR-3.8 的「执行前由后端重新核实」因此同时覆盖推送状态与行本身。顺带让 `validateHash` 得到复用（D11）。返回值在 `{ mode }` 之外带 `shortOid` 与 `subject`：reset 之后该提交从历史消失，通知与审计需要点名它 |
+| **D30** | FR-6.2 只说「存（可带消息）、列表、应用（pop/apply）、删除」，没规定入口、寻址与确认；D20 只说要补回「贮藏后切换」 | 四条实现决定：① **入口是分支行上的一个图标按钮**，列表沿用顺序 1 的 `ui/popover.tsx` 层（`ui/StashPicker.tsx`），因为贮藏列表是「打开—读—关掉」的东西，塞进列里会把用户正在读的变更列表推走（与 BranchPicker 同一条理由；也因此不必在 D27 的高度预算里再领一个下限）；② **条目按 commit id 寻址，不按 `stash@{n}`** —— 选择器是栈里的位置，另一个窗口再贮藏一次就让所有位置位移，host 拿 id 现读自己的 `stash list` 再解析（缺失即 `bad-request`「that stash is no longer in the list」），与 D29 同一条「不信客户端那一行」；③ **只有 drop 武装**（§4.3）——它是唯一不可逆的（条目失去唯一的 ref）；`save` 把工作区搬进栈、`apply`/`pop` 是把它搬回来，都可逆，武装只会让常用动作多一次点击；④ 应用时不区分 pop/apply 的确认轻重：冲突时 git 自己保留条目，所以 `pop` 的承诺是「应用成功才删」 | 「列表」如果没有一个容器，就只能挤进变更列或底部 dock，两者都要动 D27 的高度预算；用已有的浮层是唯一不动布局的做法。按 id 寻址的代价是 host 多一次 `stash list`（本来就要读一次来解析选择器），换来的是「点到一个过期行」时不会误删/误用另一个条目。`stash push` 在空工作区会打印 "No local changes to save" 并**退出 0**（实测），所以 `stashSave` 先读一次 `status` 自己判断「有没有可贮藏的东西」并给出 `bad-request` 句子——否则面板的通知会宣布一次没发生的贮藏 |
+| **D31** | §5.5 只要求「参数形状校验」；D11 定的原则是「只实现真的有调用方的校验」 | 新增 `validateStashMessage`：缺省/`null`/纯空白一律视为「没有说明」并返回 `null`（FR-6.2 的「可带消息」本来就是可选），只有非字符串、含 NUL、超长（4096）才拒绝；`stashApply`/`stashDrop` 的 id 复用 `validateHash`（D11、D29 的同一个函数） | 复用 `validateMessage` 会把「提交信息不可以为空」这句文案用在贮藏说明上，而空说明在这里是**合法**的；写成一个独立纯函数比在 host 里就地判断更容易被穷举测试。id 复用 hash 校验则让「4–40 位小写十六进制」这条形状只有一个实现 |
+| **D32** | `FAILURE_PATTERNS` 原先把 `nothing-to-commit` 排在**第二**位（M2 时它只服务 `commit`） | 把它**移到最后**一位 | 实测：`git stash apply`/`pop` 失败时会把自身的 status 块打到 **stdout**，那块文字以 "no changes added to commit" 结尾——与真正的失败原因（`CONFLICT (`、`would be overwritten by merge`）同时出现在一次失败里。排在前面时它会把这两种状态**吞掉**（顺序 4 的测试就是这么抓到的：期望 `conflict`/`dirty-worktree`，拿到 `nothing-to-commit`）。它自己的那条规则（`git commit` 没东西可提交）永远不会被别的模式先匹配到，所以放最后不损失任何识别力 |
+| **D33** | FR-4.4 只说「提供 **贮藏后切换** 快捷项」，没说这一击要不要连未跟踪文件一起收 | 「贮藏后切换」走 `git stash push -u`（**含未跟踪文件**），而列表里的「贮藏当前更改…」表单里那个复选框**默认不勾**（与 git 自己的默认一致） | 两处的承诺不同：表单的承诺是「把工作区收起来」，跟着 git 的默认最不容易让用户意外；捷径的承诺是「让这次切换成立」，而 git 拒绝切换时点的名既可能是已跟踪文件（"Your local changes … would be overwritten"）也可能是未跟踪文件（"The following untracked working tree files would be overwritten"）——只收已跟踪的话，后一种情况下这一击会「按了却没解决」，看起来像坏了。代价是未跟踪文件里与本次切换无关的那些也会进栈；它们没有丢（就在同一层列表里，可以 apply 回来），而通知与审计都点名了这次贮藏 |
+| **D34** | FR-4.4 的受阻路径原先只有 git 的原始输出（M4 的降级，见 D20） | host 给这种拒绝一个**自己的错误码** `dirty-worktree`（`/would be overwritten by (checkout\|merge)/`），面板据此才在失败框旁边长出「贮藏后切换到 {name}」按钮 | 「按错误码分支」是本插件一贯的做法（`not-merged` → 武装成强制删除、`non-fast-forward` → 指向同步）；用文案匹配在客户端判断会把 git 的措辞变成 API。同一个码也覆盖 `stash apply` 被工作区挡住的情况，那里不显示捷径（`op` 不是 `checkout`），但标题会说清是「git 拒绝覆盖本地改动」 |
+| **D35** | 无边框文字控件只有一种样式（`.ghost`，`label-tertiary`） | 拆成两档墨色：`.ghost` 仍是**脚注**（表单里的「取消」、diff 的「折叠」、分组的批量按钮），新增 `.accent` 给**动作**——打开表单的那两条（「新建分支…」「贮藏当前更改…」）、贮藏条目的「应用 / 弹出」、受阻切换的「贮藏后切换到 X」。动作取 `--dsw-alias-link`（DSH 自己给可点击文字用的 token，皮肤可覆盖），hover 仍是全局面板同一条淡底 | 产品方验收时实测原话：「『新建分支』『贮藏当前更改』这两个可以交互的纯文字……我都不知道这两个可以点」。同一份文档已经栽过一次同类问题（D19：hover-only 的批量按钮在窄侧栏里等于不存在）——可发现性只能由**静态外观**承担，不能指望用户去试探。没有把 `.ghost` 整体提色，是因为它同时服务「取消 / 折叠」这类真的次要的控件：全提亮会让每个表单里都多出一个看起来像主按钮的控件 |
 
 
 ---
@@ -209,6 +215,14 @@ discard 与 undoCommit 在 M5a。
     ③ **极限情况下的顺序是「各分区停在下限、整列溢出」**，不会有谁越界——所以任何新增
     分区都要在这里领一个下限，否则它就成了那个偷偷吃掉别人的区。
 
+11. **失败模式的匹配顺序是一张优先级表，`nothing-to-commit` 必须留在最后。**
+    `FAILURE_PATTERNS`（`host/git-service.ts`）按数组顺序取第一个匹配到的模式，而 git 会把
+    一次失败拆到两个流上：`stash apply`/`pop` 失败时它打的 status 块（在 **stdout**）以
+    "no changes added to commit" 结尾，真正的拒绝原因（`CONFLICT (`、
+    `would be overwritten by merge`）同时在输出里。把这个宽泛的模式排到前面，就会把
+    「冲突」和「工作区被挡」都判成「没东西可提交」（D32 记了这次的实测）。新增模式时先问
+    它是否可能和别的模式同时命中。
+
 ---
 
 ## 7. 安全现状
@@ -224,14 +238,18 @@ discard 与 undoCommit 在 M5a。
 - **参数形状**（D11）：路径禁绝对/`..`/`.git`，消息禁空与 NUL；所有 git 调用都用
   参数数组 + `--` 分隔，无 shell 插值。
 - **审计日志**：每个写操作记一行（`stage`/`unstage` 记路径数，`commit` 记
-  short oid 与 subject，`push`/`pull` 记分支与仓库根）。
-- **M5a 待办**：discard / deleteBranch / undoCommit 这三个**破坏性**操作落地时，
+  short oid 与 subject，`push`/`pull` 记分支与仓库根，`stash push`/`apply`/`pop`/`drop`
+  记选择器、id 与仓库根——drop 还记 subject，因为条目随后就从列表里消失了）。
+- **M5a 待办**：discard / deleteBranch / undoCommit 这几个**破坏性**操作落地时，
   需要各自的「点击武装→3s 内再点」确认（§4.3）与更明确的审计（删了哪个分支、
   丢弃了哪些路径）。deleteBranch 已在 M4 交付（`not-merged` → 同一行武装成强制删除），
   **discard 已在 M5a 顺序 2 交付**（行内按钮与菜单条目各自武装，审计逐条记路径，
   `auditPaths` 只保留前 20 条 + 计数），**undoCommit 已在 M5a 顺序 3 交付**（历史行
   菜单武装确认；host 执行前重核 HEAD 与推送状态；审计记 hash、仓库、reset/revert
-  与 subject）。M5a 只剩 **stash**（§10.1 顺序 4）。
+  与 subject），**stash 已在 M5a 顺序 4 交付**——四个动作里只有 `drop` 是不可逆的
+  （条目失去唯一的 ref），所以只有它武装（§4.3），其余三个是常用动作、按一次就执行；
+  save/apply/pop/drop 各自按 id 重核，`apply`（保留条目）与 `pop`（应用成功才删）
+  是两个动作。**M5a 的四个顺序至此全部落地**（§10.1），剩 M5a 的产品方验收。
   若将来要支持 LAN 访问，
   再补「可信 authority / 配对设备 cookie」的逃生口。
 
@@ -443,14 +461,14 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 §7 的审计通道），**M5b 是历史增强与发布收尾**。下面三张表合起来是全部待办，
 **顺序即开工顺序**，每项都写明它对应文档哪一条、落在哪、以及为什么排在那里。
 
-### 10.1 M5a（下一步）
+### 10.1 M5a（四个顺序已交付，待验收）
 
 | 顺序 | 事项 | 文档条目 | 落点与依赖 | 粗估 |
 |---|---|---|---|---|
 | 1 | **行级菜单机制**：手搓轻量弹层 | —（前置，无文档条目） | 菜单的载体必须先定（§9 已登记②③正是卡在这里）：primitives 的 `Menu`/`Modal` 不能出现在 `src/client/ui/**`（依赖方向第 3 条），所以在 `ui/` 里做一个中性 popover（定位、Esc、点外部关闭、键盘可达），像 `BranchPicker`/`PaneResizer` 那样自成一体。顺序 2/3 与 §9 的②③都复用它。**✅ 已交付（2026-09-12）**：浮层通用件随分支下拉落地（`ui/popover.tsx`），菜单内容那一层是新模块 `ui/menu.tsx`（条目模型 + 分隔线 + 上下键选择），并接上第一个真实调用方——**文件行的右键菜单**（右键 / Shift+F10 / 菜单键打开），条目是今天就能用的该行暂存动作。细节见下方「顺序 1 交付」 | S–M |
 | 2 | **放弃更改 discard** | FR-6.1 | host 新路由 `discard`：已跟踪走 `git restore --`（**未出生分支的陷阱与 `unstage` 同源**，见 §6 第 3 条）、未跟踪才真删文件；复用 `core/validate.ts` 的 `validatePaths`。FR-6.1 的原话是「**文件行**提供放弃更改按钮」，所以行内 `+`/`−` 旁多一个 danger 按钮（hover 显形，§4.3），同一个动作也进 §9③ 的菜单；武装用 `useArmedKey`，文案必须出现「不可恢复」（§4.3 禁止原生 `confirm`）；审计记「丢弃了哪些路径」（§7 的 M5a 待办）。第三个行内按钮在窄侧栏里的几何按 M3 的教训处理（`.dgp-row` 的 `box-sizing` 与右内边距，见 §8） | **✅ 已交付（2026-09-12）**：见下方「顺序 2 交付」 |
 | 3 | **撤销最近提交** | FR-3.8 | host `undoCommit`：**执行前由后端重新核实推送状态**（不信客户端传来的任何东西），未推送 `reset --mixed HEAD~1`、已推送 `revert --no-edit`；入口挂在历史行上（用顺序 1 的弹层）；`core/validate.ts` 里的 `validateHash` 正好得到第一个调用方——这正是 D11 那条原则的兑现 | **✅ 已交付（2026-09-12）**：见下方「顺序 3 交付」 |
-| 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | M |
+| 4 | **贮藏 stash** | FR-6.2 + D20 | 存（可带消息）/ 列表 / 应用（pop · apply）/ 删除；做完才能把 D20 的「贮藏后切换」补回 FR-4.4 的受阻路径——那正是 M4 有意留下的降级口 | **✅ 已交付（2026-09-12）**：见下方「顺序 4 交付」；「贮藏后切换」同批补回 FR-4.4（D33/D34） |
 
 ### 顺序 1 交付：行级菜单机制（2026-09-12，已完成）
 
@@ -507,6 +525,26 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | `styles.ts` | 14px 方框复选框：未选中只有边框，选中/半选填充 `state-business-primary` 让 tick 反色；目录行的复选框用 `margin-left: 12px` 取得与文件行行内边距相同的前导列（`.dirToggle` 的前导内边距相应归零，caret 跟在框后）；`data-selected='true'` 的行加 hover 同款淡底 |
 | `locales.ts` | +9 键（中英）：`action.stageSelected` / `action.unstageSelected` / `action.discardSelected` / `action.discardSelectedArmed` / `select.check` / `select.uncheck` / `select.checkDir` / `select.uncheckDir` / `discard.doneSelected` |
 | 测试 | +10 项（365 总计）：`filesUnder` 3 项（嵌套顺序、compacted 链、多子目录）；客户端 7 项（勾两个行 → 头部「暂存选中 (2)」→ 只发这两个路径；无选中时头部仍是「全部暂存」；已暂存组的取消暂存选中；树模式目录框全选/半选、头部计数、点框不开 diff；丢弃选中先武装后执行且已暂存组无此按钮；行消失后勾选被修剪；冲突组选中即标记解决；切会话清空选择）。既有树测试的两处 `must(..., 'button')` 改为指向 `dirToggle`（目录行第一个按钮现在是复选框），对齐断言从「caret 与分组 caret 同列」更新为「复选框占据前导列」 |
+
+### 顺序 4 交付：贮藏 stash（2026-09-12，已完成）
+
+FR-6.2 的四个动作（存 / 列表 / 应用 / 删除）加 D20 欠下的那条捷径，一起交付。
+
+| 落点 | 内容 |
+|---|---|
+| `core/types.ts` | 新增 `StashEntry { oid, shortOid, selector, subject, createdAt }`。**`selector` 只用于显示**：`stash@{n}` 是栈里的位置，另一个窗口再贮藏一次就全体位移 |
+| `core/git-parse.ts` | 新增纯函数 `parseStashList`：解析 `%gd%x00%H%x00%h%x00%s%x00%cI%x1e`，空输出 = 空栈（从未贮藏过、未出生分支都是这个答案），字段不足的记录跳过而不是猜 |
+| `core/validate.ts` | 新增 `validateStashMessage`（D31）：缺省/`null`/纯空白 → `null`（= 没有说明），非字符串、含 NUL、超 4096 才拒绝；id 复用 `validateHash` |
+| `core/ports.ts` | 服务端口四个方法 `stashes` / `stashSave(message, untracked)` / `stashApply(oid, pop)` / `stashDrop(oid)`，客户端端口镜像一份；`GitErrorCode` 新增 `dirty-worktree`（D34） |
+| `host/git-service.ts` | `readStashes`（`git stash list`）、`findStash`（**按 id 现读现解析**，不在栈里就 `bad-request`「that stash is no longer in the list」——D30②）。`stashSave` 先读一次 `status` 判断「有没有可贮藏的东西」：`git stash push` 在空工作区会打印 "No local changes to save" 并退出 0（实测），不先问就会宣布一次没发生的贮藏；`-u` 只在调用方要求时加。`stashApply` 用解析出的选择器跑 `pop`/`apply`，`stashDrop` 只跑 `drop`。审计四条各自记关键信息（stash 是否含未跟踪、说明文字、apply/pop 的选择器与短 id、drop 的选择器 + 短 id + subject）。**`FAILURE_PATTERNS` 里 `nothing-to-commit` 挪到最后一位**（D32） |
+| `host/adapter/routes.ts` | `stashes` 进 `READ_OPERATIONS`（GET），`stashSave` / `stashApply` / `stashDrop` 进 `WRITE_OPERATIONS`（POST + 同源 + 405/403 照旧）；`stashSave` 的 `message` 可以缺省（缺省 = git 自己写标签），`untracked`/`pop` 读 `=== true` |
+| `client/adapter/git-client.ts` | 四个方法；id 与 `pop`/`untracked` 作为字段发出，与 `createBranch` 的 `base: null` 同一种「一个参数两种写法」 |
+| `ui/StashPicker.tsx`（新） | 浮层里的栈：每条两行（`stash@{n}` 选择器 + git 自己的 subject），三个控件「应用 / 弹出 / 删除」；「删除」是图标按钮，第一击武装成 danger 文字按钮「再点一次：删除」（§4.3，`useArmedKey` 用自己的键 = 条目 oid，武装随层消亡）；底部是「贮藏当前更改…」表单（说明输入框 + 「包含未跟踪文件」复选框，**默认不勾** = git 的默认）。与 `BranchPicker` 同构：只描述层的内容，定位/点击外部/Esc 都归 `ui/popover.tsx` |
+| `ui/StatusPanel.tsx` | 状态栏新增贮藏按钮（`aria-expanded` + `aria-haspopup="dialog"`，与分支按钮同一种「我打开一个层」的语义）；层打开时读一次栈、每次操作后再读（`stashReads` 计数器）。与分支下拉/行菜单互斥（一次只开一层，Enter 打开 diff 时也收起）。通知是面板自己的句子（git 的 `Saved working directory…` 不是用户要听的）：已贮藏（带说明）/ 已应用 / 已弹出 / 已删除，各点名选择器 |
+| FR-4.4 的捷径（D20 / D33 / D34） | `checkout` 失败且错误码为 `dirty-worktree` 时记下**被挡住的那个分支名**，失败框（git 的多行输出原样在）下面长出「贮藏后切换到 {name}」：一击做 `stash push -u` → 重试同一次 `checkout`。未武装——搬进栈的东西可由同一层 `apply` 回来，可逆；重试仍被拒就照旧报第二次拒绝，并让捷径留在原处（`dirty-worktree` 之外的原因不给这条捷径） |
+| `ui/error-copy.ts` + `locales.ts` | `dirty-worktree` 有自己的标题（「git 拒绝覆盖本地改动」），git 的原始输出仍作为 detail；+27 键（中英）覆盖贮藏按钮、层、表单、四个动作与三种通知、捷径文案 |
+| `styles.ts` 的两档墨色（D35） | 新增 `cls.accent`：`--dsw-alias-link` + 全局面板同一条 hover 淡底，用于「新建分支…」「贮藏当前更改…」、贮藏条目的「应用 / 弹出」与「贮藏后切换到 X」；`.ghost` 保持 `label-tertiary` 只服务脚注（表单「取消」、diff「折叠」、分组批量按钮）。产品方验收时反馈：「这两个可以交互的纯文字……我都不知道这两个可以点」 |
+| 测试 | +30 项（395 总计）：core 6 项（`parseStashList` 三段真实字节格式 + 空栈 + 多行/残缺记录；`validateStashMessage` 三类形状）；服务层 12 项真仓库（带说明贮藏并列出、未跟踪只在要求时收、已暂存与未暂存一并收走且两侧干净、空工作区拒绝、冲突合并中被 git 拒绝且不动冲突现场、apply 保留条目 / pop 删条目、**按 id 应用位移过的栈**、过期 id 拒绝、被本地改动挡住报 `dirty-worktree`、pop 冲突保留条目、drop 审计、非法 id 不发 git）；路由 2 项（GET 栈 + POST 405；三个写路由走通、GET 405、缺 id 走信封）；客户端 10 项（从状态栏打开并列出、表单带说明与未跟踪选项、按 id 应用/弹出、删除先武装、空栈提示、两档墨色：开表单的那两条是动作而表单的「取消」仍是脚注；FR-4.4：受阻后出现捷径并「先贮藏再切换」、重试成功后的通知点名分支、其它原因不给捷径） |
 
 ### 10.2 M5b（M5a 验收之后）
 
@@ -582,7 +620,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | 提交图谱 | ⬜ M5b（FR-7.1，§10.2 顺序 7） | ✅ `/git/graph` |
 | 切换 / 新建 / 删除分支 | ✅ M4（FR-4；含未合并分支的强制删除） | ✅ `/git/switch`、`/git/create-branch` |
 | 放弃更改 | ✅ M5a（FR-6.1，顺序 2 已交付） | ❌ 无对应路由 |
-| 贮藏 / 撤销提交 | ⬜ M5a（FR-6.2、FR-3.8，顺序 4 与 3） | ❌ 无对应路由 |
+| 贮藏 / 撤销提交 | ✅ M5a（FR-6.2 顺序 4、FR-3.8 顺序 3） | ❌ 无对应路由 |
 | 工作树隔离、设置卡 | ⬜ 非目标 | ✅ `/git/worktree-*` |
 | 输入框分支胶囊（空白会话） | ⬜ 非目标 | ✅ |
 | diff 视图 | ✅ M3（FR-2，inline/左右 + 逐词高亮） | ❌（其 README 未声明） |
@@ -592,7 +630,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 分支/图谱/工作树，但没有「常驻侧边栏 + 可写提交」这条闭环；本插件的 M2 正是补这条。
 反过来它的图谱对应本插件的 M5b，属于**尚未做的里程碑**，不是设计放弃；分支管理那半
 已由 M4 补齐（见上表），而放弃更改 / 贮藏 / 撤销提交这一组两边都没有，是 M5a 的地盘——
-其中放弃更改已在顺序 2 交付（两边都没有的那一半，本插件先有了）。
+三个都已在 M5a 里交付（顺序 2、4、3），也就是「两边都没有的那一半，本插件先有了」。
 
 命名上如果要更清楚，可把本插件 tab 从「Git」改成更具体的名字（`type.label`），
 但它出现在右侧栏、以「Git 变更」为引导条目名，与它那个输入框胶囊不在一处，
