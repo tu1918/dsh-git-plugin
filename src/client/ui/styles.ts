@@ -65,9 +65,7 @@ export const cls = {
   statusHint: `${P}-status-hint`,
   primary: `${P}-primary`,
   note: `${P}-note`,
-  history: `${P}-history`,
-  historyHead: `${P}-history-head`,
-  historyCaret: `${P}-history-caret`,
+  historyList: `${P}-history-list`,
   commit: `${P}-commit`,
   commitTop: `${P}-commit-top`,
   commitHash: `${P}-commit-hash`,
@@ -77,8 +75,15 @@ export const cls = {
   spinner: `${P}-spinner`,
   spinnerGlyph: `${P}-spinner-glyph`,
   diffView: `${P}-diff-view`,
-  diffDock: `${P}-diff-dock`,
-  diffGrip: `${P}-diff-grip`,
+  paneGrip: `${P}-pane-grip`,
+  bottom: `${P}-bottom`,
+  bottomTabs: `${P}-bottom-tabs`,
+  bottomTab: `${P}-bottom-tab`,
+  bottomTabGroup: `${P}-bottom-tab-group`,
+  bottomChevron: `${P}-bottom-chevron`,
+  bottomBody: `${P}-bottom-body`,
+  bottomScroll: `${P}-bottom-scroll`,
+  bottomDiff: `${P}-bottom-diff`,
   diffHead: `${P}-diff-head`,
   diffPath: `${P}-diff-path`,
   diffPathDir: `${P}-diff-path-dir`,
@@ -448,7 +453,9 @@ export const css = `
 .${cls.commitInput} {
   width: 100%;
   min-height: 48px;
-  max-height: 160px;
+  /* The textarea carries a native vertical resize handle; the cap is what stops
+     it from eating the column, not the resize itself. */
+  max-height: 260px;
   box-sizing: border-box;
   padding: 6px 8px;
   border: 1px solid var(--dsw-alias-border-l3);
@@ -595,56 +602,126 @@ export const css = `
   word-break: break-word;
 }
 
-/* ── history ────────────────────────────────────────────────────────────── */
+/* ── the bottom pane: recent commits and the diff, as two tabs ──────────── */
 
-/* The history sits below the commit box, so the box lands between the change
-   list it commits and the commits it produced. 'flex: 0 1 auto' with a cap:
-   opened, it scrolls inside itself instead of growing until the list and the box
-   are pushed off the panel, and folded (its default) it is one row. */
-.${cls.history} {
+/* One region for both, because they are the same kind of thing: something to read
+   that is not the change list. Folded it is only its tab strip ('height: auto'),
+   which is the state the panel starts in — the list above must not pay for a pane
+   nobody opened. Expanding picks the tab's own default, in viewport units so the
+   height stays definite whatever the panel's container turns out to be; a drag
+   replaces that with pixels. */
+.${cls.bottom} {
   display: flex;
   flex: 0 1 auto;
   flex-direction: column;
   min-height: 0;
-  max-height: 40%;
-  overflow: auto;
+  height: auto;
+  overflow: hidden;
   border-top: 0.5px solid var(--dsw-alias-border-l3);
-  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
-.${cls.historyHead} {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+/* A diff gets a fixed half-screen — that is what a diff needs. The commit list
+   instead takes its content's height up to a cap: a five-commit history that
+   reserved half the panel would be mostly empty box. */
+.${cls.bottom}[data-expanded='true'][data-tab='diff'] { height: 50vh; }
+.${cls.bottom}[data-expanded='true'][data-tab='history'] {
+  height: auto;
+  max-height: 40vh;
+}
+
+.${cls.bottomTabs} {
   display: flex;
-  width: 100%;
   flex: none;
   align-items: center;
-  gap: 6px;
-  padding: 7px 8px 7px 12px;
-  border: 0;
+  gap: 2px;
+  padding: 2px 6px 2px 8px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
   background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-secondary);
+}
+
+/* A tab is mostly a label; the selected one is marked by the label's own colour
+   and a rule under it, the way an editor's tabs read, rather than by a filled
+   pill that would shout in a panel this quiet. */
+.${cls.bottomTab} {
+  max-width: 160px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
   font: inherit;
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.02em;
-  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.${cls.historyHead}:hover {
+.${cls.bottomTab}:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
-.${cls.historyCaret} {
+.${cls.bottomTab}[data-active='true'] {
+  color: var(--dsw-alias-label-primary);
+  box-shadow: inset 0 -1.5px 0 var(--dsw-alias-brand-primary);
+}
+
+/* The diff's tab carries its own close button, which is a sibling so the tab
+   itself stays a plain button (a button inside a button is invalid). */
+.${cls.bottomTabGroup} {
+  display: inline-flex;
+  max-width: 180px;
+  min-width: 0;
+  align-items: center;
+}
+
+.${cls.bottomTabGroup} .${cls.tool} {
+  width: 20px;
+  height: 20px;
+  margin-left: -4px;
+}
+
+.${cls.bottomChevron} {
   flex: none;
-  color: var(--dsw-alias-label-tertiary);
   transition: transform 120ms ease;
 }
 
-.${cls.historyHead}[aria-expanded='true'] .${cls.historyCaret} {
+.${cls.tool}[aria-expanded='true'] .${cls.bottomChevron} {
   transform: rotate(90deg);
+}
+
+.${cls.bottomBody} {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The commit list is the one panel that scrolls its whole body; the diff brings
+   its own scroller (the hunks) so its path header and layout buttons stay put. */
+.${cls.bottomScroll} {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+/* The diff panel is a flex column of its own (header, hunks, notes), so it does
+   not scroll here — the hunks do. */
+.${cls.bottomDiff} {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.${cls.bottomScroll}[data-shown='false'],
+.${cls.bottomDiff}[data-shown='false'] {
+  display: none;
 }
 
 .${cls.commit} {
@@ -695,29 +772,11 @@ export const css = `
 
 /* ── diff (FR-2) ────────────────────────────────────────────────────────── */
 
-/* The dock is the diff's frame, below the commit box: half the screen high by
-   default ('50vh', replaced by a pixel height once the grip is dragged), and
-   never a modal over the list — FR-2.1. The height is a viewport unit rather
-   than a percentage on purpose: 'vh' is always definite, so the pane inside is
-   bounded and its hunks can scroll, whatever the panel's own container turns out
-   to be. 'flex: 0 1 auto' lets the browser take that height back if the panel is
-   too short for the rail, the list and the commit box as well, and
-   'overflow: hidden' keeps the dock inside its own box either way. */
-.${cls.diffDock} {
-  display: flex;
-  flex: 0 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  height: 50vh;
-  overflow: hidden;
-  border-top: 0.5px solid var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-bg-layer-1);
-}
-
-/* The drag handle: a wide, invisible strip rather than a drawn rule, because it
-   has to be grabbable without adding another line to an already dense panel. The
-   hover tint is what tells the pointer it is on something. */
-.${cls.diffGrip} {
+/* The drag handle every adjustable pane shares ('PaneResizer'): a wide, invisible
+   strip rather than a drawn rule, because it has to be grabbable without adding
+   another line to an already dense panel. The hover tint is what tells the pointer
+   it is on something. */
+.${cls.paneGrip} {
   flex: none;
   height: 7px;
   cursor: row-resize;
@@ -726,8 +785,8 @@ export const css = `
   touch-action: none;
 }
 
-.${cls.diffGrip}:hover,
-.${cls.diffGrip}[data-dragging='true'] {
+.${cls.paneGrip}:hover,
+.${cls.paneGrip}[data-dragging='true'] {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
@@ -988,28 +1047,28 @@ export const css = `
  */
 .${cls.body},
 .${cls.diffHunks},
-.${cls.history} {
+.${cls.bottomScroll} {
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
 .${cls.body}::-webkit-scrollbar,
 .${cls.diffHunks}::-webkit-scrollbar,
-.${cls.history}::-webkit-scrollbar {
+.${cls.bottomScroll}::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 .${cls.body}::-webkit-scrollbar-thumb,
 .${cls.diffHunks}::-webkit-scrollbar-thumb,
-.${cls.history}::-webkit-scrollbar-thumb {
+.${cls.bottomScroll}::-webkit-scrollbar-thumb {
   border-radius: 5px;
   background: var(--dsw-alias-scrollbar-bg-l1);
 }
 
 .${cls.body}::-webkit-scrollbar-track,
 .${cls.diffHunks}::-webkit-scrollbar-track,
-.${cls.history}::-webkit-scrollbar-track {
+.${cls.bottomScroll}::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -1023,8 +1082,8 @@ export const css = `
 @media (prefers-reduced-motion: reduce) {
   .${cls.spinner} { animation-duration: 2400ms; }
   .${cls.spinnerGlyph} { animation-duration: 2400ms; }
-  .${cls.historyCaret},
-  .${cls.groupCaret} { transition: none; }
+  .${cls.groupCaret},
+  .${cls.bottomChevron} { transition: none; }
 }
 `
 

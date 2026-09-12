@@ -26,7 +26,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 import { pathParts } from '../../core/format.ts'
 import type { GitPanelError, GitRemoteClient } from '../../core/ports.ts'
@@ -50,16 +50,6 @@ export const DIFF_LAYOUT_KEY = 'dsh-git-panel/diff-layout'
 
 /** Context lines each hunk is asked for; the host clamps it to its own ceiling. */
 const CONTEXT_LINES = 3
-
-/** Smallest dock a dragged diff may be squeezed to, in pixels. */
-const MIN_DOCK_HEIGHT = 140
-
-/**
- * Height the panel keeps for everything above the dock when it is dragged to its
- * ceiling: the branch rail, the action notice, the change list and the commit box
- * all have to stay usable while the diff is at its tallest.
- */
-const DOCK_RESERVED_HEIGHT = 200
 
 /**
  * Read the remembered layout (FR-2.4).
@@ -652,91 +642,5 @@ export function DiffPane({
       onReload={reload}
       busy={busy}
     />
-  )
-}
-
-/**
- * The diff, docked below the commit box.
- *
- * ## Why this exists rather than `DiffPane` being placed directly
- *
- * The panel's layout puts the change list **above** the message box and the diff
- * **below** it, at half the screen by default. That is a deliberate reading order:
- * the list you picked the file from stays visible, the box that will commit it
- * sits in between, and the diff takes the bottom half where a long one has room
- * without pushing the list off screen.
- *
- * ## The height
- *
- * The default is expressed in CSS (`height: 50vh`) and only replaced by a pixel
- * value once the user drags. Keeping the default in CSS is what makes it keep
- * meaning "half the screen" after a window resize; a `window.innerHeight / 2`
- * measured at mount would silently become "half of what the screen used to be".
- * The grip exists only for that override, and it is a real separator rather than
- * decoration — `role="separator"` with an orientation, so it is not invisible to
- * assistive technology.
- *
- * The drag listens on `window` for its move and release events rather than on the
- * grip: a pointer that leaves a 7px strip mid-drag must keep resizing, and
- * `setPointerCapture` would tie the gesture to the element's own lifetime.
- * @param props - Everything the pane needs; this component only adds the frame.
- */
-export function DiffDock(props: DiffPaneProps): ReactNode {
-  /** `null` means "not dragged yet": the CSS default applies. */
-  const [height, setHeight] = useState<number | null>(null)
-  const [dragging, setDragging] = useState(false)
-
-  const startResize = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    const dock = event.currentTarget.parentElement
-    if (dock === null) return
-    event.preventDefault()
-    const startY = event.clientY
-    const startHeight = dock.getBoundingClientRect().height
-    setDragging(true)
-
-    // Dragging up grows the dock: the grip is its top edge, so the movement is
-    // subtracted rather than added.
-    const onMove = (move: PointerEvent): void => {
-      // Measured against the panel, not the window: the dock shares its column
-      // with the rail, the change list and the commit box, and the window may be
-      // taller than the sidebar they live in. A zero measurement means there is
-      // no layout to read (a detached node, a test document), so the window is
-      // the better guess.
-      const measured = dock.parentElement?.getBoundingClientRect().height ?? 0
-      const panel = measured > 0 ? measured : window.innerHeight
-      const ceiling = Math.max(MIN_DOCK_HEIGHT, panel - DOCK_RESERVED_HEIGHT)
-      const wanted = startHeight - (move.clientY - startY)
-      setHeight(Math.min(ceiling, Math.max(MIN_DOCK_HEIGHT, wanted)))
-    }
-    const onRelease = (): void => {
-      setDragging(false)
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onRelease)
-      window.removeEventListener('pointercancel', onRelease)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onRelease)
-    window.addEventListener('pointercancel', onRelease)
-  }, [])
-
-  return (
-    <div
-      className={cls.diffDock}
-      data-diff-dock=""
-      style={height === null ? undefined : { height: `${height}px` }}
-    >
-      <div
-        className={cls.diffGrip}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label={props.t('diff.resize')}
-        {...(dragging ? { 'data-dragging': 'true' } : {})}
-        onPointerDown={startResize}
-      />
-      {/* Keyed by target so switching files remounts the pane — a fold or an
-          expanded large diff must not leak from the file opened before — while
-          the dock's own height survives the switch. */}
-      <DiffPane key={`${props.path}\u0000${props.area}`} {...props} />
-    </div>
   )
 }

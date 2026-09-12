@@ -501,7 +501,7 @@ describe('StatusPanel rendering', () => {
     assert.match(container.textContent ?? '', /not a git repository/)
   })
 
-  it('loads history only when the section is opened', async () => {
+  it('loads history only when its tab is opened', async () => {
     let logCalls = 0
     const git: GitRemoteClient = {
       ...stubGit({}),
@@ -515,14 +515,9 @@ describe('StatusPanel rendering', () => {
     }
     const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
     await settle()
-    assert.equal(logCalls, 0, 'a collapsed section must not spend a git call')
+    assert.equal(logCalls, 0, 'a folded pane must not spend a git call')
 
-    const header = container.querySelector(`.${cls.historyHead}`)
-    assert.ok(header)
-    await act(async () => {
-      header.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    })
-    await settle()
+    await click(must(container, `.${cls.bottomTab}`))
 
     assert.equal(logCalls, 1)
     const text = container.textContent ?? ''
@@ -532,6 +527,54 @@ describe('StatusPanel rendering', () => {
     // `pushed: false` renders the hollow ring, not the filled dot.
     const marker = container.querySelector(`.${cls.marker}`)
     assert.equal(marker?.getAttribute('data-pushed'), 'false')
+  })
+
+  it('folds the bottom pane to its tabs, and sizes it from the grip', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    // Folded is the resting state: the tab strip and nothing else, so the change
+    // list keeps the height.
+    const pane = must(container, `.${cls.bottom}`) as HTMLElement
+    assert.equal(pane.getAttribute('data-expanded'), 'false')
+    assert.equal(container.querySelector(`.${cls.bottomBody}`), null)
+
+    await click(must(container, `.${cls.bottomTab}`))
+    assert.equal(pane.getAttribute('data-expanded'), 'true')
+    assert.equal(pane.getAttribute('data-tab'), 'history')
+    // No inline height yet: the tab's own default (the stylesheet) applies.
+    assert.equal(pane.style.height, '')
+
+    const grip = must(container, `.${cls.bottom} .${cls.paneGrip}`)
+    assert.equal(grip.getAttribute('role'), 'separator')
+    assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the bottom pane')
+
+    await act(async () => {
+      grip.dispatchEvent(new window.MouseEvent('pointerdown', { clientY: 300, bubbles: true }))
+      // jsdom reports a zero-height box, so this reads as "the pointer rose
+      // 300px"; the clamp below is the part worth pinning.
+      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 0, bubbles: true }))
+    })
+    await flush()
+    assert.equal(pane.style.height, '300px')
+
+    await act(async () => {
+      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: -1000, bubbles: true }))
+    })
+    await flush()
+    const ceiling = Math.max(32, window.innerHeight - 200)
+    assert.equal(pane.style.height, `${ceiling}px`)
+
+    // Folding from the chevron drops the explicit height (a height would leave a
+    // blank body), and expanding brings the pane back where it was.
+    await click(must(container, `.${cls.tool}[aria-expanded]`))
+    assert.equal(pane.getAttribute('data-expanded'), 'false')
+    assert.equal(pane.style.height, '')
+    await click(must(container, `.${cls.tool}[aria-expanded]`))
+    assert.equal(pane.getAttribute('data-expanded'), 'true')
+    assert.equal(pane.style.height, `${ceiling}px`)
   })
 
   it('re-reads when the watcher reports a change', async () => {
@@ -1026,9 +1069,10 @@ describe('the diff view (FR-2)', () => {
     assert.deepEqual(diffCalls, ['worktree:deep/nested/dir/changed.ts@3'])
 
     // The list stays, and the column follows VS Code's Source Control view: the
-    // message box, then the change list, then the history — with the diff docked
-    // at the bottom, since the plugin has no editor area to open it in. FR-2.1 is
-    // still an embedded pane: the rail and the box never move.
+    // message box, then the change list, then one bottom pane holding the history
+    // and the diff as two tabs — the plugin has no editor area, so the diff takes
+    // a tab rather than a layer. FR-2.1 is still an embedded pane: the rail and
+    // the box never move.
     assert.equal(container.querySelector(`.${cls.diffView}`) !== null, true)
     assert.equal(container.querySelector(`[data-group="unstaged"]`) !== null, true)
     assert.equal(container.querySelector(`.${cls.head}`) !== null, true)
@@ -1036,23 +1080,25 @@ describe('the diff view (FR-2)', () => {
     assert.deepEqual(
       [
         ...container.querySelectorAll(
-          `.${cls.commitBox}, [data-group="unstaged"], .${cls.history}, .${cls.diffDock}`,
+          `.${cls.commitBox}, [data-group="unstaged"], .${cls.bottom}`,
         ),
       ].map((node) =>
         node.getAttribute('data-group') !== null
           ? 'list'
           : node.classList.contains(cls.commitBox)
             ? 'box'
-            : node.classList.contains(cls.history)
-              ? 'history'
-              : 'diff',
+            : 'bottom',
       ),
-      ['box', 'list', 'history', 'diff'],
+      ['box', 'list', 'bottom'],
     )
-    // The default height is the dock's own style (`50vh`), so a window resize
-    // keeps it meaning "half the screen"; only a drag replaces it with pixels.
-    assert.equal((container.querySelector(`.${cls.diffDock}`) as HTMLElement).style.height, '')
-    assert.equal(container.querySelector(`.${cls.diffGrip}`)?.getAttribute('role'), 'separator')
+    // The diff is the pane's active tab, and the default height is the
+    // stylesheet's (keyed by that tab): a window resize keeps the meaning, and
+    // only a drag replaces it with pixels.
+    const pane = must(container, `.${cls.bottom}`) as HTMLElement
+    assert.equal(pane.getAttribute('data-tab'), 'diff')
+    assert.equal(pane.getAttribute('data-expanded'), 'true')
+    assert.equal(pane.style.height, '')
+    assert.equal(container.querySelector(`.${cls.paneGrip}`)?.getAttribute('role'), 'separator')
 
     // Every hunk says where it is, heading included.
     const heads = [...container.querySelectorAll(`.${cls.diffHunkRange}`)].map((n) => n.textContent)
@@ -1086,60 +1132,6 @@ describe('the diff view (FR-2)', () => {
     })
     await flush()
     assert.equal(container.querySelector(`.${cls.diffView}`), null)
-    assert.equal(container.querySelector(`[data-group="unstaged"] .${cls.row}`) !== null, true)
-  })
-
-  it('docks the diff at half the screen, and lets the grip override that', async () => {
-    const container = await render(
-      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
-    )
-    await settle()
-    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
-
-    const dock = must(container, `.${cls.diffDock}`) as HTMLElement
-    // The default height is the stylesheet's (`50vh`), deliberately: an inline
-    // pixel value measured at mount would stop meaning "half the screen" the
-    // moment the window is resized.
-    assert.equal(dock.style.height, '')
-    assert.equal(
-      must(container, `.${cls.diffGrip}`).getAttribute('aria-label'),
-      'Drag to resize the diff',
-    )
-
-    await act(async () => {
-      must(container, `.${cls.diffGrip}`).dispatchEvent(
-        new window.MouseEvent('pointerdown', { clientY: 400, bubbles: true }),
-      )
-      // jsdom reports a zero-height box, so the arithmetic here reads as "the
-      // pointer rose 400px", which is under the ceiling.
-      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 0, bubbles: true }))
-    })
-    await flush()
-    // A drag replaces the CSS default with pixels — that is what this pins. The
-    // exact delta is not meaningful in jsdom; the clamp below is.
-    assert.equal(dock.style.height, '400px')
-
-    await act(async () => {
-      // Far past the top of the panel: the dock must clamp rather than grow over
-      // the list and the commit box.
-      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: -1000, bubbles: true }))
-    })
-    await flush()
-    const ceiling = Math.max(140, window.innerHeight - 200)
-    assert.equal(dock.style.height, `${ceiling}px`)
-
-    await act(async () => {
-      window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }))
-    })
-    await flush()
-    assert.equal(dock.style.height, `${ceiling}px`)
-
-    // Closing the diff takes the dock with it, and the change list is untouched.
-    await act(async () => {
-      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    })
-    await flush()
-    assert.equal(container.querySelector(`.${cls.diffDock}`), null)
     assert.equal(container.querySelector(`[data-group="unstaged"] .${cls.row}`) !== null, true)
   })
 

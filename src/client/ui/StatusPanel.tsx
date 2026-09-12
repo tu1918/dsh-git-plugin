@@ -37,8 +37,8 @@ import type {
 } from '../../core/types.ts'
 import { badgeFor } from '../../core/git-parse.ts'
 import { CommitBox } from './CommitBox.tsx'
-import { DiffDock } from './DiffView.tsx'
 import { errorCopy } from './error-copy.ts'
+import { BottomPane, type OpenFile } from './BottomPane.tsx'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -57,6 +57,9 @@ import {
 } from './icons.tsx'
 
 export type { Translate }
+
+/** The change-list groups, in the order the panel draws them. */
+const CHANGE_AREAS: readonly ChangeArea[] = ['conflicted', 'staged', 'unstaged', 'untracked']
 
 /** Everything the panel needs, in neutral terms. */
 export interface StatusPanelProps {
@@ -527,127 +530,6 @@ function Group({
   )
 }
 
-/** One commit row. */
-function CommitRow({
-  commit,
-  now,
-  t,
-  locale,
-}: {
-  readonly commit: CommitInfo
-  readonly now: number
-  readonly t: Translate
-  readonly locale: string
-}): ReactNode {
-  const age = relativeTimeParts(commit.committedAt, now)
-  const format = useMemo(() => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }), [locale])
-  const relative = format.format(age.value, age.unit)
-
-  return (
-    <div className={cls.commit}>
-      <div className={cls.commitTop}>
-        <span className={cls.commitHash}>{commit.shortOid}</span>
-        <span className={cls.commitSubject} title={commit.subject}>
-          {commit.subject === '' ? '—' : commit.subject}
-        </span>
-      </div>
-      <div className={cls.commitMeta}>
-        <span>{relative}</span>
-        <span>·</span>
-        <span>{commit.authorName}</span>
-        {commit.pushed !== null && (
-          <span
-            className={cls.marker}
-            data-pushed={commit.pushed}
-            title={commit.pushed ? t('history.pushed') : t('history.unpushed')}
-          >
-            {commit.pushed ? <DotGlyph /> : <RingGlyph />}
-          </span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/**
- * The history section, collapsed until asked for.
- *
- * Collapsed by default on purpose: reading history costs a git process, and the
- * panel's job at rest is the uncommitted change list.
- */
-function History({
-  sessionId,
-  git,
-  t,
-  locale,
-  signal,
-}: {
-  readonly sessionId: string
-  readonly git: GitRemoteClient
-  readonly t: Translate
-  readonly locale: string
-  readonly signal?: AbortSignal
-}): ReactNode {
-  const [open, setOpen] = useState(false)
-  const [commits, setCommits] = useState<readonly CommitInfo[]>([])
-  const [hasMore, setHasMore] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-  const [now] = useState(() => Date.now())
-
-  const append = useCallback(
-    async (offset: number) => {
-      setBusy(true)
-      const page = await git.log(sessionId, offset, 30, signal)
-      setBusy(false)
-      if (!page.ok) return
-      setCommits((current) => (offset === 0 ? page.value.commits : [...current, ...page.value.commits]))
-      setHasMore(page.value.hasMore)
-      setLoaded(true)
-    },
-    [git, sessionId, signal],
-  )
-
-  useEffect(() => {
-    if (!open || loaded) return
-    void append(0)
-  }, [open, loaded, append])
-
-  return (
-    <div className={cls.history}>
-      <button
-        type="button"
-        className={cls.historyHead}
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <CaretGlyph className={cls.historyCaret} />
-        {t('history.title')}
-      </button>
-      {open && (
-        <>
-          {loaded && commits.length === 0 && <p className={cls.note}>{t('history.empty')}</p>}
-          {commits.map((commit) => (
-            <CommitRow key={commit.oid} commit={commit} now={now} t={t} locale={locale} />
-          ))}
-          {hasMore && (
-            <p className={cls.note}>
-              <button
-                type="button"
-                className={cls.ghost}
-                disabled={busy}
-                onClick={() => void append(commits.length)}
-              >
-                {t('history.loadMore')}
-              </button>
-            </p>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
 /**
  * The git panel.
  * @param props - Session, git client, copy, and the tab's abort signal.
@@ -666,7 +548,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * actually clicked — which is the only group that can say whether the row they
    * opened still exists.
    */
-  const [openFile, setOpenFile] = useState<{ path: string; area: ChangeArea } | null>(null)
+  const [openFile, setOpenFile] = useState<OpenFile | null>(null)
   // Folded groups are a preference, not a render detail: someone who folds
   // "untracked" away does not want it back on the next visit (§4.2 draws the
   // caret). Initialised from storage, written back whenever it changes.
@@ -702,9 +584,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // would close the pane on every keystroke of a `git add`.
   useEffect(() => {
     if (openFile === null || busy || snapshot === null || snapshot.kind !== 'ready') return
+    // Listed in ANY group, not just the one it was opened from: staging a file
+    // moves it between groups, and the diff should survive that.
     const { groups } = snapshot.status
-    const stillListed = groups[openFile.area].some((entry) => entry.path === openFile.path)
-    if (!stillListed) setOpenFile(null)
+    const listed = CHANGE_AREAS.some((area) =>
+      groups[area].some((entry) => entry.path === openFile.path),
+    )
+    if (!listed) setOpenFile(null)
   }, [openFile, snapshot, busy])
 
   /**
@@ -823,7 +709,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * @param area - The group it was activated in, which picks the comparison.
    */
   const openDiff = (entry: FileChange, area: ChangeArea): void => {
-    setOpenFile({ path: entry.path, area })
+    setOpenFile({ path: entry.path, area: diffAreaOf(area) })
   }
 
   const failure = action.kind === 'failed' ? errorCopy(t, action.error, 'action') : null
@@ -867,11 +753,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         </p>
       )}
       {/* The column, top to bottom, follows VS Code's Source Control view: the
-          message box first, then the change list, then the history. The diff is
-          the one thing that cannot follow it — VS Code opens a diff in the
-          editor area, and this plugin registers only a right-sidebar tab — so it
-          docks at the bottom instead (`DiffDock`). FR-2.1 still holds: embedded,
-          never a modal, with the rail and the box in place. */}
+          message box first, then the change list, then the bottom pane. The one
+          thing that cannot follow it is where a diff opens — VS Code uses the
+          editor area, and this plugin registers only a right-sidebar tab — so the
+          diff shares the bottom pane with the history, as its second tab
+          (`BottomPane`). FR-2.1 still holds: embedded, never a modal. */}
       <CommitBox
         message={message}
         onMessage={setMessage}
@@ -885,10 +771,25 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       />
       <div className={cls.body}>
         {clean ? (
-          <div className={cls.status} data-git-panel-state="clean">
-            <p className={cls.statusTitle}>{t('clean.title')}</p>
-            <p className={cls.statusHint}>{t('clean.hint')}</p>
-          </div>
+          <>
+            <Group
+              label={t('group.staged')}
+              area="staged"
+              entries={staged}
+              t={t}
+              busy={busy || pending}
+              batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+                collapsed={collapsedGroups.has('staged')}
+              onToggle={() => toggleGroup('staged')}
+              onStage={stage}
+              onUnstage={unstage}
+              onOpen={openDiff}
+            />
+            <div className={cls.status} data-git-panel-state="clean">
+              <p className={cls.statusTitle}>{t('clean.title')}</p>
+              <p className={cls.statusHint}>{t('clean.hint')}</p>
+            </div>
+          </>
         ) : (
           <>
             {/* Conflicts get a group and a `+` per row, but no bulk action: the
@@ -902,7 +803,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               t={t}
               busy={busy || pending}
               batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-              collapsed={collapsedGroups.has('staged')}
+                collapsed={collapsedGroups.has('staged')}
               onToggle={() => toggleGroup('staged')}
               onStage={stage}
               onUnstage={unstage}
@@ -938,20 +839,20 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           </>
         )}
       </div>
-      {/* Below the list, as VS Code puts the SCM graph section. */}
-      <History sessionId={sessionId} git={git} t={t} locale={locale} signal={signal} />
-      {openFile !== null && (
-        <DiffDock
-          sessionId={sessionId}
-          path={openFile.path}
-          area={diffAreaOf(openFile.area)}
-          git={git}
-          t={t}
-          signal={signal}
-          generation={generation}
-          onClose={() => setOpenFile(null)}
-        />
-      )}
+      {/* One region for everything that is not the change list: the recent
+          commits and the diff of the row that was clicked share it as two tabs
+          (VS Code keeps the list and the editor apart; this panel has no editor
+          area, so they take turns in the same box). */}
+      <BottomPane
+        sessionId={sessionId}
+        git={git}
+        t={t}
+        locale={locale}
+        signal={signal}
+        generation={generation}
+        openFile={openFile}
+        onCloseDiff={() => setOpenFile(null)}
+      />
     </div>
   )
 }

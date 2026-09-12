@@ -78,6 +78,10 @@ export const zh = {
   'noRepo.hint': '在会话的工作区里运行 git init，再回到这里。',
 
   'history.title': '最近提交',
+  'bottom.tabs': '提交历史与差异',
+  'bottom.resize': '拖动调整下方区域高度',
+  'bottom.collapse': '收起下方区域',
+  'bottom.expand': '展开下方区域',
   'history.loadMore': '加载更多',
   'history.empty': '提交之后，历史会显示在这里。',
   'history.pushed': '已在远端',
@@ -170,6 +174,10 @@ export const en: Record<GitPanelKey, string> = {
   'noRepo.hint': 'Run git init in the session’s workspace, then come back.',
 
   'history.title': 'Recent commits',
+  'bottom.tabs': 'Commits and diff',
+  'bottom.resize': 'Drag to resize the bottom pane',
+  'bottom.collapse': 'Collapse the bottom pane',
+  'bottom.expand': 'Expand the bottom pane',
   'history.loadMore': 'Load more',
   'history.empty': 'Commits will show up here.',
   'history.pushed': 'On the remote',

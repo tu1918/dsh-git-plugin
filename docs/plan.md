@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（28 个源文件）、`test/`（11 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 190 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 192 项测试 + 两个打包产物
 
 ---
 
@@ -23,7 +23,7 @@
 | **M0** | core 骨架（types/ports/git-parse）+ host/client adapter + 依赖方向规则 | 解析器测试全绿；adapter 目录是唯一碰 DSH API 的地方 | ✅ 完成 |
 | **M1** | host service + status/log/branches 只读 + sidebar tab 渲染变更列表 | 面板能看到当前仓库变更分组与分支 | ✅ 完成并在 GUI 中确认 |
 | **M2** | stage/unstage/commit/push/pull/sync + 提交框 + 历史 | 不碰终端完成 改→暂存→提交→推送 全流程 | ✅ 完成（`npm run check` 全绿；重启 `dsh web` 后确认加载的是 M2 构建：`POST /git-panel/stage` 被接受，两个产物含 M2 文案且构建时间早于进程启动时间。界面控件未由我目视确认——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”） |
-| **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：190 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、13 项 DiffView/DiffDock/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
+| **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 新建/删除分支、sync、冲突标记、AI 提交信息 | 分支管理与同步全在面板内闭环 | ⏳ 下一步 |
 | **M5** | discard、stash、提交图、撤销、多仓库 | 发布 v1.0 | ⬜ 未开始 |
 
@@ -113,7 +113,7 @@ discard/deleteBranch 一起写。
 | **D15** | FR-2.2「未跟踪文件按全新增渲染」 | worktree 侧 `git diff` 空输出时，先探 `git ls-files --error-unmatch -- <path>`：tracked 才算「无改动」；否则用 `git diff --no-index -- /dev/null <path>` 重取一次，得到全新增的 diff（它退出 1 是「有差异」的正常答案） | `git diff` 不区分「未跟踪」与「无改动」，只有前者该渲染成全新增。**代价**：未跟踪文件走 `--no-index`，不经过 `.gitattributes` 过滤器（未跟踪文件本来也没有索引态可归一） |
 | **D16** | FR-2.2 未区分冲突文件的 diff | `diff --cc`（`@@@` 两列前缀）被识别为 `combined` 并整段跳过，客户端显示「合并差异暂不支持」 | 那是另一套语法，按 unified diff 硬读会凭空造行。冲突渲染本身是 FR-9，排在 M4 |
 | **D17** | §5.4 未规定 `diff` 的命令形状 | 固定 `--no-color --no-ext-diff --no-textconv --unified=N`，context 夹在 0–50 | 用户自己的 diff 配置会毁掉解析：外部 driver 输出解析器读不懂的语法，textconv 会把二进制文件转成文本——正好违反 FR-2.5 |
-| **D18** | §4.2 布局：分支行 → 提交框 → 变更分组 → 历史 | 最终**照 VS Code 源代码管理视图排**：分支行 → **提交框** → **变更列表**（冲突/已暂存/更改/未跟踪）→ **最近提交** → **停靠在最下方的 diff**（默认 `50vh`，拖动可改）。中间经历过两版被推翻的顺序（列表上移/提交框居中），以本行为准 | 产品方在 M3 验收后逐条调布局，最后定调「参考 VS Code」——那里没有需要发明的顺序：源代码管理视图就是 输入框 → 变更分组 → 图/历史。**唯一跟不了的一处**：VS Code 把 diff 开在编辑器区，而本插件只注册了右侧栏 tab（`sidebarRightTabs`，本 profile 的客户端包里没有主区 tab 的注册缝），所以 diff 停靠在最下、默认半屏——这也符合「点文件在提交框下方看 diff」的要求。**代价**：diff 是固定占位而不是占满 body，列表可用高度变小（`body` 留 56px 下限、dock 拖动上限留 200px 给上面） |
+| **D18** | §4.2 布局：分支行 → 提交框 → 变更分组 → 历史 | 最终**照 VS Code 源代码管理视图排**：分支行 → **提交框** → **变更列表**（冲突/已暂存/更改/未跟踪）→ **底部 tab 区**（最近提交 / 所选文件的 diff）。中间经历过几版被推翻的顺序（列表上移/提交框居中），以本行为准 | 产品方在 M3 验收后逐条调布局，最后定调「参考 VS Code」——那里没有需要发明的顺序：源代码管理视图就是 输入框 → 变更分组 → 图/历史。**唯一跟不了的一处**：VS Code 把 diff 开在编辑器区，而本插件只注册了右侧栏 tab（`sidebarRightTabs`，本 profile 的客户端包里没有主区 tab 的注册缝），所以 diff 停靠在最下、默认半屏——这也符合「点文件在提交框下方看 diff」的要求。**代价**：diff 是固定占位而不是占满 body，列表可用高度变小（`body` 留 56px 下限、dock 拖动上限留 200px 给上面） |
 | **D19** | FR-3.2 只说「分组标题行提供组级批量操作」，没规定显隐 | M2 做成了 hover 才显形（`opacity: 0` → 1）；M3 验收后改为**常显**，并把分组名改成可省略号收缩、标题行 `min-width: 0` | 产品方在界面上**找不到**「全部暂存」——hover-only 的控件在窄侧栏里等于不存在，而同一份文档的 §4.2 示意图本来就把这两个操作画成可见控件。行内 `+`/`−` 保持 hover 显形不动：FR-3.1 明文要求「hover 显现」，那是需求本身的决定 |
 
 ---
@@ -201,14 +201,16 @@ discard/deleteBranch 一起写。
 **client**
 - `ui/DiffView.tsx` — `DiffView`（纯渲染：inline 与 side-by-side、逐词高亮、二进制/合并/空态、
   `large` 折叠 +「加载」、`truncated` 提示）、`DiffPane`（取数、布局记忆、按仓库变化重取、Esc 关闭）
-  与 `DiffDock`（把 pane 停靠在提交框下方，默认 `50vh`，顶部一条 `role="separator"` 的拖动条可改高度）。
+  `BottomPane`（把 `DiffPane` 与 `HistoryPanel` 收进同一块底部区域、以两个 tab 切换，带折叠按钮与可拖高度）。
   默认高度刻意留在 CSS 里而不是挂载时量一次像素：窗口一变，「半屏」还是半屏。一次渲染、一次切片，
   没有 O(n²) 比较（§6）。
-- `ui/StatusPanel.tsx` — 布局按 D18（照 VS Code）：提交框在上、变更列表居中、最近提交在下、diff dock 在最下；
+- `ui/StatusPanel.tsx` — 布局按 D18（照 VS Code）：提交框在上、变更列表居中、底部是 tab 区（最近提交 / diff）；
   打开 diff 不再顶掉列表。变更行可点（`role="button"` + Enter/Space），行内 `+`/`−` 那一层
   `stopPropagation`（键盘侧另有 `target === currentTarget` 守卫，否则 Space 会既暂存又开 diff）；
   `staged`→`index`、其余→`worktree`（FR-2.2）。刷新后文件已不在任何分组里就把 dock 收回。
 - `ui/error-copy.ts` — 把 `errorCopy` 从 `StatusPanel` 抽出，避免 DiffView ↔ StatusPanel 互相 import。
+- `ui/pane-resizer.tsx` — 可拖动分区高度的通用抓手（底部区域挂一个）。
+- `ui/History.tsx` — 提交列表（提交行 + 分页加载），从 `StatusPanel` 抽出，成为底部区域的第一个 tab 内容。
 - `ui/StatusPanel.tsx` 的分组批量按钮改为**常显**（见 D19），分组名在窄侧栏里先省略号收缩，
   保证按钮永远不被挤出可视区。
 - 文案 zh/en 各 +16 键；样式新增 32 个类名，颜色全走 token（加法/删除底色用 `color-mix`）。
@@ -222,7 +224,7 @@ discard/deleteBranch 一起写。
 
 | 调整 | 落点 |
 |---|---|
-| 变更列表移到提交框**上方**，diff 停靠在提交框**下方**、默认半屏、可拖动 | D18 + `DiffDock` |
+| diff 从「叠在下面的一层」改为**底部区域的第二个 tab**：底部区域 = `[最近提交][diff]` 两个 tab + 折叠按钮 + 可拖高度；点变更行自动切到 diff tab 并展开，关掉 diff 则折回只留 tab 条；两个 tab 的内容常驻（切回不丢已加载的提交与滚动位置，也不多发一次 `git log`） | `ui/BottomPane.tsx` + `ui/History.tsx` |
 | 顺序改为**照 VS Code 的源代码管理视图**：提交框在最上 → 变更分组 → 最近提交在下 → diff dock（VS Code 把 diff 开在编辑器里，本插件只有右侧栏 tab 注册能力，故改为停靠底部）；最近提交展开时自身滚动（`max-height: 40%`），不再把列表和提交框顶走 | `.dgp-history` + `StatusPanel` 渲染顺序 |
 | 说明：中途按「列表在提交框上方」「提交框居中」各改过一版，最终都被这一条取代——**布局以 VS Code 为准**，不自创顺序 | D18 |
 | 分组批量按钮**常显**，分组名先省略号收缩，按钮不再被挤出可视区 | D19 |
@@ -230,6 +232,7 @@ discard/deleteBranch 一起写。
 | **每个分组可折叠**并记住折叠状态（`dsh-git-panel/collapsed-groups`）：折叠后行消失、计数保留；折叠是偏好，故写进 localStorage | `Group` 的 `aria-expanded` 开关 + `ui/group-collapse.ts` |
 | 顺手修：历史区的展开箭头**从来没转过**——`data-open` 传给了图标组件，而图标只转发 `size`/`className`，属性丢在半路。现在两个箭头都按父按钮的 `aria-expanded` 旋转 | `styles.ts` 的 `historyCaret` / `groupCaret` |
 | 滚动条不再压住行内 `+`/`−` 与分组批量按钮：面板内的滚动容器改成**占据列宽**的滚动条（Chromium 走 `::-webkit-scrollbar`，Firefox 走 `scrollbar-width: thin`），列表容器再留 10px 右内边距兜底 overlay 引擎——overlay 滚动条正好在滚动容器右缘浮起，而那里原本就是按钮的位置（滚动条出现 = 列表变长 = 按钮被盖住），这条是运行中实测后报来的 | `.dgp-body` 的 `padding-right` + `styles.ts` 的 scrollbar 区块 |
+| **分区高度可拖**：抽出通用 `PaneResizer`（`role="separator"` + 顶部 7px 拖动条），底部区域（tab 条 + 内容）整体可拖，变更列表作为剩余空间随之伸缩；默认高度按 tab 分：diff 固定 `50vh`，提交列表按内容高、上限 `40vh`（五条提交不该占半屏）；提交框 textarea 的可拖上限从 160px 提到 260px | `ui/pane-resizer.tsx` + `.dgp-bottom` |
 
 ---
 

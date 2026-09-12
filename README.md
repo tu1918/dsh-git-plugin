@@ -31,7 +31,8 @@ diff view.
 | Push refused as non-fast-forward → points at Sync instead of git's hint text | ✅ |
 | UI in zh + en | ✅ |
 | Change groups fold away individually, and stay folded (the count stays visible) | ✅ |
-| Diff view: click a change row → a diff docked below the commit box (never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
+| One bottom pane, two tabs — recent commits and the selected file's diff — folding to its tab strip, sized by a drag handle, keeping both tabs' content loaded | ✅ |
+| Diff view: click a change row → the diff opens as the bottom pane's second tab (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
@@ -78,7 +79,7 @@ which is what FR-2.3 asks for by name (see `docs/plan.md` D12).
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 190 tests && build
+npm run check      # tsc --noEmit && 192 tests && build
 ```
 
 ## Install
