@@ -405,6 +405,32 @@ describe('the panel stylesheet', () => {
     const tags = document.querySelectorAll(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
     assert.equal(tags.length, 1, 'a reload must replace the sheet, not stack a second copy')
   })
+
+  it('sizes a change row by its border box, so its actions stay inside the list', async () => {
+    // Reported from the running panel: "the +/− are too close to the edge and
+    // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
+    // *and* padded by 20px; under the default `content-box` its box therefore came
+    // out wider than the drawer that clips it, and the buttons pinned to its right
+    // padding sat in the clipped strip. Whatever else changes, the row's box has to
+    // be the box the percentage was measured against.
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const row = must(container, `.${cls.row}`)
+    const style = window.getComputedStyle(row)
+    assert.equal(style.boxSizing, 'border-box', 'width: 100% must include the row’s padding')
+    assert.equal(style.paddingRight, '12px', 'the +/− keeps a gutter inside the row')
+    assert.equal(style.width, '100%')
+
+    // And the scroller that owns the rows keeps the gutter the old single list had,
+    // because `+`/`−` are the last thing before the edge: `overflow: auto` is what
+    // the overlay-scrollbar engines draw on top of.
+    const body = must(container, `[data-drawer="unstaged"] .${cls.changeBody}`)
+    assert.equal(window.getComputedStyle(body).paddingRight, '10px')
+    assert.equal(window.getComputedStyle(body).overflow, 'auto')
+  })
 })
 
 describe('StatusPanel rendering', () => {

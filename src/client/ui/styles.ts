@@ -278,6 +278,12 @@ export const css = `
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The clearance the old single list had now lives here, on the scroller that
+     actually owns the rows: '+'/'−' are the last thing before the edge, and the
+     engines that draw an overlay scrollbar put it exactly there. The row keeps its
+     own 12px, so the button ends 22px before the scrollbar and 32px from the
+     visual edge — inside the list, rather than against its wall. */
+  padding-right: 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
@@ -343,7 +349,9 @@ export const css = `
   min-width: 0;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px 4px 12px;
+  /* 12px on the trailing side to match the row: the group's bulk action and the
+     rows' '+'/'−' are the same column of controls and should read as one. */
+  padding: 5px 12px 4px 12px;
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -447,9 +455,20 @@ export const css = `
   display: flex;
   width: 100%;
   min-width: 0;
+  /* The row is 100% wide AND padded, so it has to size by its border box. Under
+     the default content-box its box came out 20px wider than the drawer that
+     clips it, and the 30px '+'/'−' sitting against its right padding fell into
+     that clipped strip — "the buttons are at the very edge and blocked". Boxes
+     that mix a percentage width with padding have to say which box the percentage
+     means. */
+  box-sizing: border-box;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 4px 12px;
+  /* The trailing 12px is the group header's own trailing padding, so a row's
+     '+'/'−' and its header's "stage all" line up down the right edge. It is also
+     what keeps the button off the wall: the row's right edge is a button, so the
+     row's padding is what decides whether it reads as inside the list. */
+  padding: 4px 12px;
   border: 0;
   background: transparent;
   color: inherit;
