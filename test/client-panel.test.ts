@@ -90,6 +90,7 @@ import type {
   FileDiff,
   GeneratedMessage,
   OperationReport,
+  RemoteBranchRef,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -256,6 +257,8 @@ function diffFixture(overrides: Partial<FileDiff> = {}): FileDiff {
 function stubGit(options: {
   status?: Result<RepoStatus>
   branches?: readonly BranchRef[]
+  /** Remote-tracking branches the picker lists for reading; none by default. */
+  remoteBranches?: readonly RemoteBranchRef[]
   log?: readonly CommitInfo[]
   watch?: (sessionId: string, onChange: (change: GitChange) => void) => () => void
   /** What every report-returning mutation answers; a silent success by default. */
@@ -305,6 +308,7 @@ function stubGit(options: {
   return {
     status: () => Promise.resolve(options.status ?? { ok: true, value: statusFixture() }),
     branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
+    remoteBranches: () => Promise.resolve({ ok: true, value: options.remoteBranches ?? [] }),
     log: () =>
       Promise.resolve({ ok: true, value: { commits: options.log ?? [], total: null, hasMore: false } }),
     diff: (_sessionId, path, target, contextLines) => {
@@ -3359,6 +3363,63 @@ describe('the branch picker (FR-4.1–4.3)', () => {
     })
     await settle()
     assert.equal(container.querySelector('[data-branch-picker]'), null)
+  })
+
+  it('lists remote-tracking branches for reading, and offers no way to act on them', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          branches: twoBranches(),
+          remoteBranches: [
+            {
+              name: 'origin/main',
+              oid: 'a'.repeat(40),
+              subject: 'upstream newest',
+              committedAt: '2026-09-11T10:00:00+08:00',
+            },
+            {
+              name: 'origin/feature/x',
+              oid: 'b'.repeat(40),
+              subject: 'their work',
+              committedAt: '2026-09-10T10:00:00+08:00',
+            },
+          ],
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    const picker = await openPicker(container)
+
+    const section = must(picker, '[data-remote-branches="2"]')
+    assert.match(section.textContent ?? '', /Remote branches/)
+    const rows = [...section.querySelectorAll<HTMLElement>('[data-remote-branch]')]
+    assert.deepEqual(
+      rows.map((row) => row.getAttribute('data-remote-branch')),
+      ['origin/main', 'origin/feature/x'],
+    )
+    assert.match(section.textContent ?? '', /upstream newest/, 'the tip’s subject is shown')
+
+    // They are LABELS, not controls: no button lives in the section, so a
+    // check-out cannot be triggered from here (D43). Clicking one is inert.
+    assert.equal(section.querySelectorAll('button').length, 0)
+    await click(rows[0] as HTMLElement)
+    assert.deepEqual(calls.entries, [], 'a remote row must not run anything')
+    assert.notEqual(container.querySelector('[data-branch-picker]'), null)
+  })
+
+  it('says how to fill an empty remote list', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+    const picker = await openPicker(container)
+    const section = must(picker, '[data-remote-branches="0"]')
+    assert.match(section.textContent ?? '', /No remote branches yet/)
   })
 })
 

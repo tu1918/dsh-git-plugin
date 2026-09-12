@@ -32,6 +32,7 @@ import type {
   CommitInfo,
   GeneratedMessage,
   LogPage,
+  RemoteBranchRef,
   OperationReport,
   RepoStatus,
   FileDiff,
@@ -149,6 +150,8 @@ export function createGitRemoteClient(): GitRemoteClient {
     status: (sessionId, signal) => request<RepoStatus>('/status', { session: sessionId }, signal),
     branches: (sessionId, signal) =>
       request<readonly BranchRef[]>('/branches', { session: sessionId }, signal),
+    remoteBranches: (sessionId, signal) =>
+      request<readonly RemoteBranchRef[]>('/remoteBranches', { session: sessionId }, signal),
     log: (sessionId, offset, limit, signal) =>
       request<LogPage>('/log', { session: sessionId, offset, limit }, signal),
     // The host's own parameter names, not the panel's: `path`/`area`/`context`

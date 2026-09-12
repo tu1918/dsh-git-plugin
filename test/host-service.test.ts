@@ -191,6 +191,42 @@ describe('git service branches and history', () => {
     )
   })
 
+  it('lists remote-tracking branches, without the remote’s symbolic HEAD', async () => {
+    const repo = makeRepo('svc-remote-branches')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const branch = git(repo, ['symbolic-ref', '--short', 'HEAD']).trim()
+    const remote = makeBareRemote('svc-remote-branches-remote')
+    git(repo, ['remote', 'add', 'origin', remote])
+    git(repo, ['push', '-q', '-u', 'origin', branch])
+    git(repo, ['branch', 'feature-x'])
+    git(repo, ['push', '-q', 'origin', 'feature-x'])
+    // This is what creates `refs/remotes/origin/HEAD` — the pointer the list
+    // must skip, because it is not a branch anyone would pick.
+    git(repo, ['remote', 'set-head', 'origin', branch])
+
+    const result = await serviceFor({ s1: repo }).remoteBranches('s1')
+    assert.ok(result.ok)
+    assert.deepEqual(
+      result.value.map((entry) => entry.name).sort(),
+      ['origin/feature-x', `origin/${branch}`],
+    )
+    // The tip and its subject travel with the name, which is all the read-only
+    // list shows beside it.
+    assert.ok(result.value.every((entry) => entry.subject === 'first' && entry.oid.length === 40))
+  })
+
+  it('answers an empty list for a repository with no remote', async () => {
+    const repo = makeRepo('svc-remote-branches-none')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const result = await serviceFor({ s1: repo }).remoteBranches('s1')
+    assert.ok(result.ok)
+    assert.deepEqual(result.value, [])
+  })
+
   it('pages history using a look-ahead commit instead of counting', async () => {
     const repo = makeRepo('svc-log')
     for (const message of ['one', 'two', 'three']) {
@@ -679,6 +715,30 @@ describe('the /git-panel routes over a real socket', () => {
       const logBody = (await log.json()) as { ok: boolean; value: { commits: { subject: string }[] } }
       assert.equal(logBody.ok, true)
       assert.deepEqual(logBody.value.commits.map((c) => c.subject), ['first'])
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('serves remote branches as a read, and refuses a POST', async () => {
+    const repo = makeRepo('routes-remotes')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/remoteBranches?session=s1`)
+      assert.equal(response.status, 200)
+      const body = (await response.json()) as { ok: boolean; value: readonly unknown[] }
+      assert.equal(body.ok, true)
+      // No remote configured: an empty list, which is the honest reading, not
+      // an error the picker would have to explain.
+      assert.deepEqual(body.value, [])
+
+      // The method rule runs both ways: a read has no POST form.
+      const viaPost = await fetch(`${harness.origin}/git-panel/remoteBranches`, { method: 'POST' })
+      assert.equal(viaPost.status, 405)
     } finally {
       await harness.close()
     }

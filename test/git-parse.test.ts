@@ -22,6 +22,7 @@ import {
   parseBranches,
   parseLog,
   parseNumstat,
+  parseRemoteBranches,
   parseStashList,
   parseStatusV2,
 } from '../src/core/git-parse.ts'
@@ -265,6 +266,43 @@ describe('parseBranches', () => {
   it('skips malformed lines instead of throwing', () => {
     assert.deepEqual(parseBranches('not-enough-fields\n'), [])
     assert.deepEqual(parseBranches(''), [])
+  })
+})
+
+describe('parseRemoteBranches', () => {
+  it('reads the name, its tip and subject, newest commit first', () => {
+    const raw =
+      'aaa\x00origin/main\x00newest upstream\x002026-09-11T19:00:00+08:00\x00\n' +
+      'bbb\x00origin/feature\x00older branch\x002026-09-10T19:00:00+08:00\x00\n'
+    assert.deepEqual(parseRemoteBranches(raw), [
+      {
+        name: 'origin/main',
+        oid: 'aaa',
+        subject: 'newest upstream',
+        committedAt: '2026-09-11T19:00:00+08:00',
+      },
+      {
+        name: 'origin/feature',
+        oid: 'bbb',
+        subject: 'older branch',
+        committedAt: '2026-09-10T19:00:00+08:00',
+      },
+    ])
+  })
+
+  it('drops the remote’s symbolic HEAD, which is not a branch to list', () => {
+    // `%(refname:short)` collapses `refs/remotes/origin/HEAD` to plain `origin`,
+    // which is why the `%(symref)` atom — not the printed name — is what marks
+    // it as a symbolic ref.
+    const raw =
+      'aaa\x00origin\x00the default branch\x002026-09-11T19:00:00+08:00\x00refs/remotes/origin/main\n' +
+      'aaa\x00origin/main\x00newest\x002026-09-11T19:00:00+08:00\x00\n'
+    assert.deepEqual(parseRemoteBranches(raw).map((branch) => branch.name), ['origin/main'])
+  })
+
+  it('answers an empty list for nothing to show, and skips a short record', () => {
+    assert.deepEqual(parseRemoteBranches(''), [])
+    assert.deepEqual(parseRemoteBranches('aaa\x00origin/main\x00\n'), [])
   })
 })
 

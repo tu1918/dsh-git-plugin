@@ -61,6 +61,7 @@ const ROUTE_PREFIX = '/git-panel'
 const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'status',
   'branches',
+  'remoteBranches',
   'log',
   'diff',
   'showCommit',
@@ -345,6 +346,8 @@ export function registerGitPanelRoutes(
       }
       case 'branches':
         return await service.branches(sessionId)
+      case 'remoteBranches':
+        return await service.remoteBranches(sessionId)
       case 'log':
         return await service.log(sessionId, intOf(url, 'offset', 0), intOf(url, 'limit', 30))
       case 'diff': {

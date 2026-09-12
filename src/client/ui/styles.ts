@@ -59,6 +59,11 @@ export const cls = {
   branchBaseLabel: `${P}-branch-base`,
   branchSelect: `${P}-branch-select`,
   branchFormActions: `${P}-branch-form-actions`,
+  branchRemotes: `${P}-branch-remotes`,
+  branchRemotesHead: `${P}-branch-remotes-head`,
+  branchRemoteRow: `${P}-branch-remote-row`,
+  branchRemoteName: `${P}-branch-remote-name`,
+  branchRemoteSubject: `${P}-branch-remote-subject`,
   branchFooter: `${P}-branch-footer`,
   fileIcon: `${P}-file-icon`,
   fileIconImg: `${P}-file-icon-img`,
@@ -465,6 +470,51 @@ export const css = `
 .${cls.branchFormActions} {
   display: flex;
   gap: 6px;
+}
+
+/* Remote-tracking branches: a read-only section, so its rows are labels rather
+   than controls — no hover band, no pointer cursor. The name uses the same mono
+   face as a local row; the tip's subject is dimmer and gives way first when the
+   layer is narrow. A hairline separates the section from the actions above it. */
+.${cls.branchRemotes} {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.${cls.branchRemotesHead} {
+  margin: 0 0 2px;
+  padding: 0 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.${cls.branchRemoteRow} {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 6px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.${cls.branchRemoteName} {
+  flex: none;
+  font-family: var(--dsh-font-mono);
+  font-size: 12px;
+}
+
+.${cls.branchRemoteSubject} {
+  min-width: 0;
+  flex: auto;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .${cls.branchFooter} {

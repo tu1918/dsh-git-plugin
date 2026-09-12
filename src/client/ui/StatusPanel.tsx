@@ -29,6 +29,7 @@ import type { GitChangeKind, GitPanelError, GitRemoteClient, Result } from '../.
 import type {
   BranchInfo,
   BranchRef,
+  RemoteBranchRef,
   ChangeArea,
   CommitInfo,
   DiffTarget,
@@ -631,6 +632,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /** Bumped to re-read the stack after an operation the panel itself performed. */
   const [stashReads, setStashReads] = useState(0)
   /**
+   * The remote-tracking branches, for the picker's read-only list.
+   *
+   * Read only while the picker is open, for the same reason the stash stack is:
+   * it is a list the user opened on purpose, and `refs/remotes` is large in a
+   * repository with many remotes. Unlike the stack it is re-read whenever the
+   * snapshot reloads, which the probe's `refs` report and every successful
+   * operation already cause — so a fetch updates this list without extra wiring.
+   */
+  const [remoteBranches, setRemoteBranches] = useState<readonly RemoteBranchRef[]>([])
+  /**
    * The branch a blocked switch was trying to reach (FR-4.4).
    *
    * Kept because the shortcut beside the failure box has to retry the SAME
@@ -940,6 +951,24 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       cancelled = true
     }
   }, [git, sessionId, signal, stashOpen, stashReads])
+
+  // Remote-tracking branches, read while the picker is open. Keyed on the
+  // snapshot as well as `pickerOpen`, so every reload — the probe's `refs`
+  // report, or the panel's own fetch — re-reads them without extra wiring. A
+  // failed read leaves the empty sentence, which is the same way the local
+  // branch listing treats a read it could not complete.
+  useEffect(() => {
+    if (!pickerOpen) return
+    let cancelled = false
+    void (async () => {
+      const result = await git.remoteBranches(sessionId, signal)
+      if (cancelled) return
+      setRemoteBranches(result.ok ? result.value : [])
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [git, sessionId, signal, pickerOpen, snapshot])
 
   if (snapshot === null) {
     return (
@@ -1639,6 +1668,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           >
             <BranchPicker
               branches={branches}
+              remoteBranches={remoteBranches}
               t={t}
               busy={busy || pending}
               onCheckout={checkout}

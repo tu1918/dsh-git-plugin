@@ -12,7 +12,7 @@
 「与需求文档的偏差」。
 
 - 代码：`src/`（56 个源文件）、`test/`（20 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 462 项测试 + 两个打包产物
+- 校验：`npm run check` → `tsc --noEmit` + 470 项测试 + 两个打包产物
 
 ---
 
@@ -138,6 +138,7 @@ discard 与 undoCommit 在 M5a。
 | **D37** | FR-1.2 写的徽标字母是 `M/A/D/R/U/?`（git 自己的记号） | 徽标用**状态的英文首字母**，并照 VS Code 给冲突一个字母：未跟踪 `?` → **`U`**，冲突（unmerged）→ **`!`**。字母表于是是 `M/T/A/D/R/C/U/!`（`core/git-parse.ts` 的 `BadgeLetter`），**一个字母一个状态**，徽标不再需要「读它所在的分组」才能解释；颜色与 tooltip 都直接按字母取。中间实现过一版「`U` 兼指未跟踪与冲突 + `data-state` 分开配色」，定稿为 `!` 后那一层（`ChangeState`/`badgeStateOf`/`data-state`）已删除 | 产品方先要求「『?』改成『U』。都用状态的英文首字母」，随后要求「看 vscode 是怎么处理的」。**实测本机 VS Code**（`/mnt/d/codes/Microsoft VS Code/*/resources/app/extensions/git/dist/main.js` 的 `getStatusLetter` / `getStatusText` / `getStatusColor`）：字母是 `M/T/A/D/R/C/U/!`，**未跟踪 = `U`、冲突 = `!`**；冲突 tooltip 按 7 种细分（`Conflict: Both Modified` …）；`strikeThrough` 对删除与三种「被删」冲突为真；staged 行另用 `stageModifiedResourceForeground` / `stageDeletedResourceForeground`。冲突只能取 `!`——`C` 已被 copied 占用，`M`/`U` 也已名花有主。**没有跟的两处**：① VS Code 把字母画在文件名的标签里（workbench 的 SCM 行模板是 `[icon] label · .actions · .decoration-icon`），即字母在操作按钮**左边**；产品方选择保留「状态列贴在行最右、操作在它左边」（见 D36）；② 它的重命名/复制用偏绿的 `renamedResourceForeground`，我们仍用语义蓝（DSH 的 token 里没有那套装饰色） |
 | **D38** | FR-1.2 的内置 9 类图标是代码里的，没有配置面 | 图标映射改成**用户可配**：`$DSH_HOME/git-panel-icons.yml`（可用 `config.fileIconsPath` 改）里一行一个 `扩展名: SVG 文件路径`。host 侧新增 `core/icon-config.ts`（YAML 子集解析器，纯函数）+ `host/file-icons.ts`（读文件、校验、按 mtime+size 缓存、按需重读），路由新增 `GET /git-panel/fileIcons` 一次把**已读到的** SVG 全量下发；客户端 `ui/file-icons.ts` 把每个文档转成 `data:` URL，行内按扩展名命中就用 `<img>` 画、否则回落内置 glyph（`customIconFor` 一条规则） | 产品方要求「改成用户可配的映射，用 yml 配置，后缀为 key，path 为 value」。**四处有意选择**：① **独立文件而不是塞进 profile patch**（产品方选定）——路径仍可由 `Config.fileIconsPath` 覆盖，测试与特殊部署都能指；默认 `$DSH_HOME/git-panel-icons.yml`，`~/` 会展开。② **不引 YAML 依赖**，手写只认「一行一个 `ext: path`、`#` 注释、引号值」的子集：需要的是扁平字符串映射，引入解析器（并给 core 的零依赖守卫开白名单，见 D12）换来的是这个文件用不上的锚点/嵌套/多行。③ **浏览器只被下发 SVG 文本、自己转 `data:` URL 交给 `<img>`**：图片是静态上下文（脚本与外链都不执行），配置里的文件因此永远不进入面板 DOM，也就没有 `dangerouslySetInnerHTML` + 净化器这一层；一次请求带全部图标，避免「一行一条请求」。④ **读得到就替换、读不到就回落**：限制 64 KiB/个、64 个、必须含 `<svg`，每条被拒绝的路径都在 host 日志里说明原因——图标静默缺失是最难查的那种失败 |
 | **D39** | §9②③ 把复制类条目列为菜单的一部分；§10.2 顺序 6 说它们是「纯客户端 clipboard」 | 五条复制条目全部落地：文件行菜单加「复制相对路径 / 复制绝对路径」（顺序 1 那张菜单，D36 的路径列不变），提交行菜单加「复制短哈希 / 复制完整哈希 / 复制提交信息」。**四处决定**：① **提交菜单现在挂在每一行上**，不再只挂最新一行——复制属于任何提交，FR-3.8 的撤销仍只由最新行提供（`canUndo` 随行下传，不再用「有没有菜单」表达「能不能撤销」）；② **「复制提交信息」复制的是 subject 首行**，因为历史列表读的就是 `%s`（`CommitInfo.subject`），提交正文不在客户端——要复制全文得让 host 多读一次 `%B`，那与顺序 6「纯客户端」的定位相悖；③ **剪贴板自己写**（`ui/clipboard.ts`：Clipboard API 优先，`execCommand` 回退，两者都没有就返回 `false`），不把 primitives 的 `writeClipboard` 包一层 adapter——依赖方向第 3 条不允许 `ui/**` 碰 DSH，而 `document`/`navigator` 本来就是 ui 直接用的浏览器能力；④ **写失败也是普通失败**：`GitErrorCode` 新增 `clipboard`，拒绝的写入在面板同一条错误通道里说一句，而不是静默或抛异常 | 产品方按 §10.2 顺序 6 下令。**两处代价**：① 提交菜单从「只有一行有」变成「每行都有」，顺序 3 的验收测试按新契约重写（旧契约「老行没有菜单」不再成立，但「老行不能撤销」仍成立，只是改由条目断言）；② `repoAbsolutePath`（`core/format.ts`）按根自己的分隔符风格拼接——`git rev-parse --show-toplevel` 在 Windows 上给 `C:/…`，若根本身就是反斜杠那就补反斜杠，粘出去的路径才与该平台的文件对话框一致 |
+| **D43** | FR-4.1 只说分支下拉「列出所有本地分支」；文档没有远程分支的展示 | 分支选择器新增一个**只读**的「远程分支」区：新读方法 `remoteBranches` + `GET /git-panel/remoteBranches`（`for-each-ref refs/remotes`），每行 `origin/xxx` + 该提交的 subject，**不是按钮、没有任何点击行为**；空时一句「没有远程分支（先获取一次）」。**检出远程分支（rebase onto origin / drop local commits）推迟**，等 FR-9 冲突处理做完再做（§10.3 待办） | 产品方先要求「可切换远程、像 IDEA 一样让用户选 rebase onto origin 还是 drop local commits」，随后自己收窄为「先只读，等冲突处理做完再弄」——rebase 与 drop 都可能进入冲突态，先有冲突 UI 才能安全收尾。**三处决定**：① **只读行不用 `<button>`**：面板对它还没有动作，一个看起来能按却没有动作的行比一句标签更糟；测试断言该区里没有 button、点它不产生任何调用；② **用 `%(symref)` 判符号引用，而不是按名字**——`%(refname:short)` 把 `refs/remotes/origin/HEAD` 缩成 `origin`（实测，按 `/HEAD` 后缀过滤会漏），符号 ref 必须由 `%(symref)` 非空来认出；③ **惰性读取、随快照重读**：只在选择器打开时读，并以 snapshot 为依赖——探测的 `refs` 报告与面板自己的 fetch 都会 `reload()`，于是取完东西列表自己就更新了。**代价**：不拆 remote/branch（远程名本身可能含 `/`），所以暂不支持按远程分组；检出时「去掉 `origin/` 前缀后的重名规则」也留到那时再定 |
 | **D42** | FR-5.1 的同步动作只有三个（拉取 / 推送 / 同步），文档没有 fetch | 新增第四个动作**获取所有远程**：`git fetch --all`，挂在分支行、紧挨「拉取」左边，字形是**虚线 ↓**；`POST /git-panel/fetch`；仓库没有远程时以 `bad-request` 说明而不是静默成功。**不做 `--prune`** | 产品方要求在面板里能 fetch，并指定「第四个小按钮、虚线 ↓」「fetch 所有远程」——参考 IDEA 的 Fetch All Remotes。三处决定：① **`--all` 而不是默认远程**：分支行只描述一条分支，但 ↑↓ 计数、○/● 标记与 `upstreamGone` 都读 `refs/remotes`，而一个仓库可以配多个远程；② **不 prune**：prune 会删掉远端已不存在的远程跟踪 ref，那不是「按一下获取」隐含同意的动作——留一条过期的 `origin/xxx` 比删一个 ref 意外更小，真要清理是另一条命令；③ **无远程先问一次 `git remote`**：`git fetch --all` 在没有远程时**退出 0 且一个字节都不打印**（实测），不问就会宣布一次没发生的获取。**代价**：远程分支的名字仍然不进分支选择器（FR-4.1 只要求本地分支）——fetch 看得见的效果是 ↑↓ 计数、○/● 标记与 `upstreamGone`；要「取回一个远程分支」得像 git 一样先 `checkout -b`（本插件今天没有这条路径，见 §12） |
 | **D41** | FR-7.1「历史列表旁内嵌 SVG 泳道图（分叉开新道、合并收道），分页不断线」 | 泳道分配是 core 的纯函数 `core/commit-graph.ts`（`buildGraph`：一行给出 `lane`/`from`/`to`/`edges`/`lanes`），渲染是每行一个内联 SVG（`ui/History.tsx` 的 `GraphCell`），**没有新增 host 路由**——`CommitInfo.parents` 从 M1 起就在 `LOG_FORMAT` 里，本项是纯客户端 + core。三处决定：① **每行一个 SVG、y 用百分比**（`0%`→`50%`→`100%`）、不设 viewBox：行高由文字决定，百分比让线段在不知道高度的情况下连到相邻行，`align-self: stretch` + `display: block` 保证不留缝；② **分页不断线是「对全部已加载提交跑一次」的结果**，不是补丁——分配是从新到旧的一趟、每行只依赖它上面的行，所以第 2 页只是把图**延长**，第 1 页逐字节不变（测试钉住）；③ **条带宽度 = 所有行的最大泳道数**（上限 8），每行共用同一个数——否则某一行开了新道就会把自己那行的 hash 推右，整列 hash 对不齐 | 文档只要求「分叉开新道、合并收道、分页不断线」，没规定颜色、也没规定图在行内还是行外。**颜色的代价**：DSH 的 token 集里**没有图表调色板**，泳道只能借语义色（brand / business / success / warn / gray 按车道取模循环，刻意避开 error 红——一条红线会读成对提交的警告）；车道号只要线还在就不变，所以一条线的颜色跨行稳定，被回收的车道可能与前一条同色。**另外两条实现选择**：① 颜色按**目标**车道取——合并的斜线用它汇入/开出的那道色，与下方竖线一致；② 上限 8 是防「多父 octopus 合并」把提交信息挤出面板，超出部分被裁掉（真实历史远在 8 以下） |
 | **D40** | §4.3「操作级错误**就地**显示、不清空列表、保留 git 多行输出」；M2 起实现为列内的两条带——成功一行、失败一块，都占列表上方的整行 | 成功与失败的反馈都改成**悬浮通知**（`ui/notice.tsx`），挂在状态栏之下、盖在列表之上，不再占列内的行。「不清空列表」与「保留多行输出」照旧；**成功 4s 自动关闭（`NOTICE_DURATION_MS`），失败一直等到按 ×** | 产品方要求「把通知作为悬浮的一层，过指定时间自动关闭」，并确认成功与失败都浮起。**三条理由**：① 每一条反馈原本都把变更列表、提交框、dock 往下推，而列表才是面板的主语——一次操作的报告不该移动用户正要点的东西；② 两种生命周期的差别是硬的：成功是一句可以错过的话，失败是「这一击为什么没生效」的解释，还带着 git 的多行原文与（切换受阻时）一个「贮藏后切换到 X」按钮，按时间抹掉它比不显示更糟，所以 `durationMs` 是调用方给的值；③ 它是**层**不是模态：不拦点击、点别处也不消失（`popover` 的 outside-press 契约对通知是错的），只有 ×（或成功的时钟）能关掉它。**代价**：反馈不再把内容顶开，于是会暂时盖住列表最上面几行与合并状态栏；`z-index: 4` 让它压在行菜单（3）之上。**时长可配**：目前是组件的一个 prop、面板传 4s；「在设置里自定义」需要 DSH 的插件配置面（`settings.section` 槽 + host settings 命名空间与读写路由，像 better-sidebar 的「Side card」），已登记到 §10.3，等真有功能需要设置时一起做 |
@@ -662,7 +663,25 @@ FR-7.1 的三条要求（分叉开道、合并收道、分页不断线）落成�
 | `locales.ts` | +2 键（中英）：`action.fetch` = 「获取所有远程」/「Fetch all remotes」 |
 | 测试 | +6 项（462 总计）：服务层 3 项真仓库——fetch 让 `refs/remotes/origin/<branch>` 前进而 `HEAD` 与工作区不动、`behind` 由 0 变 1；**两个远程的跟踪 ref 一起被取到**（`--all` 的证明）；无远程是 `bad-request` 而非静默成功。路由 1 项（POST 走通并真的写出远程跟踪 ref + GET 405）。客户端 2 项（第四按钮的 `aria-label`、点击调用 `git.fetch`、成功通知；无远程的拒绝落在列表旁且变更列表原样）。既有的 `syncButtons()` 助手改成 `railActions()`（分支行前四个 `.tool` 按钮），三处按序解构与两处按下标取按钮的既有用例随之更新 |
 
-**为什么远程分支仍不在选择器里**：`branches()` 只读 `refs/heads`（FR-4.1 原文就是「列出所有本地分支」），`refs/remotes` 目前只服务于刷新探测与 ↑↓/○●。所以按一次获取看得见的变化是这三处计数与标记，而不是列表里多出 `origin/xxx`；要让远程分支可选（并在选中时建跟踪分支）是另一项工作，登记在 §12。
+**当时远程分支还不在选择器里**：`branches()` 只读 `refs/heads`（FR-4.1 原文就是「列出所有本地分支」），`refs/remotes` 只服务于刷新探测与 ↑↓/○●。所以按一次获取看得见的变化只是那三处计数与标记。这一点随后由下面的只读列表补上。
+
+### 验收期新增：远程分支的只读列表（2026-09-12，产品方提出）
+
+产品方先要求「可切换远程，像 IDEA 一样让用户选 rebase onto origin 还是 drop local commits」，
+随即自己收窄为「先只读，等冲突处理做完再弄」——见 D43。
+
+| 落点 | 内容 |
+|---|---|
+| `core/types.ts` | 新增 `RemoteBranchRef { name, oid, committedAt, subject }`。`name` 是 `refname:short`（`origin/xxx`），**不拆 remote**：远程名本身可能含 `/`，拆第一个 `/` 会错，而只读展示不需要它 |
+| `core/git-parse.ts` | `parseRemoteBranches`：`for-each-ref` 的字段分隔是 `%00` 而**不是** `log` 家族的 `%x00`、每条 ref 以换行结束（与 `parseBranches` 同一形状，实测踩过 `%x00` 的坑）；**丢弃 `%(symref)` 非空的符号引用**；按提交时间倒序 |
+| `host/git-service.ts` | `REMOTE_BRANCH_FORMAT`（末位是 `%(symref)`）+ `remoteBranches`（**读操作**，`refs/remotes`，`optionalLocks` 默认） |
+| `host/adapter/routes.ts` + `client/adapter/git-client.ts` | `remoteBranches` 进 `READ_OPERATIONS`（GET，session 在 query）；`POST` 同一路径 405 |
+| `ui/StatusPanel.tsx` | **惰性读取**：只在 `pickerOpen` 时读，并以 `snapshot` 为依赖，所以探测的 `refs` 报告与面板自己的 fetch 都会让它重读；读失败留空（与本地分支列表对读失败的处理一致），不转圈 |
+| `ui/BranchPicker.tsx` | 「远程分支」区：标题 + 每行 `origin/xxx` 与灰色 subject（省略号收缩），`title` 给全名与 subject。**行不是 `<button>`、不接 `onClick`**——面板对它还没有动作；空时一句「没有远程分支（先获取一次）」 |
+| `locales.ts` + `styles.ts` | +2 键（中英）；分区标题与信息行的样式（`data-remote-branches="<count>"` 供测试与寻址） |
+| 测试 | +8 项（470 总计）：core 3 项（读取与排序、**丢掉符号 HEAD**、空输出与短记录）；服务层 2 项真仓库（fetch 后列出 `origin/xxx` 且**不含 `origin/HEAD`**——用 `remote set-head` 真造出那个符号 ref；无远程为空数组）；路由 1 项（GET 走通 + POST 405）；客户端 2 项（只读区有行、**区里没有 button**、点它不产生任何调用；空态句） |
+
+**待办**：把只读行变成「检出远程分支」，依赖 FR-9，登记在 §10.3。
 
 ### 验收期改动：操作反馈改成悬浮通知（2026-09-12，产品方提出）
 
@@ -680,6 +699,7 @@ FR-7.1 的三条要求（分叉开道、合并收道、分页不断线）落成�
 
 | 事项 | 说明 |
 |---|---|
+| **检出远程分支（rebase onto origin / drop local commits）** | 只读列表已交付（D43）；把它变成动作依赖 FR-9。届时的分支判定：没有同名本地分支 → `git switch -c <name> --track <remote>/<name>`；能快进 → 快进；分叉 → 让用户选 **Rebase onto origin**（本地提交重放到远程之上）或 **Drop local commits**（`reset --hard` 到远程，破坏性，需 `ui/armed.ts` 的武装确认）。两条路都可能进入冲突态，所以先有冲突处理才安全。另需定义：本地有未提交改动时怎么办、去掉 `<remote>/` 前缀后的重名规则 |
 | **非仓库时的「初始化仓库」按钮**（§4.3 空态引导） | 现在只有一句 `noRepo.hint` 文案，文档要求一个执行 `git init` 的按钮 |
 | **通知时长接进 DSH 设置**（D40 的尾巴） | 现在 `NOTICE_DURATION_MS = 4000` 是面板传给 `Notice` 的固定值。要「在设置里自定义」得先有插件的配置面：DSH 的 `settings.section` 槽（`@deepseek-ai/dsh-client-ui-settings`）注册一张卡，host 侧要有 settings 命名空间与一对读写路由（better-sidebar 的「Side card」是现成例子）。产品方 2026-09-12 决定：先不做，等真有功能需要设置时一起加；在此之前要改时长就改代码里的常量 |
 | **上下方向键导航文件列表**（§4.3 键盘，P1） | `Ctrl+Enter` 与 `Esc` 已有，这条没有 |
@@ -738,6 +758,7 @@ FR-7.1 的三条要求（分叉开道、合并收道、分页不断线）落成�
 | **提交（范围显式化，含 `add -u` 分支）** | ✅ | ❌ |
 | **推送 / 拉取 / 同步** | ✅ | ❌ |
 | **获取所有远程（fetch，不带 prune）** | ✅ 验收期新增（D42） | ❌ 无对应路由 |
+| **远程分支（选择器里的只读列表）** | ✅ 验收期新增（D43，纯展示；检出见 §10.3 待办） | 未见对应路由 |
 | 提交图谱 | ✅ M5b（FR-7.1，§10.2 顺序 7 已交付） | ✅ `/git/graph` |
 | 切换 / 新建 / 删除分支 | ✅ M4（FR-4；含未合并分支的强制删除） | ✅ `/git/switch`、`/git/create-branch` |
 | 放弃更改 | ✅ M5a（FR-6.1，顺序 2 已交付） | ❌ 无对应路由 |

@@ -25,6 +25,7 @@ import type {
   CommitInfo,
   FileChange,
   LogPage,
+  RemoteBranchRef,
   StashEntry,
   StatusCode,
   StatusGroups,
@@ -407,6 +408,45 @@ export function parseBranches(raw: string): readonly BranchRef[] {
       committedAt,
       subject,
     })
+  }
+  branches.sort((left, right) => {
+    const byDate = right.committedAt.localeCompare(left.committedAt)
+    return byDate !== 0 ? byDate : left.name.localeCompare(right.name)
+  })
+  return branches
+}
+
+/**
+ * Parse `git for-each-ref refs/remotes` output for the picker's read-only list.
+ *
+ * The expected field order is `%(objectname)`, `%(refname:short)`, `%(subject)`,
+ * `%(committerdate:iso-strict)`, `%(symref)`, NUL-separated inside one line per
+ * ref — the `for-each-ref` format language spells its field separator `%00`, not
+ * the `%x00`/`%x1e` of the `log` family, and ends each ref with a newline.
+ *
+ * A symbolic ref is dropped, which is what removes `refs/remotes/origin/HEAD`:
+ * it points at the remote's default branch rather than being one, and listing it
+ * beside `origin/main` would only suggest it is one more thing. The `symref`
+ * atom is the reliable way to spot it — `%(refname:short)` collapses that ref to
+ * plain `origin`, so filtering on the printed name misses it.
+ * @param raw - Raw stdout of the matching `for-each-ref` call.
+ * @returns The remote-tracking branches, newest commit first.
+ */
+export function parseRemoteBranches(raw: string): readonly RemoteBranchRef[] {
+  const branches: RemoteBranchRef[] = []
+  for (const line of raw.split('\n')) {
+    if (line === '') continue
+    const fields = line.split('\x00')
+    if (fields.length < 5) continue
+    const [oid, name, subject, committedAt, symref] = fields as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    if (symref !== '' || name === '' || name.endsWith('/HEAD')) continue
+    branches.push({ name, oid, subject, committedAt })
   }
   branches.sort((left, right) => {
     const byDate = right.committedAt.localeCompare(left.committedAt)

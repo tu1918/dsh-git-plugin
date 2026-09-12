@@ -21,6 +21,7 @@ import type {
   LogLevel,
   LogPage,
   OperationReport,
+  RemoteBranchRef,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -206,6 +207,15 @@ export interface WorkspaceGitService {
    * @param sessionId - Opaque session identity from the browser.
    */
   branches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly BranchRef[]>>
+  /**
+   * List remote-tracking branches (`refs/remotes`) for reading.
+   *
+   * Read-only: the panel does not check one out. A repository with no remote,
+   * or one that has never been fetched, answers an empty list rather than an
+   * error — "nothing to show yet" is the honest reading of both.
+   * @param sessionId - Opaque session identity from the browser.
+   */
+  remoteBranches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly RemoteBranchRef[]>>
   /**
    * Read one page of commit history.
    * @param sessionId - Opaque session identity from the browser.
@@ -520,6 +530,12 @@ export interface GitRemoteClient {
    * @param signal - Cancels the request when the tab goes away.
    */
   branches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly BranchRef[]>>
+  /**
+   * List remote-tracking branches for reading (no checkout is offered).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  remoteBranches(sessionId: string, signal?: AbortSignal): Promise<Result<readonly RemoteBranchRef[]>>
   /**
    * Read one page of commit history.
    * @param sessionId - Opaque session identity, supplied by the slot.

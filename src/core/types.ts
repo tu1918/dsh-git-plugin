@@ -143,6 +143,29 @@ export interface BranchRef {
   readonly subject: string
 }
 
+/**
+ * One remote-tracking branch, as the picker lists it for reading.
+ *
+ * Read-only on purpose: the panel does not offer to check one out. Doing so
+ * needs a decision the user has to make (rebase the local branch onto the
+ * remote, or drop the local commits) and both outcomes can land in a conflict
+ * state — which is FR-9's territory, not this list's.
+ *
+ * `name` is git's `refname:short` (`origin/feature`). The remote name is NOT
+ * split out: a remote may itself contain a `/`, so splitting on the first one
+ * would be wrong, and a list that only shows the name does not need it.
+ */
+export interface RemoteBranchRef {
+  /** Short ref name, such as `origin/feature`. */
+  readonly name: string
+  /** Commit the branch points at. */
+  readonly oid: string
+  /** Committer date of that commit, ISO-8601. */
+  readonly committedAt: string
+  /** First line of that commit's message. */
+  readonly subject: string
+}
+
 /** One commit row in the history list (FR-3.6). */
 export interface CommitInfo {
   /** Full commit object id. */

@@ -21,6 +21,7 @@ import {
   markPushed,
   parseBranches,
   parseLog,
+  parseRemoteBranches,
   parseNumstat,
   parseStashList,
   parseStatusV2,
@@ -45,6 +46,7 @@ import type {
   GeneratedMessage,
   LogPage,
   OperationReport,
+  RemoteBranchRef,
   RepoStatus,
   StashEntry,
   UndoResult,
@@ -62,6 +64,10 @@ import { gitDirOf } from './git-dir.ts'
 /** The `for-each-ref` format the branch parser expects; the two must agree. */
 const BRANCH_FORMAT =
   '%(HEAD)%00%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:iso-strict)%00%(subject)'
+
+/** The `for-each-ref` format the remote-branch parser expects; the two must agree. */
+const REMOTE_BRANCH_FORMAT =
+  '%(objectname)%00%(refname:short)%00%(subject)%00%(committerdate:iso-strict)%00%(symref)'
 
 /** The `log` format the history parser expects; the two must agree. */
 const LOG_FORMAT = '%H%x00%h%x00%s%x00%an%x00%aI%x00%cI%x00%P%x1e'
@@ -1353,6 +1359,19 @@ export function createGitService(
       )
       if (!outcome.ok) return outcome
       return { ok: true, value: parseBranches(outcome.value.stdout) }
+    },
+
+    async remoteBranches(sessionId: string): Promise<Result<readonly RemoteBranchRef[]>> {
+      const root = await repoRoot(sessionId)
+      if (!root.ok) return root
+      // A read: `for-each-ref` never writes the index, so it keeps the default
+      // `optionalLocks = false` and leaves the probe's watched files alone.
+      const outcome = await run(
+        ['for-each-ref', `--format=${REMOTE_BRANCH_FORMAT}`, 'refs/remotes'],
+        root.value,
+      )
+      if (!outcome.ok) return outcome
+      return { ok: true, value: parseRemoteBranches(outcome.value.stdout) }
     },
 
     async log(sessionId: string, offset: number, limit: number): Promise<Result<LogPage>> {

@@ -29,7 +29,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import type { GitPanelError } from '../../core/ports.ts'
-import type { BranchRef } from '../../core/types.ts'
+import type { BranchRef, RemoteBranchRef } from '../../core/types.ts'
 import { useArmedKey } from './armed.ts'
 import { ToolButton } from './ChangeGroup.tsx'
 import { cls } from './styles.ts'
@@ -48,6 +48,14 @@ export interface BranchRefusal {
 export interface BranchPickerProps {
   /** Every local branch, as `git for-each-ref` listed them. */
   readonly branches: readonly BranchRef[]
+  /**
+   * Remote-tracking branches, listed for READING only.
+   *
+   * No callback is offered for them on purpose: checking one out needs the
+   * rebase-or-drop decision and can land in a conflict, which is FR-9's problem
+   * (see the plan's D43). Until then this list answers "what did fetch bring?".
+   */
+  readonly remoteBranches: readonly RemoteBranchRef[]
   /** The panel's copy. */
   readonly t: Translate
   /** True while any operation is in flight. */
@@ -70,6 +78,7 @@ export interface BranchPickerProps {
  */
 export function BranchPicker({
   branches,
+  remoteBranches,
   t,
   busy,
   onCheckout,
@@ -229,6 +238,25 @@ export function BranchPicker({
             </span>
           </form>
         )}
+      </div>
+      {/* Remote-tracking branches, read-only. They are plain rows rather than
+          buttons: the panel has nothing to do with them yet, and a row that
+          looks pressable but is not would be worse than one that reads as a
+          label. The empty sentence is the only hint about how to fill it. */}
+      <div className={cls.branchRemotes} data-remote-branches={String(remoteBranches.length)}>
+        <p className={cls.branchRemotesHead}>{t('branch.remotes')}</p>
+        {remoteBranches.length === 0 && <p className={cls.note}>{t('branch.remotesEmpty')}</p>}
+        {remoteBranches.map((remote) => (
+          <div
+            key={remote.name}
+            className={cls.branchRemoteRow}
+            data-remote-branch={remote.name}
+            title={`${remote.name} — ${remote.subject}`}
+          >
+            <span className={cls.branchRemoteName}>{remote.name}</span>
+            <span className={cls.branchRemoteSubject}>{remote.subject}</span>
+          </div>
+        ))}
       </div>
       <div className={cls.branchFooter}>
         <ToolButton label={t('branch.pickerClose')} onClick={onClose}>
