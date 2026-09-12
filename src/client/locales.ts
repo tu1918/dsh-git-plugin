@@ -70,6 +70,8 @@ export const zh = {
   'group.count': '{count}',
   'group.stagedEmpty': '无暂存更改',
   'staged.resize': '拖动调整已暂存区高度',
+  'unstaged.resize': '拖动调整「更改」区高度',
+  'untracked.resize': '拖动调整「未跟踪的文件」区高度',
   'group.expand': '展开这一类',
   'group.collapse': '收起这一类',
 
@@ -168,6 +170,8 @@ export const en: Record<GitPanelKey, string> = {
   'group.count': '{count}',
   'group.stagedEmpty': 'No staged changes',
   'staged.resize': 'Drag to resize the staged changes',
+  'unstaged.resize': 'Drag to resize the changes',
+  'untracked.resize': 'Drag to resize the untracked files',
   'group.expand': 'Expand this group',
   'group.collapse': 'Collapse this group',
 

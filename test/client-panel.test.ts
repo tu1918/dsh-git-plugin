@@ -346,6 +346,35 @@ function must<T extends Element>(container: ParentNode, selector: string): T {
   return found
 }
 
+/**
+ * The height a drawer's scrolling body was dragged to, or `''` while it is still
+ * on the stylesheet's default.
+ * @param drawer - The drawer element, as `[data-drawer]` finds it.
+ */
+function drawerHeight(drawer: Element): string {
+  return (must(drawer, `.${cls.changeBody}`) as HTMLElement).style.height
+}
+
+/**
+ * Drag a pane's grip the way a pointer does: press on the grip, move, release.
+ *
+ * The release is not decoration. The grip listens on `window` so a pointer that
+ * leaves its 7px strip keeps resizing, which means a grip that is never released
+ * keeps resizing *everything* dragged afterwards — a real bug that a test which
+ * only ever presses and moves cannot see.
+ * @param grip - The grip element.
+ * @param fromY - Where the press lands.
+ * @param toY - Where the pointer ends up.
+ */
+async function dragGrip(grip: Element, fromY: number, toY: number): Promise<void> {
+  await act(async () => {
+    grip.dispatchEvent(new window.MouseEvent('pointerdown', { clientY: fromY, bubbles: true }))
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: toY, bubbles: true }))
+    window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }))
+  })
+  await flush()
+}
+
 /** The three sync buttons of the state rail, in render order. */
 function syncButtons(container: HTMLElement): HTMLButtonElement[] {
   const rail = must(container, `.${cls.head}`)
@@ -468,25 +497,66 @@ describe('StatusPanel rendering', () => {
     assert.equal(must(drawer, `.${cls.groupEmpty}`).textContent, 'No staged changes')
   })
 
-  it('sizes the staged drawer from its own grip', async () => {
+  it('gives every resident group the same drawer, and sizes each from its own grip', async () => {
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
     )
     await settle()
 
-    // Every pane that owns a height owns a grip: the staged drawer takes its
-    // height from the commit box and the list below it.
-    const drawer = must(container, `.${cls.stagedDrawer}`) as HTMLElement
-    const grip = must(drawer, `.${cls.paneGrip}`)
-    assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the staged changes')
-    assert.equal((drawer.querySelector(`.${cls.stagedBody}`) as HTMLElement).style.height, '')
+    // The three resident groups are one structure, drawn three times: a grip, a
+    // scrolling body, and the group inside it. Same shape and same order as the
+    // panel draws them.
+    const drawers = [...container.querySelectorAll<HTMLElement>(`.${cls.changeDrawer}`)]
+    assert.deepEqual(
+      drawers.map((drawer) => drawer.getAttribute('data-drawer')),
+      ['staged', 'unstaged', 'untracked'],
+    )
+    for (const drawer of drawers) {
+      assert.equal(drawer.querySelectorAll(`:scope > .${cls.paneGrip}`).length, 1, 'one grip each')
+      assert.equal(drawer.querySelectorAll(`:scope > .${cls.changeBody}`).length, 1)
+      assert.equal(drawer.querySelectorAll(`.${cls.group}`).length, 1, 'the drawer hosts its group')
+      assert.equal((drawer.querySelector(`.${cls.changeBody}`) as HTMLElement).style.height, '')
+    }
 
-    await act(async () => {
-      grip.dispatchEvent(new window.MouseEvent('pointerdown', { clientY: 200, bubbles: true }))
-      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 100, bubbles: true }))
-    })
-    await flush()
-    assert.equal((drawer.querySelector(`.${cls.stagedBody}`) as HTMLElement).style.height, '100px')
+    // The conflict group is the one group that is NOT a drawer: it comes and goes
+    // with the merge, and a grip on it would take height from the list for good.
+    const conflicted = must(container, `[data-group="conflicted"]`)
+    assert.equal(conflicted.closest(`.${cls.changeDrawer}`), null)
+    assert.equal(conflicted.parentElement?.className, cls.body)
+
+    // Each grip names its own group, so a drag is never ambiguous.
+    assert.deepEqual(
+      drawers.map((drawer) => must(drawer, `.${cls.paneGrip}`).getAttribute('aria-label')),
+      [
+        'Drag to resize the staged changes',
+        'Drag to resize the changes',
+        'Drag to resize the untracked files',
+      ],
+    )
+
+    const staged = must<HTMLElement>(container, `[data-drawer="staged"]`)
+    const unstaged = must<HTMLElement>(container, `[data-drawer="unstaged"]`)
+    const untracked = must<HTMLElement>(container, `[data-drawer="untracked"]`)
+
+    await dragGrip(must(staged, `.${cls.paneGrip}`), 200, 100)
+    assert.equal(drawerHeight(staged), '100px')
+
+    // The heights are the drawers' own: dragging one leaves the others at their
+    // stylesheet default, which is what "every partition resizes itself" means.
+    await dragGrip(must(unstaged, `.${cls.paneGrip}`), 200, 40)
+    assert.equal(drawerHeight(staged), '100px', 'a released grip must stop resizing')
+    assert.equal(drawerHeight(unstaged), '160px')
+    assert.equal(drawerHeight(untracked), '')
+
+    await dragGrip(must(untracked, `.${cls.paneGrip}`), 100, 160)
+    assert.equal(drawerHeight(unstaged), '160px')
+    // jsdom has no layout, so a panel measures as zero and the grip falls back to
+    // the window: 160 is below the floor, so the clamp is what this reads.
+    assert.equal(drawerHeight(untracked), '44px')
+
+    // A drawer is clamped at its own ceiling too, whatever the pointer does.
+    await dragGrip(must(untracked, `.${cls.paneGrip}`), 0, -1000)
+    assert.equal(drawerHeight(untracked), '588px')
   })
 
   it('keeps the staged drawer on screen when only the index is empty', async () => {
@@ -608,26 +678,23 @@ describe('StatusPanel rendering', () => {
     // No inline height yet: the tab's own default (the stylesheet) applies.
     assert.equal(pane.style.height, '')
 
-    // Two panes carry a grip (the staged drawer above and this one), so the
+    // Two panes carry a grip (the first change drawer above and this one), so the
     // queries are scoped to the pane under test.
     const grip = must(container, `.${cls.bottom} .${cls.paneGrip}`)
     assert.equal(grip.getAttribute('role'), 'separator')
     assert.equal(grip.getAttribute('aria-label'), 'Drag to resize the bottom pane')
 
-    await act(async () => {
-      grip.dispatchEvent(new window.MouseEvent('pointerdown', { clientY: 300, bubbles: true }))
-      // jsdom reports a zero-height box, so this reads as "the pointer rose
-      // 300px"; the clamp below is the part worth pinning.
-      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: 0, bubbles: true }))
-    })
-    await flush()
+    // jsdom reports a zero-height box, so the drag reads as "the pointer rose
+    // 300px" — and the drawer above is asserted to be left exactly where it was.
+    const stagedDrawer = must(container, `[data-drawer="staged"]`)
+    await dragGrip(grip, 300, 0)
     assert.equal(pane.style.height, '300px')
+    assert.equal(drawerHeight(stagedDrawer), '')
 
-    await act(async () => {
-      window.dispatchEvent(new window.MouseEvent('pointermove', { clientY: -1000, bubbles: true }))
-    })
-    await flush()
+    // The same grip, dragged past the top of the panel: the clamp is what this
+    // reads, since the pointer itself can go anywhere.
     const ceiling = Math.max(32, window.innerHeight - 200)
+    await dragGrip(grip, 0, -1000)
     assert.equal(pane.style.height, `${ceiling}px`)
 
     // Folding from the chevron drops the explicit height (a height would leave a
@@ -809,6 +876,71 @@ describe('staging from the change list', () => {
       ).opacity,
     )
     assert.ok(opacity > 0.5, `a group action must be visible at rest, got opacity ${opacity}`)
+  })
+
+  it('will not bulk-unstage an empty index, and says so instead of failing', async () => {
+    // The staged drawer is the one group that stays on screen while empty, so its
+    // "Unstage all" used to be a button that could only ever fail: the panel sent
+    // `paths: []`, the host refused it (`validatePaths`: at least one path), and
+    // the user read "the request was incomplete, reopen this panel" — an
+    // instruction that could not possibly help, since the panel was fine.
+    const calls: ActionLog = { entries: [] }
+    const status = statusFixture()
+    const working = { ...status, groups: { ...status.groups, staged: [], conflicted: [] } }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ calls, status: { ok: true, value: working } }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const drawer = must(container, `[data-drawer="staged"]`)
+    assert.equal(must(drawer, `.${cls.count}`).textContent, '0', 'the drawer is still resident')
+    const button = must<HTMLButtonElement>(drawer, `.${cls.groupActions} button`)
+    assert.equal(button.textContent, 'Unstage all', 'the control stays findable, not hover-only')
+    assert.equal(button.disabled, true, 'a group with no rows has nothing to move')
+    // A disabled button is only honest if it says why.
+    assert.equal(button.title, 'Unstage all · No staged changes')
+
+    // Neither a click nor a stray programmatic call may reach the host: the bulk
+    // action on an empty group is a no-op, not a refused request.
+    await click(button)
+    assert.deepEqual(calls.entries, [])
+    assert.equal(container.querySelector(`[data-action-error]`), null, 'no failure box')
+    assert.equal(container.querySelector(`[data-action-done]`), null, 'and no false success')
+
+    // A group that does have rows keeps its action, and it still works.
+    const unstagedHead = must(container, `[data-group="unstaged"] .${cls.groupActions}`)
+    const stageButton = must<HTMLButtonElement>(unstagedHead, 'button')
+    assert.equal(stageButton.disabled, false)
+    assert.equal(stageButton.title, '')
+    await click(stageButton)
+    assert.deepEqual(calls.entries, ['stage:deep/nested/dir/changed.ts'])
+  })
+
+  it('reports a git client that throws rather than leaving the panel spinning', async () => {
+    // Every client method is typed to *answer* with a `Result`, and the panel's
+    // failure handling assumed that. A client that throws instead — a bug here, or
+    // `fetch` rejecting before a Result exists — left the operation "running"
+    // forever: a spinner and permanently disabled buttons, with nothing said.
+    const git: GitRemoteClient = {
+      ...stubGit({}),
+      stage: () => {
+        throw new TypeError('Failed to fetch')
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+
+    await click(must(container, `[data-group="untracked"] .${cls.rowActions} button`))
+
+    const box = must(container, `[data-action-error="stage"]`)
+    assert.match(box.textContent ?? '', /failed/)
+    assert.match(box.textContent ?? '', /Failed to fetch/, 'the reason is kept, not swallowed')
+    assert.equal(container.querySelector(`[data-action-done]`), null)
   })
 })
 

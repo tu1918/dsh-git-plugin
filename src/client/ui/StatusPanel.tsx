@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { commitScopeOf } from '../../core/commit-scope.ts'
-import { lineCount, pathParts, relativeTimeParts } from '../../core/format.ts'
+import { lineCount } from '../../core/format.ts'
 import type { GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
 import type {
   BranchInfo,
@@ -35,11 +35,11 @@ import type {
   OperationReport,
   RepoStatus,
 } from '../../core/types.ts'
-import { badgeFor } from '../../core/git-parse.ts'
+import { ChangeGroupPane } from './ChangeGroupPane.tsx'
+import { Group, ToolButton } from './ChangeGroup.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
 import { BottomPane, type OpenFile } from './BottomPane.tsx'
-import { PaneResizer } from './pane-resizer.tsx'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
@@ -47,10 +47,7 @@ import {
   ArrowDownGlyph,
   ArrowUpGlyph,
   BranchGlyph,
-  CaretGlyph,
   CloseGlyph,
-  DotGlyph,
-  MinusGlyph,
   PlusGlyph,
   RefreshGlyph,
   RingGlyph,
@@ -58,15 +55,6 @@ import {
 } from './icons.tsx'
 
 export type { Translate }
-
-/** Smallest the staged drawer may be dragged to, in pixels. */
-const STAGED_MIN_HEIGHT = 44
-
-/**
- * Height kept for the rail, the commit box and a usable change list below, however
- * far the staged drawer is dragged.
- */
-const STAGED_RESERVED_HEIGHT = 220
 
 /** The change-list groups, in the order the panel draws them. */
 const CHANGE_AREAS: readonly ChangeArea[] = ['conflicted', 'staged', 'unstaged', 'untracked']
@@ -219,32 +207,6 @@ function useRepoSnapshot(
   }
 }
 
-/** One glyph button with a tooltip and an accessible name. */
-function ToolButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  readonly label: string
-  readonly disabled?: boolean
-  readonly onClick: () => void
-  readonly children: ReactNode
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      className={cls.tool}
-      title={label}
-      aria-label={label}
-      disabled={disabled === true}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  )
-}
-
 /**
  * The state rail: which branch, how it stands against its upstream (FR-1.5), and
  * the three sync actions (FR-5.1).
@@ -354,204 +316,6 @@ function BranchRail({
 }
 
 /**
- * One changed file, with the badge its group gives it and its staging action.
- *
- * The whole row opens the diff (FR-2.1) rather than only its path: a row is the
- * unit the list is made of, and the row is what the pointer is on. That makes the
- * `+`/`−` buttons inside it a conflict of intent — pressing one must stage, and
- * must NOT also open a diff — so the action strip stops the click from reaching
- * the row. The strip is a plain `div` for exactly that: `ToolButton` keeps its
- * one-argument `onClick` signature, and the containment lives where the layout
- * says it does.
- */
-function ChangeRow({
-  entry,
-  area,
-  t,
-  busy,
-  onStage,
-  onUnstage,
-  onOpen,
-}: {
-  readonly entry: FileChange
-  readonly area: ChangeArea
-  readonly t: Translate
-  readonly busy: boolean
-  readonly onStage: (paths: readonly string[]) => void
-  readonly onUnstage: (paths: readonly string[]) => void
-  readonly onOpen: (entry: FileChange, area: ChangeArea) => void
-}): ReactNode {
-  const { directory, name } = pathParts(entry.path)
-  const badge = badgeFor(entry, area)
-  // A rename is the one case where the row cannot stand alone: the new path is
-  // only half the story, so the original joins the tooltip.
-  const tooltip =
-    entry.origPath === undefined ? entry.path : `${entry.origPath} → ${entry.path}`
-  // A staged row offers `−`; everything else offers `+`. For a conflict, `+` is
-  // also how a merge is marked resolved — the same command git would be given.
-  const canUnstage = area === 'staged'
-
-  return (
-    <div
-      className={cls.row}
-      title={tooltip}
-      role="button"
-      tabIndex={0}
-      aria-label={t('diff.open', { path: entry.path })}
-      onClick={() => onOpen(entry, area)}
-      onKeyDown={(event) => {
-        // Only the row's own key press counts. A key press on the `+`/`−` inside
-        // it bubbles here, and Space activates a button — so without this guard,
-        // staging by keyboard would also open a diff, the same bug the click
-        // handler's `stopPropagation` prevents for the mouse.
-        if (event.target !== event.currentTarget) return
-        if (event.key !== 'Enter' && event.key !== ' ') return
-        // Space would otherwise scroll the panel, which is not what pressing a
-        // row means.
-        event.preventDefault()
-        onOpen(entry, area)
-      }}
-    >
-      <span className={cls.badge} data-status={badge}>
-        {badge}
-      </span>
-      <span className={cls.path}>
-        {directory !== '' && <span className={cls.pathDir}>{directory}</span>}
-        <span className={cls.pathName}>{name}</span>
-      </span>
-      <span className={cls.rowActions} onClick={(event) => event.stopPropagation()}>
-        {!canUnstage && (
-          <ToolButton
-            label={t('action.stage')}
-            disabled={busy}
-            onClick={() => onStage([entry.path])}
-          >
-            {/* Bigger than the rail's tool glyphs: this is the row's main click,
-                and the row is where the panel is used most. */}
-            <PlusGlyph size={16} />
-          </ToolButton>
-        )}
-        {canUnstage && (
-          <ToolButton
-            label={t('action.unstage')}
-            disabled={busy}
-            onClick={() => onUnstage([entry.path])}
-          >
-            <MinusGlyph size={16} />
-          </ToolButton>
-        )}
-      </span>
-    </div>
-  )
-}
-
-/** A group's bulk action (FR-3.2). */
-interface GroupBatch {
-  /** Which way the whole group moves. */
-  readonly kind: 'stage' | 'unstage'
-  /** Run it over every path in the group. */
-  readonly run: () => void
-}
-
-/**
- * One group of changes: a disclosure header, its count, its bulk action, and its
- * rows.
- *
- * The bulk action is FR-3.2 and it is not a convenience: §1.3's fourth lesson is
- * that a first commit of a few dozen untracked files is a disaster when each one
- * needs its own `+`.
- *
- * The header folds the group (§4.2 draws exactly that caret). The count stays on
- * screen while folded, because "there are 37 untracked files" is the reason to
- * open it and hiding the number as well would make folding the same as losing
- * them. The caret, the name and the count are one button and the bulk action is
- * its SIBLING — a button inside a button is invalid, and the inner one would not
- * be clickable in every browser.
- */
-function Group({
-  label,
-  area,
-  entries,
-  t,
-  busy,
-  batch,
-  emptyNote,
-  collapsed,
-  onToggle,
-  onStage,
-  onUnstage,
-  onOpen,
-}: {
-  readonly label: string
-  readonly area: ChangeArea
-  readonly entries: readonly FileChange[]
-  readonly t: Translate
-  readonly busy: boolean
-  readonly batch?: GroupBatch
-  /**
-   * Copy to show when the group has no rows, which also keeps the group on
-   * screen. Without it an empty group renders nothing at all — right for a list
-   * that comes and goes, wrong for the staged drawer, which is the anchor of the
-   * commit box above it and should not vanish the moment the index is empty.
-   */
-  readonly emptyNote?: string
-  /** Whether the group's rows are folded away. */
-  readonly collapsed: boolean
-  /** Fold or unfold this group. */
-  readonly onToggle: () => void
-  readonly onStage: (paths: readonly string[]) => void
-  readonly onUnstage: (paths: readonly string[]) => void
-  readonly onOpen: (entry: FileChange, area: ChangeArea) => void
-}): ReactNode {
-  if (entries.length === 0 && emptyNote === undefined) return null
-  return (
-    <section className={cls.group} data-group={area} data-collapsed={String(collapsed)}>
-      <div className={cls.groupHead}>
-        <button
-          type="button"
-          className={cls.groupToggle}
-          aria-expanded={!collapsed}
-          title={collapsed ? t('group.expand') : t('group.collapse')}
-          onClick={onToggle}
-        >
-          <CaretGlyph className={cls.groupCaret} />
-          <span className={cls.groupLabel}>{label}</span>
-          <span className={cls.count}>{entries.length}</span>
-        </button>
-        {batch !== undefined && (
-          <span className={cls.groupActions}>
-            <button
-              type="button"
-              className={cls.ghost}
-              disabled={busy}
-              onClick={batch.run}
-            >
-              {batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')}
-            </button>
-          </span>
-        )}
-      </div>
-      {!collapsed && entries.length === 0 && (
-        <p className={cls.groupEmpty}>{emptyNote}</p>
-      )}
-      {!collapsed &&
-        entries.map((entry) => (
-          <ChangeRow
-            key={`${area}:${entry.path}`}
-            entry={entry}
-            area={area}
-            t={t}
-            busy={busy}
-            onStage={onStage}
-            onUnstage={onUnstage}
-            onOpen={onOpen}
-          />
-        ))}
-    </section>
-  )
-}
-
-/**
  * The git panel.
  * @param props - Session, git client, copy, and the tab's abort signal.
  */
@@ -570,8 +334,6 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * opened still exists.
    */
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
-  /** `null` means "not dragged yet": the stylesheet's cap applies. */
-  const [stagedHeight, setStagedHeight] = useState<number | null>(null)
   // Folded groups are a preference, not a render detail: someone who folds
   // "untracked" away does not want it back on the next visit (§4.2 draws the
   // caret). Initialised from storage, written back whenever it changes.
@@ -625,7 +387,23 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const perform = useCallback(
     async (op: ActionOp, label: string, operation: () => Promise<Result<string>>): Promise<void> => {
       setAction({ kind: 'running', op, label })
-      const result = await operation()
+      let result: Result<string>
+      try {
+        result = await operation()
+      } catch (error: unknown) {
+        // A git client that throws instead of answering — a client-side bug, or
+        // `fetch` refusing before it is a Result at all — must not leave the
+        // panel spinning on an operation nobody is running any more. Turning it
+        // into an ordinary failure keeps the same rule as everything else here:
+        // the reason lands beside the list (§4.3).
+        result = {
+          ok: false,
+          error: {
+            code: 'git-failed',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }
+      }
       if (!result.ok) {
         setAction({ kind: 'failed', op, label, error: result.error })
         return
@@ -691,12 +469,19 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   const canPush = onBranch && (hasUpstream ? status.branch.ahead > 0 : true)
   const canSync = onBranch && hasUpstream && (status.branch.ahead > 0 || status.branch.behind > 0)
 
+  // Both staging actions take a list, and the host refuses an empty one
+  // (`validatePaths`) — which is the right contract, so the panel never sends it:
+  // nothing to move means nothing to do, not a request that comes back as "the
+  // request was incomplete". The group's own bulk button is disabled in that state
+  // too, so this is the belt to its braces.
   const stage = (paths: readonly string[]): void => {
+    if (paths.length === 0) return
     void perform('stage', t('action.stage'), async () =>
       reportOf(await git.stage(sessionId, paths, signal)),
     )
   }
   const unstage = (paths: readonly string[]): void => {
+    if (paths.length === 0) return
     void perform('unstage', t('action.unstage'), async () =>
       reportOf(await git.unstage(sessionId, paths, signal)),
     )
@@ -775,43 +560,36 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           {action.summary === '' ? action.label : action.summary}
         </p>
       )}
-      {/* The column: the staged drawer, the message box, the working-tree list,
-          then the bottom pane. The first two are deliberately not VS Code's order
-          — see the drawer's own comment — and the last one cannot be: VS Code
-          opens a diff in the editor area, and this plugin registers only a
-          right-sidebar tab, so the diff shares the bottom pane with the history as
-          its second tab (`BottomPane`). FR-2.1 still holds in both cases:
-          embedded, never a modal. */}
+      {/* The column: the staged drawer, the message box, the working-tree
+          drawers, the conflict group, then the bottom pane. The first two are
+          deliberately not VS Code's order — see the drawer's own comment — and the
+          last one cannot be: VS Code opens a diff in the editor area, and this
+          plugin registers only a right-sidebar tab, so the diff shares the bottom
+          pane with the history as its second tab (`BottomPane`). FR-2.1 still
+          holds in both cases: embedded, never a modal. */}
       {/* The staged drawer sits directly above the commit box, because it is what
           that box commits: the association is the closest one in the panel, and it
           is worth breaking VS Code's own order (message box first, staged list
           below it) to make it read — these files, this message, commit. The cost
           is that staging a row moves it across the box, which is the same jump
-          VS Code makes between its two groups. */}
-      <div className={cls.stagedDrawer}>
-        <PaneResizer
-          label={t('staged.resize')}
-          minHeight={STAGED_MIN_HEIGHT}
-          reserved={STAGED_RESERVED_HEIGHT}
-          onResize={setStagedHeight}
-        />
-        <div className={cls.stagedBody} style={stagedHeight === null ? undefined : { height: `${stagedHeight}px`, maxHeight: 'none' }}>
-            <Group
-              label={t('group.staged')}
-              area="staged"
-              entries={staged}
-              t={t}
-              busy={busy || pending}
-              batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
-              emptyNote={t('group.stagedEmpty')}
-              collapsed={collapsedGroups.has('staged')}
-              onToggle={() => toggleGroup('staged')}
-              onStage={stage}
-              onUnstage={unstage}
-              onOpen={openDiff}
-            />
-        </div>
-      </div>
+          VS Code makes between its two groups. It is also the one drawer that
+          stays on screen when it is empty: it is the box's anchor, and its count
+          of zero is the answer to "what will this commit?". */}
+      <ChangeGroupPane
+        area="staged"
+        label={t('group.staged')}
+        resizeLabel={t('staged.resize')}
+        entries={staged}
+        t={t}
+        busy={busy || pending}
+        batch={{ kind: 'unstage', run: () => unstage(staged.map((entry) => entry.path)) }}
+        emptyNote={t('group.stagedEmpty')}
+        collapsed={collapsedGroups.has('staged')}
+        onToggle={() => toggleGroup('staged')}
+        onStage={stage}
+        onUnstage={unstage}
+        onOpen={openDiff}
+      />
       <CommitBox
         message={message}
         onMessage={setMessage}
@@ -831,13 +609,35 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           </div>
         ) : (
           <>
-            {/* Conflicts get a group and a `+` per row, but no bulk action: the
-                conflict UI proper (FR-9) is a later milestone, and "stage all"
-                over a half-resolved merge is not a shortcut worth offering. */}
-            <Group label={t('group.conflicted')} area="conflicted" entries={conflicted} t={t} busy={busy || pending} collapsed={collapsedGroups.has('conflicted')} onToggle={() => toggleGroup('conflicted')} onStage={stage} onUnstage={unstage} onOpen={openDiff} />
+            {/* Conflicts keep the top of the list, where VS Code puts them: while
+                a merge is open, nothing in the panel matters more. They get a
+                group and a `+` per row, but no bulk action — the conflict UI
+                proper (FR-9) is a later milestone, and "stage all" over a
+                half-resolved merge is not a shortcut worth offering — and no
+                drawer either: a group that exists for one afternoon is not height
+                anyone wants to take back from the list for good. */}
             <Group
-              label={t('group.unstaged')}
+              label={t('group.conflicted')}
+              area="conflicted"
+              entries={conflicted}
+              t={t}
+              busy={busy || pending}
+              collapsed={collapsedGroups.has('conflicted')}
+              onToggle={() => toggleGroup('conflicted')}
+              onStage={stage}
+              onUnstage={unstage}
+              onOpen={openDiff}
+            />
+            {/* The working tree as two drawers with the same shape as the staged
+                one — each with its own grip, its own cap, and its own scroller, so
+                "make this group taller" works on any of them and a long group can
+                never push another out of the panel. They are not resident: a group
+                with no rows is not a pane worth keeping an empty note in, which is
+                exactly what the staged drawer above is for. */}
+            <ChangeGroupPane
               area="unstaged"
+              label={t('group.unstaged')}
+              resizeLabel={t('unstaged.resize')}
               entries={unstaged}
               t={t}
               busy={busy || pending}
@@ -848,9 +648,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
               onUnstage={unstage}
               onOpen={openDiff}
             />
-            <Group
-              label={t('group.untracked')}
+            <ChangeGroupPane
               area="untracked"
+              label={t('group.untracked')}
+              resizeLabel={t('untracked.resize')}
               entries={untracked}
               t={t}
               busy={busy || pending}

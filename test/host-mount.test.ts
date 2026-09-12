@@ -170,6 +170,81 @@ describe('the host plugin entry', () => {
     }
   })
 
+  it('refuses an empty path list over the wire, which is the shape the panel once sent', async () => {
+    // The panel's "unstage all" on an empty staged drawer posted `paths: []`, and
+    // this is what it got back: `bad-request` — whose copy tells the user to
+    // reopen a perfectly healthy panel. The client no longer sends it, and this
+    // pins the host half of the contract: an empty list is refused before git is
+    // asked to `reset` nothing.
+    //
+    // Note the status. This adapter answers 200 for a *domain* failure — the
+    // envelope's `ok: false` is the answer, and the browser's one error path reads
+    // it there — and reserves 4xx for a request the transport itself could not
+    // accept. Both halves are asserted below, because collapsing them would hide
+    // which layer said no.
+    const repo = makeRepo('empty-paths')
+    write(repo, 'a.txt', 'one\n')
+    const { ctx, registrations } = stubContext({ 'session-1': repo })
+    apply(ctx)
+    const harness = await serve(registrations)
+    try {
+      for (const operation of ['stage', 'unstage']) {
+        const response = await fetch(`${harness.origin}/git-panel/${operation}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: harness.origin },
+          body: JSON.stringify({ session: 'session-1', paths: [] }),
+        })
+        const body = (await response.json()) as {
+          ok: boolean
+          error: { code: string; message: string }
+        }
+        assert.equal(response.status, 200, `${operation}: a domain failure rides the envelope`)
+        assert.equal(body.ok, false)
+        assert.equal(body.error.code, 'bad-request')
+        assert.equal(body.error.message, 'at least one path is required')
+      }
+
+      // A body the transport cannot accept is the other half. `paths` that is not
+      // an array of strings is refused by the route rather than the service — but
+      // it is still an *operation* failure, so it also rides the envelope at 200.
+      // The status is 400 only for a request that never became an operation at all
+      // (no session, an unreadable body, a body that is not an object).
+      const malformed = await fetch(`${harness.origin}/git-panel/stage`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ session: 'session-1', paths: 'a.txt' }),
+      })
+      assert.equal(malformed.status, 200)
+      const malformedBody = (await malformed.json()) as {
+        ok: boolean
+        error: { code: string; message: string }
+      }
+      assert.equal(malformedBody.error.code, 'bad-request')
+      assert.equal(malformedBody.error.message, 'paths must be an array of strings')
+
+      const noSession = await fetch(`${harness.origin}/git-panel/stage`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ paths: ['a.txt'] }),
+      })
+      assert.equal(noSession.status, 400, 'no operation can be named without a session')
+      assert.equal(
+        ((await noSession.json()) as { error: { message: string } }).error.message,
+        'the session is required',
+      )
+
+      // Nothing moved: the file is still untracked, not staged by a no-op.
+      const status = await fetch(`${harness.origin}/git-panel/status?session=session-1`)
+      const statusBody = (await status.json()) as {
+        value: { groups: { staged: { path: string }[]; untracked: { path: string }[] } }
+      }
+      assert.deepEqual(statusBody.value.groups.staged, [])
+      assert.deepEqual(statusBody.value.groups.untracked.map((entry) => entry.path), ['a.txt'])
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('unregisters both routes when its effect is disposed', () => {
     const { ctx, registrations, disposers } = stubContext({})
     apply(ctx)

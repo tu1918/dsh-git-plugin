@@ -209,7 +209,11 @@ discard/deleteBranch 一起写。
   `stopPropagation`（键盘侧另有 `target === currentTarget` 守卫，否则 Space 会既暂存又开 diff）；
   `staged`→`index`、其余→`worktree`（FR-2.2）。刷新后文件已不在任何分组里就把 dock 收回。
 - `ui/error-copy.ts` — 把 `errorCopy` 从 `StatusPanel` 抽出，避免 DiffView ↔ StatusPanel 互相 import。
-- `ui/pane-resizer.tsx` — 可拖动分区高度的通用抓手（底部区域挂一个）。
+- `ui/ChangeGroup.tsx` — 一个变更分组本身（表头/折叠/计数/批量按钮 + 变更行），行与分组是两种容器共用的
+  （常驻抽屉、以及冲突那种普通分组），放在一处才不会各自漂移。
+- `ui/ChangeGroupPane.tsx` — 常驻抽屉：`PaneResizer` + 自己的滚动体 + `Group`，已暂存/更改/未跟踪三个分组
+  共用同一个形状（各自拖动、各自滚动、各自 40% 上限）。
+- `ui/pane-resizer.tsx` — 可拖动分区高度的通用抓手（每个常驻抽屉一个、底部区域一个）。
 - `ui/History.tsx` — 提交列表（提交行 + 分页加载），从 `StatusPanel` 抽出，成为底部区域的第一个 tab 内容。
 - `ui/StatusPanel.tsx` 的分组批量按钮改为**常显**（见 D19），分组名在窄侧栏里先省略号收缩，
   保证按钮永远不被挤出可视区。
@@ -234,6 +238,11 @@ discard/deleteBranch 一起写。
 | 顺手修：历史区的展开箭头**从来没转过**——`data-open` 传给了图标组件，而图标只转发 `size`/`className`，属性丢在半路。现在两个箭头都按父按钮的 `aria-expanded` 旋转 | `styles.ts` 的 `historyCaret` / `groupCaret` |
 | 滚动条不再压住行内 `+`/`−` 与分组批量按钮：面板内的滚动容器改成**占据列宽**的滚动条（Chromium 走 `::-webkit-scrollbar`，Firefox 走 `scrollbar-width: thin`），列表容器再留 10px 右内边距兜底 overlay 引擎——overlay 滚动条正好在滚动容器右缘浮起，而那里原本就是按钮的位置（滚动条出现 = 列表变长 = 按钮被盖住），这条是运行中实测后报来的 | `.dgp-body` 的 `padding-right` + `styles.ts` 的 scrollbar 区块 |
 | **分区高度可拖**：抽出通用 `PaneResizer`（`role="separator"` + 顶部 7px 拖动条），底部区域（tab 条 + 内容）整体可拖，变更列表作为剩余空间随之伸缩；默认高度按 tab 分：diff 固定 `50vh`，提交列表按内容高、上限 `40vh`（五条提交不该占半屏）；提交框 textarea 的可拖上限从 160px 提到 260px | `ui/pane-resizer.tsx` + `.dgp-bottom` |
+| **「更改」「未跟踪」与「已暂存」同构**：抽出一个可复用的 `ChangeGroupPane`（`PaneResizer` + 自有滚动体 + `Group`），三个常驻分组各挂一个，各自拖动、各自滚动、默认高度都是自己内容的 40% 上限——「每个分区的高度要能自己拖」此前只有已暂存区满足；「已暂存」仍是唯一常驻（空态 + 计数 0）的抽屉，工作区两个分组没内容就不占位。冲突分组保持普通分组：它随合并来去，不值得为它长期让出高度（VS Code 也把冲突放在变更列表最上）。行/分组组件从 `StatusPanel` 移到 `ui/ChangeGroup.tsx`，面板从 884 行降到 662 行 | `ui/ChangeGroupPane.tsx` + `ui/ChangeGroup.tsx` + `.dgp-change-drawer`（原 `.dgp-staged-drawer`）；文案 `unstaged.resize` / `untracked.resize` |
+| 顺手补测试：拖动条此前只测「按下并移动」，从不派发 `pointerup`——而抓手监听的是 `window`（指针移出 7px 条带也要继续拖），于是**没释放的抓手会继续改后面所有拖动的高度**。现在测试用 `dragGrip()`（按下 → 移动 → 抬起），并断言「抬起后再移指针不再改高度」「拖一个分区不动另一个」 | `test/client-panel.test.ts` 的 `dragGrip()` |
+| **修：空索引上点「全部取消暂存」报错**（用户实测报来）。已暂存抽屉是唯一常驻的分组，计数 0 时批量按钮照样在，点了就发 `paths: []`——host 按契约拒掉（`validatePaths`：至少一个路径），面板把这条渲染成「请求不完整，请重新打开这个面板」，可面板本身没毛病，这句提示帮不上任何忙。三层修：① 分组批量按钮在**没有行时禁用**（仍常显、不回到 hover-only，`title` 用该分组自己的空态文案补完一句话，如「全部取消暂存 · 无暂存更改」）；② 客户端的 `stage`/`unstage` 对空数组直接 no-op，不发请求（host 侧契约不动：空列表就该被拒）；③ `perform` 把「git 客户端抛异常」也变成一次普通失败——此前 `await operation()` 抛出会让操作永远停在 `running`（转圈 + 按钮永久禁用，且不报错） | `ChangeGroup` 的批量按钮 + `StatusPanel` 的 `stage`/`unstage` 与 `perform`；样式 `.dgp-ghost:disabled` |
+| 边界测试补齐：客户端「空分组不发请求 / 禁用按钮带解释 / 同组有行时照常工作」；`perform` 对抛异常客户端的失败呈现（原因保留、不误报成功）；host 侧 wire 级「`paths: []` 返回 `bad-request`、`paths` 不是字符串数组同样被拒、且仓库状态未被 no-op 改动」，并据此钉住本适配器的**状态码约定**：*操作*失败走 200 + `ok:false` 信封，只有「请求根本没成为一次操作」（缺 session、body 读不出、body 不是对象）才 4xx | `test/client-panel.test.ts` + `test/host-mount.test.ts` |
+| **修：行内 `+`/`−` 太靠边、被挡**（用户实测报来）。原因是几何而非配色：`.dgp-row` 同时有 `width: 100%` 和左右内边距（12px + 8px），而全表没有全局 `box-sizing: border-box`（只有 `.dgp-head` 与提交框 textarea 各自声明过），于是行的边框盒比裁剪它的抽屉还宽 20px，贴在行右内边距上的 30px 按钮正好落进被裁掉的那条。改：行声明 `box-sizing: border-box`；行与分组表头的右内边距统一到 12px（两者本来就该是同一列控件，且行右缘就是按钮，行的内边距决定它看着是否贴墙）；再把「按钮离边缘的余量」放到真正拥有行的滚动容器上——`.dgp-change-body` 加 10px 右内边距（`.dgp-body` 那份原样保留，它是为 body 自己的兜底滚动条留的）。现在按钮右边到抽屉边缘：行内 12px + 滚动容器 10px = 22px（滚动条出现时，它自己那一列再占 10px） | `.dgp-row` 的 `box-sizing`/右内边距 + `.dgp-group-head` 的右内边距 + `.dgp-change-body` 的 `padding-right`；回归测试读 `getComputedStyle` 断言这几项 |
 
 ---
 
