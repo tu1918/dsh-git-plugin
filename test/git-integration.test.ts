@@ -73,6 +73,28 @@ describe('status against a real repository', () => {
     assert.equal(changedPathCount(entries), 4)
   })
 
+  it('expands a wholly untracked directory into the files inside it', () => {
+    const repo = makeRepo('untracked-dir')
+    write(repo, 'kept.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    // Nothing under docs/ is tracked, so git's own default would fold it into a
+    // single `docs/` record. The panel lists files, so the read asks for `-uall`.
+    write(repo, 'docs/one.md', 'one\n')
+    write(repo, 'docs/nested/two.md', 'two\n')
+    write(repo, 'loose.md', 'loose\n')
+
+    const groups = groupsOf(parseStatusV2(rawStatus(repo)).entries)
+    assert.deepEqual(
+      groups.untracked.map((entry) => entry.path),
+      ['docs/nested/two.md', 'docs/one.md', 'loose.md'],
+    )
+    assert.deepEqual(groups.staged, [])
+    assert.deepEqual(groups.unstaged, [])
+    assert.equal(changedPathCount(parseStatusV2(rawStatus(repo)).entries), 3)
+  })
+
   it('carries a rename’s original path across a filename with spaces', () => {
     const repo = makeRepo('rename')
     write(repo, 'old name.txt', 'content\n')

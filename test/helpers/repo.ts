@@ -172,10 +172,10 @@ export function currentBranch(repo: string): string {
  * Kept beside the helpers so a test cannot accidentally assert against a
  * differently-shaped invocation than the host uses.
  * @param repo - Repository directory.
- * @returns Raw `--porcelain=v2 --branch -z` stdout.
+ * @returns Raw `--porcelain=v2 --branch -z -uall` stdout.
  */
 export function rawStatus(repo: string): string {
-  return git(repo, ['status', '--porcelain=v2', '--branch', '-z'])
+  return git(repo, ['status', '--porcelain=v2', '--branch', '-z', '-uall'])
 }
 
 /** Remove every directory these helpers created. */

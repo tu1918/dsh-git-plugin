@@ -566,11 +566,19 @@ export function createGitService(
     return { ok: true, value: undefined }
   }
 
-  /** Read the whole-repository status; shared by `/status` and `stagedPaths`. */
+  /**
+   * Read the whole-repository status; shared by `/status` and `stagedPaths`.
+   *
+   * `-uall` is not decoration: git's own `--untracked-files=normal` default folds
+   * a wholly untracked directory into a single `dir/` record, and the panel
+   * lists files. A directory path has no diff, no file name in the tree, and one
+   * row standing for many files in a stage-all. Every status read passes it so
+   * the four callers agree on what "untracked" lists.
+   */
   async function readStatus(sessionId: string): Promise<Result<RepoStatus>> {
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
-    const outcome = await run(['status', '--porcelain=v2', '--branch', '-z'], root.value)
+    const outcome = await run(['status', '--porcelain=v2', '--branch', '-z', '-uall'], root.value)
     if (!outcome.ok) return outcome
 
     const parsed = parseStatusV2(outcome.value.stdout)
@@ -613,7 +621,7 @@ export function createGitService(
    * @returns The branch, or the failure the command hit.
    */
   async function currentBranch(cwd: string): Promise<Result<BranchInfo>> {
-    const outcome = await run(['status', '--porcelain=v2', '--branch', '-z'], cwd)
+    const outcome = await run(['status', '--porcelain=v2', '--branch', '-z', '-uall'], cwd)
     if (!outcome.ok) return outcome
     return { ok: true, value: parseStatusV2(outcome.value.stdout).branch }
   }
@@ -1903,7 +1911,7 @@ export function createGitService(
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
 
-    const status = await run(['status', '--porcelain=v2', '--branch', '-z'], root.value)
+    const status = await run(['status', '--porcelain=v2', '--branch', '-z', '-uall'], root.value)
     if (!status.ok) return status
     const groups = groupsOf(parseStatusV2(status.value.stdout).entries)
     const tracked = groups.staged.length + groups.unstaged.length + groups.conflicted.length
@@ -2111,7 +2119,7 @@ export function createGitService(
 
       // Settle the ○/● marker from the same status read the panel already needs.
       const statusRun = await runner.run(
-        ['status', '--porcelain=v2', '--branch', '-z'],
+        ['status', '--porcelain=v2', '--branch', '-z', '-uall'],
         options(root.value, false),
       )
       let commits = refs === undefined ? page : withRefs(page, refs)
