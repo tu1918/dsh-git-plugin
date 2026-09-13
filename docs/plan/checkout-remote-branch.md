@@ -1,6 +1,6 @@
 # 计划 · 检出远程分支
 
-- **来源**：`docs/requirements.md` §3.6 第 1 行；FR-4.5；`docs/plan.md` §10.3 第 1 行、D43
+- **来源**：`docs/requirements.md` §3.6 第 1 行、FR-4.5（该文件已于 2026-09-13 删除，标签为历史出处）；`docs/plan.md` §10.3 第 1 行、D43
 - **对应 TODO**：[TODO.md](../TODO.md) A-1
 - **状态**：未排期（前置条件已满足，见下）
 

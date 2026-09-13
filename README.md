@@ -5,22 +5,21 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document, and currently through **M5b order 9**: the
-foundation, a read-only panel, the commit loop (stage → commit → push), the diff
-view, branch management with the merge state, an AI-written commit message, a
-commit detail — then M5a's discard / undo / stash and M5b's commit-file
-drill-down, copy entries, the commit graph, multi-repository workspaces, and the
-history row's rewriting operations (revert, cherry-pick, reset, squash, drop).
-What remains: the v1.0 release pass. Every item of the requirements document's
-own M5 list — discard, stash, the commit graph, undo, multi-repository — has
-shipped.
+Currently through **M5b order 9**: the foundation, a read-only panel, the commit
+loop (stage → commit → push), the diff view, branch management with the merge
+state, an AI-written commit message, a commit detail — then M5a's discard / undo
+/ stash and M5b's commit-file drill-down, copy entries, the commit graph,
+multi-repository workspaces, and the history row's rewriting operations (revert,
+cherry-pick, reset, squash, drop). What remains: the v1.0 release pass. Every
+item of the original M5 list — discard, stash, the commit graph, undo,
+multi-repository — has shipped.
 
 ## Docs
 
 | File | What it is |
 |---|---|
-| `docs/requirements.md` | The requirements document, v0.2. A **byte-exact copy** (20 778 bytes, sha256 `f42d4277…`) kept as the single source of truth — read-only; a change means a new version replacing it wholesale. |
-| `docs/plan.md` | The execution plan: milestone status against the doc's own acceptance criteria, what each completed milestone delivered and where, every deliberate deviation from the doc with its reason, and the next milestone's task list. |
+| `docs/TODO.md` | The open-items list — only what has not shipped, each entry with why it is not done and where its plan lives. An entry is deleted once it ships. |
+| `docs/plan.md` | The execution plan: milestone status against the original acceptance criteria, what each completed milestone delivered and where, every deliberate deviation from the original requirements with its reason, and the next milestone's task list. |
 
 ## What works today
 
