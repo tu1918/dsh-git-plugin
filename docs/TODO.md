@@ -15,18 +15,23 @@
 ## 状态速览
 
 - 里程碑 M0–M5b 的功能**全部交付**，M5b 按 `docs/plan.md` §10.2 只剩顺序 10 发布收尾。
-- 下面 A 组 10 条来自 §3.6 / §10.3（产品方已登记、未排期）；B 组 1 条是发布收尾；
+- 下面 A 组 11 条来自 §3.6 / §10.3（产品方已登记、未排期）；B 组 1 条是发布收尾；
   C 组 2 条是文档在 D 决策里点名的具体缺口（做法已写明）；D 组是有意不做/等条件的；
-  E 组只差验证，不是代码工作量。A-10~A-12 是 2026-09-13 提出的 diff 视图操作四条里的
+  E 组只差验证，不是代码工作量；**F 组 1 条是产品方 2026-09-13 报来的缺陷**
+  （git 操作没有端到端超时，点 fetch 一直转圈）。
+- A-10~A-12 是 2026-09-13 提出的 diff 视图操作四条里的
   后三条（前一条「操作分区」已交付，见 `docs/plan.md` 的「验收期改动：diff 视图的操作分区」）：
   单按钮与自动换行都是视图操作，落在它定下的头部视图操作区；行间展开落在它定下的 gap 行。
   三条都已写出初步计划，见各自的 `docs/plan/<slug>.md`；A-11 已定做法（折行只在上下对照生效、
   左右对照下按钮禁用）；A-12 的两处待定也都定了（行数用算式推导；内容走"逐处展开、开到底"，
   新增一条按 revision 读内容的路由）。
+- A-13（展示 work tree）与 F-1（git 操作的端到端超时）同日提出，也各有一份计划文件
+  （`docs/plan/worktree-list.md`、`docs/plan/operation-deadline.md`）；两者的做法都还有
+  待产品方定的问题，见各自文档的「待定」节。
 - **一处文档已过时**：`docs/plan.md` §10.3 列的「凭据缺失的专门文案」在 D44 已交付
   （`auth-required` 分类 + 失败通知内的凭据表单 + 重跑原操作），不再是待办。
   §3.6 那一格说的是另一件事（SSH / 代理 / 同主机多仓库不同凭据），见 A-8。
-- **A-10~A-12 只落在 `plan.md`，没进 `requirements.md` §3.6**：该文件权限是 `400`
+- **A-10~A-13 与 F-1 只落在 `plan.md`，没进 `requirements.md` §3.6**：该文件权限是 `400`
   （只读，`plan.md` / `TODO.md` 都是可写的），写不进去。要把「要什么」那一路补齐，
   得先由产品方放开该文件的写权限。
 
@@ -46,6 +51,7 @@
 | A-10 | **diff 视图改成单按钮切换**（同行 ⇄ 左右；图标随当前布局变，沿用现有两枚字形） | plan §10.3（产品方 2026-09-13 提出） | 现在是两枚段控按钮、用 `aria-pressed` 标出当前布局（`ui/DiffView.tsx:642`）；改成单按钮后这个属性没有位置，要换成「点下去会变成什么」的文案。落点已定：留在 A-9 交付的 `ViewOps` 组里，视图操作区不是托盘 | [plan/diff-layout-toggle.md](plan/diff-layout-toggle.md) |
 | A-11 | **diff 视图增加「自动换行」开关** | plan §10.3（产品方 2026-09-13 提出） | 没有该开关；行文本不折行，长行靠左右两半各自的横向滚动条看全（`ui/DiffView.tsx:253`）。左右布局的两个滚动容器天然容不下折行（配对两格会错位），故**折行只在上下对照生效，左右对照下按钮禁用**（2026-09-13 定）。落点是 A-9 交付的头部视图操作区（`.dgp-diff-ops`） | [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
 | A-12 | **diff 行间操作：展开两处 hunk 之间的行** | plan §10.3（产品方 2026-09-13 提出） | 缝隙的**行数**由 hunk 的起止行相减即得（2026-09-13 定，不需要新数据）；hunk 之间**一行内容都没有**（`FileDiff.hunks[].lines` 只含 hunk 内，`core/types.ts:495`），故走"逐处展开、开到底"（2026-09-13 定）：新增一条 `GET /git-panel/fileLines` 读 old 侧 blob 的指定行区间——缝隙两侧逐字相同，只读一侧即可，且不必读文件系统。落点是 A-9 登记的 `.dgp-diff-gap` 行（行间操作的载体） | [plan/diff-expand-gap.md](plan/diff-expand-gap.md) |
+| A-13 | **展示 work tree**（列出当前仓库的全部工作树：路径、分支或游离 HEAD、`bare`/`locked`/`prunable` 标记） | plan §10.3（产品方 2026-09-13 提出） | 本插件完全没有 worktree 概念（§12 把「工作树隔离」记成非目标；同 profile 的 `dsh-client-ui-git-graph` 有 `/git/worktree-*`）。数据源是 `git worktree list --porcelain`，纯只读。基础已具备：`host/git-dir.ts:30` 的 `gitDirOf` 会读 linked worktree 的 `.git` **文件**，面板在非主工作树里本来就能跑。要产品方定四件事（入口、是否允许切到别的工作树、单条 record 时是否隐藏、主工作树是否标记），见计划文件 | [plan/worktree-list.md](plan/worktree-list.md) |
 
 ## B. 发布收尾
 
@@ -85,3 +91,9 @@
 - **Windows 上用户名含空格的 sequence editor 路径**：只有推断没有证据（plan §11）。
 - **浏览器目视验收**：M3 之后的 UI 行为只有 jsdom 覆盖，产品方尚未在真实浏览器里看过
   （plan §10.4）。
+
+## F. 缺陷（产品方 2026-09-13 报来）
+
+| # | 缺陷 | 现象 | 根因 / 现状 | 计划 |
+|---|---|---|---|---|
+| F-1 | **git 操作没有端到端超时**（点 fetch 一直转圈、永不返回） | 点「获取所有远程」后 rail 的 spinner 一直转，既不成功也不失败，只能关标签页或刷新页面 | 两层都不保险。host 的 15s 只是 `execFile` 的 `timeout`（`host/git-exec.ts:39`）：到点**只发 SIGTERM、不升级 SIGKILL**，回调又挂在进程 `close` 上（要等子进程退出且 stdio 管道关闭）——子进程不理会 SIGTERM 时 promise 永不 settle，**本机实测 deadline 15s 而 31s 后仍未 settle**（`git-remote-*`/`ssh` helper 活过父进程占着管道，或进程处于 D 状态）。同一层第二处缺口：`DirectoryQueues`（`git-exec.ts:120`）对排队等待不设 deadline。client（`client/adapter/git-client.ts`）**完全**没有 deadline，只带标签页的 `AbortSignal`（`ui/StatusPanel.tsx:133`，标签页关闭才 abort），也没有取消按钮。**已排除**：黑洞 http/https/ssh 远端都会在 ~15s 以 `timedOut: true` 返回，普通网络挂起是有救的。另有配置洞：`Config.gitTimeoutMs` 写 0 在 Node 里等于不限时（`host/index.ts:39`），会静默关掉安全网 | [plan/operation-deadline.md](plan/operation-deadline.md) |
