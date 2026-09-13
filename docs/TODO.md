@@ -1,13 +1,13 @@
 # TODO · dsh-git-panel
 
 > 未交付项清单，逐条核对到 2026-09-13（包版本仍为 `0.1.0`）。
-> 来源是 `docs/requirements.md` §3.6「已登记、尚未排期的需求」与 `docs/plan.md`
-> §10.2 顺序 10 / §10.3 / §10.4，以及散在 D 编号决策里的「已知未做」。
+> 来源是 `docs/plan.md` §10.2 顺序 10 / §10.3 / §10.4、散在 D 编号决策里的「已知未做」，
+> 以及产品方直接提出的新增。`docs/requirements.md` 已于 2026-09-13 删除，下表「文档条目」
+> 列里对它的引用（`§3.6` / `FR-x.y`）只作历史出处。
 >
-> 两份文档分工：`requirements.md` 写**要什么**，`plan.md` 写**已经是什么、为什么**。
-> 本文件只负责「还差什么」，并在文档里已有做法/前置条件时指向
-> `docs/plan/<slug>.md`。已交付范围见 `README.md` 的「What works today」与
-> `docs/plan.md` §1。
+> 文档分工：`plan.md` 写**已经是什么、为什么**，本文件只负责「还差什么」，
+> 并在已有做法/前置条件时指向 `docs/plan/<slug>.md`。已交付范围见
+> `README.md` 的「What works today」与 `docs/plan.md` §1。
 >
 > **维护规则：条目一旦完成就从本文件删除**（不留 ✓、不留「已交付」小节），
 > 它对应的 `docs/plan/<slug>.md` 一并删除；本文件因此永远只列未完成项。
@@ -15,10 +15,13 @@
 ## 状态速览
 
 - 里程碑 M0–M5b 的功能**全部交付**，M5b 按 `docs/plan.md` §10.2 只剩顺序 10 发布收尾。
-- 下面 A 组 11 条来自 §3.6 / §10.3（产品方已登记、未排期）；B 组 1 条是发布收尾；
+- 下面 A 组 14 条来自 `plan.md` §10.3 与产品方直接提出（未排期）；B 组 1 条是发布收尾；
   C 组 2 条是文档在 D 决策里点名的具体缺口（做法已写明）；D 组是有意不做/等条件的；
   E 组只差验证，不是代码工作量；**F 组 1 条是产品方 2026-09-13 报来的缺陷**
   （git 操作没有端到端超时，点 fetch 一直转圈）。
+- **面向 agent 的那条线已单独立册**：统一写入口（原 A-17）、多 agent 协作、提交出处搬到了
+  [TODO-agent-collaboration.md](TODO-agent-collaboration.md)——那是**唯一动全 harness 承重梁**
+  的一批（注册自己的 `ctx.fs` provider、接管 `write` / `edit`）。本文件此后只管面板自身。
 - A-10~A-12 是 2026-09-13 提出的 diff 视图操作四条里的
   后三条（前一条「操作分区」已交付，见 `docs/plan.md` 的「验收期改动：diff 视图的操作分区」）：
   单按钮与自动换行都是视图操作，落在它定下的头部视图操作区；行间展开落在它定下的 gap 行。
@@ -28,12 +31,16 @@
 - A-13（展示 work tree）与 F-1（git 操作的端到端超时）同日提出，也各有一份计划文件
   （`docs/plan/worktree-list.md`、`docs/plan/operation-deadline.md`）；两者的做法都还有
   待产品方定的问题，见各自文档的「待定」节。
+- A-14（侧边栏里的定义/引用跳转）也同日提出，方向已经选定：接缝用本插件已经在用的原生右侧栏
+  resource 类型、行号走原生的 `params: { line }`，引擎本地编译器优先、`ctx.lsp` 只作可选一路
+  （理由与代价见计划文件）。**但「范围」这一条没定**——它已经超出「git 面板」，是留在本插件
+  还是另起一个插件，得产品方先答。
 - **一处文档已过时**：`docs/plan.md` §10.3 列的「凭据缺失的专门文案」在 D44 已交付
   （`auth-required` 分类 + 失败通知内的凭据表单 + 重跑原操作），不再是待办。
   §3.6 那一格说的是另一件事（SSH / 代理 / 同主机多仓库不同凭据），见 A-8。
-- **A-10~A-13 与 F-1 只落在 `plan.md`，没进 `requirements.md` §3.6**：该文件权限是 `400`
-  （只读，`plan.md` / `TODO.md` 都是可写的），写不进去。要把「要什么」那一路补齐，
-  得先由产品方放开该文件的写权限。
+- **A-10~A-16 与 F-1 只落在 `plan.md` 与本文件**：原先给它们准备的登记处是
+  `requirements.md` §3.6，而该文件已于 2026-09-13 删除——此后新需求由产品方直接提出，
+  登记处就是 `plan.md` §10.3 与本文件，不再有「要什么」与「做了什么」两份文档要对齐的问题。
 
 ---
 
@@ -52,12 +59,14 @@
 | A-11 | **diff 视图增加「自动换行」开关** | plan §10.3（产品方 2026-09-13 提出） | 没有该开关；行文本不折行，长行靠左右两半各自的横向滚动条看全（`ui/DiffView.tsx:253`）。左右布局的两个滚动容器天然容不下折行（配对两格会错位），故**折行只在上下对照生效，左右对照下按钮禁用**（2026-09-13 定）。落点是 A-9 交付的头部视图操作区（`.dgp-diff-ops`） | [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
 | A-12 | **diff 行间操作：展开两处 hunk 之间的行** | plan §10.3（产品方 2026-09-13 提出） | 缝隙的**行数**由 hunk 的起止行相减即得（2026-09-13 定，不需要新数据）；hunk 之间**一行内容都没有**（`FileDiff.hunks[].lines` 只含 hunk 内，`core/types.ts:495`），故走"逐处展开、开到底"（2026-09-13 定）：新增一条 `GET /git-panel/fileLines` 读 old 侧 blob 的指定行区间——缝隙两侧逐字相同，只读一侧即可，且不必读文件系统。落点是 A-9 登记的 `.dgp-diff-gap` 行（行间操作的载体） | [plan/diff-expand-gap.md](plan/diff-expand-gap.md) |
 | A-13 | **展示 work tree**（列出当前仓库的全部工作树：路径、分支或游离 HEAD、`bare`/`locked`/`prunable` 标记） | plan §10.3（产品方 2026-09-13 提出） | 本插件完全没有 worktree 概念（§12 把「工作树隔离」记成非目标；同 profile 的 `dsh-client-ui-git-graph` 有 `/git/worktree-*`）。数据源是 `git worktree list --porcelain`，纯只读。基础已具备：`host/git-dir.ts:30` 的 `gitDirOf` 会读 linked worktree 的 `.git` **文件**，面板在非主工作树里本来就能跑。要产品方定四件事（入口、是否允许切到别的工作树、单条 record 时是否隐藏、主工作树是否标记），见计划文件 | [plan/worktree-list.md](plan/worktree-list.md) |
-
+| A-14 | **侧边栏里的定义/引用跳转（代码导航）**：从符号跳到定义（跨文件也要落到行）、列出引用并跳过去 | plan §10.3（产品方 2026-09-13 提出） | 侧边栏现在没有任何代码导航，本插件两个 tab 都是只读视图。接缝已经具备、**不必新增依赖**：本插件已经在用原生右侧栏的 resource 类型（`client/adapter/sidebar-tab.tsx:159` 的 diff 先例），行号走原生的 `openResource(…, { params: { line } })`（`sidebar-right/lib/types/client/contract/params.d.ts:6`）——所以**不存在**「better-sidebar 的 `openFile` 没有行号」那个缺口。引擎路线 2026-09-13 定方向：不把 `ctx.lsp` 当唯一路径（只有 4 个只读操作、没有 documentSymbol、provider 要用户自装），改为 host 半 CodeIntel + 多条 adapter（`ts-service` 先做、`ctags` 兜其它语言、`ctx.lsp` 可选第三路）。**范围本身还要产品方定**（已超出「git 面板」），见计划文件的「待定」五条 | [plan/code-navigation.md](plan/code-navigation.md) |
+| A-15 | **冲突的「合并」动作**（把两侧合成一个版本） | plan.md「验收期新增：冲突行的三个按钮（FR-9.2）」 | 冲突行里已经画出按钮但**置灰**，悬浮说明写「待后续迭代，建议先由大模型处理」（产品方 2026-09-13 定）。缺的不止一处：没有读三方 blob（`:1:` / `:2:` / `:3:`）的任何能力，也没有把内容写回工作区的正当通道——今天所有内容变更都交给 git 子命令，而 `git restore --ours/--theirs` 只能整取一侧；模型接缝只有提交信息用的 `generateText`（`core/ports.ts:277`，512 token 上限、不接受参数） | 无（做法待定：自己做三方合并，或按产品方建议交给大模型） |
+| A-16 | **分支之间的合并与变基**：把另一个本地分支合并进当前分支（`git merge <branch>`）、把当前分支变基到另一个本地分支（`git rebase <branch>`） | plan §10.3（产品方 2026-09-13 提出；`requirements.md` 已删除，无 FR 编号） | 面板没有发起分支间合并 / 变基的入口。**合并**只在 pull 里被动产生（`pull --no-rebase --no-edit`，D8），事后能由在途操作条继续 / 中止（D50），但没有「把 X 合并进来」这一击；**变基**只出现在两处——A-1 的 Rebase onto origin 与顺序 9 的提交改写（`rebase --onto` / `-i`，D49），都不能把当前分支变基到任意本地分支。要产品方定：merge 是否总是产生合并提交（`--no-ff` 还是允许快进）、合并信息怎么来（`--no-edit`）、rebase 是否只做非交互的 `git rebase <branch>`（手工编辑 todo 一直是非目标）、以及变基范围内含合并提交时是否照 D49 拒绝 | 无（做法待定） |
 ## B. 发布收尾
 
 | # | 待办 | 文档条目 | 现状 | 计划 |
 |---|---|---|---|---|
-| B-1 | **v1.0 发布收尾**：版本号 `0.1.0` → `1.0.0`、README / `plan.md` 已交付范围与测试计数对齐、安装路径核对 | plan §10.2 顺序 10 | 版本号实测仍是 `0.1.0`；安装只验过 `link:` 装法；两份文档的测试计数不一致（plan.md 写 557、requirements.md 写 566） | [plan/release-v1.md](plan/release-v1.md) |
+| B-1 | **v1.0 发布收尾**：版本号 `0.1.0` → `1.0.0`、README / `plan.md` 已交付范围与测试计数对齐、安装路径核对 | plan §10.2 顺序 10 | 版本号实测仍是 `0.1.0`；安装只验过 `link:` 装法；测试计数只以 `npm run check` 的实际输出为准（原先不一致的 `requirements.md` 已于 2026-09-13 删除） | [plan/release-v1.md](plan/release-v1.md) |
 
 ## C. 文档已登记的具体缺口（做法已写明）
 

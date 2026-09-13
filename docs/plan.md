@@ -1,15 +1,13 @@
 # 执行计划 · dsh-git-panel
 
-本文件跟踪 `docs/requirements.md` 的实现进度。
+本文件是本插件的规格与进度记录：做到哪、怎么做的、与当初需求有哪些不一样的
+决定（D 编号）、下一步做什么，以及已登记、尚未排期的事项（§10.3）。
 
-`docs/requirements.md` 是需求文档 v0.2 的**逐字节副本**（20 778 字节，sha256
-`f42d4277a71c1951ce1df9d2b9a8277428b0e5c6de2ff92109d036171e229d09`，与原始
-附件一致）。它是规格，**只读、不要就地编辑**：要改就先出 v0.3 版本再整体替换，
-否则「规格」和「实现」会一起漂移，这份计划也就失去了参照物。
-
-需求文档是**唯一规格来源**。本文件只记录「做到哪、怎么做的、和文档哪里不一样、
-下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
-「与需求文档的偏差」。
+`docs/requirements.md`（需求文档 v0.2，一度是**唯一规格来源**、按逐字节副本维护）
+已于 2026-09-13 由产品方决定**删除**。文中所有 `§x.y` / `FR-x.y` 引用都是它的
+**历史标签**，保留下来指认每处决定的出处；与它的偏差仍逐条记在下面的
+「与需求文档的偏差」。此后新需求由产品方直接提出，登记处是本文件 §10.3 与
+`docs/TODO.md`。
 
 - 代码：`src/`（63 个源文件）、`test/`（24 个测试文件）
 - 校验：`npm run check` → `tsc --noEmit` + 557 项测试 + 两个打包产物
@@ -469,7 +467,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 
 | **分区高度收成一本预算 + 分组表头常驻**（产品方实测提出五条：「更改区大小不要挤压其他区域，精简区域高度变动逻辑」「暂存区设置最小最大高度」「提交信息区设置最小最大高度」「tab 区可以手动改变高度，但限制，不要挤压其他区域导致其他区域越过最小高度」「更改区设置最小高度；untracked 与 change 如果在区域外都要让人能看见——向下滚动时更改标签固定在上方，untracked 同理」） | ① **预算**：新模块 `ui/panel-layout.ts` 给出状态栏 38 / 已暂存：内容高度（上限 `min(40%, 320px)`，预算里为它**预留** 72）/ 提交框 104–240（其中 textarea 52–140，是这一区唯一会变的量）/ 更改列表 ≥140 / dock ≥32 且 `max-height: calc(100% - 358px)`；`DOCK_RESERVED`（358）就是其余分区下限之和，样式表与 `PaneResizer` 的 `reserved` 用同一个常量。更改列表改成 `flex-basis: 0`：**它的内容不再参与 flex 分配**，所以几千个文件既不会压抽屉也不会压 dock，而是自己在区内滚动（旧写法 `flex: auto` 会把内容高度当基准，超载时按比例压所有可压缩分区——正是产品方看到的现象）。② **dock 的两条边界**：拖动由 `reserved` 夹住，**记忆的高度**同样被内联 `maxHeight: calc(100% - 358px)` 夹住，所以在更高的窗口里拖出来的高度不会在更矮的窗口里压破上面的下限。③ **分组表头常驻**：`position: sticky; top: 0`（原本就有）配上**不透明底色**与**表头自己的下边线**（原来那条「下一个分组的上边线」删掉，否则会贴在下一个表头上），于是滚动长列表时「更改」始终在上方，滚到下方时「未跟踪的文件」同样顶住——一眼能看出当前是哪个区、下面还有什么。测试 3 项：各分区的 computed `min/max-height` 与 dock 拖动后的内联夹子、预算的算术与样式表用的是同一个数、四个分组的表头在各自滚动体里都是 sticky 且带那条下边线 |
 | **提交按钮下方那条空白的两次调整（先收窄，再补回一点）** | 第一轮（产品方实测报来：「提交按钮下沿到『更改』组件的空白区域太大了，删除看看效果」）：那段空白是三样东西叠出来的——提交框自己的 **8px 下内边距** + `min-height: 104px` 比内容多出的 **~5px 空隙**（内容 ≈ 8 + textarea 52 + gap 5 + 页脚 26 + 8 = 99）+ 分组表头自己的 **5px 上内边距**，共约 **18.5px**。第二轮（产品方实测：「删掉之后，按钮与更改之间贴死很不舒服」）：下内边距不是回到 8px 而是 **6px**——8px 那一版之所以读起来太宽，是因为下限的空隙也一齐落在按钮下面，收窄之后 6px 就是它能专心当「间距」的数值。现在按钮下沿到「更改」文字共 **~11.5px**（6 + hairline 0.5 + 表头 5），比原来少 7px，且这 7px 全在 textarea 上 | `styles.ts`：`.dgp-commit-box` 的内边距 `8px 12px` → **`8px 12px 6px`**；`.dgp-commit-input-wrap` 拿 `flex: 1 1 auto`，于是下限的空隙（默认字下 **7px**）归 textarea：框仍停在它 104px 的下限上（dock 的预算、已暂存抽屉、下面的列表一格都没动），textarea 从 52px 长到约 59px——少掉的那段空白换成了书写区，而不是又变成按钮下面的一团。**长的是 wrap 而不是 textarea**：这个框是列、wrap 是它的 item，textarea 只是行内 item 跟着 stretch——把 `flex-grow` 写到 textarea 上只会撑宽度，纵向什么都不长。预设值一个都没动（104 / 52 / `DOCK_RESERVED` 不变），测试在既有的「分区预算」用例里钉住两项：提交框 `paddingBottom: 6px`、输入包裹层 `flexGrow: 1` |
-| **删掉提交框里那句解释 `add -u` 的文案**（产品方要求：「将执行 git add -u：只包含已跟踪文件，未跟踪文件不会被提交。文案删除」）。删掉的只是页脚那一句，按钮自己的文案「提交全部已跟踪更改（N）」不动：**范围仍然显式**——哪些文件进这次提交、几个，都在按钮上；不再说的是**机制**。那格 span 照样渲染，因为它是把按钮顶到右端的那一格，`data-commit-scope` 也还挂着（面板与测试仍从这里读范围，空文本不改变布局：`flex: auto` 吃掉余量） | `ui/CommitBox.tsx` 的 `hintOf`：`all-tracked` 返回**空串**（就地注释说明为什么这一格是空的），`locales.ts` 的 `commit.hintAllTracked` 中英两条一并删除（不留没人读的键，类型联合随 zh 字典收窄）。**与文档的一处偏差**：`requirements.md` FR-3.4 的原话是「按钮文案变为『提交全部已跟踪更改』**并明示将执行 `add -u`**」——后半句按产品方要求去掉；`requirements.md` 是只读的定稿（v1.0，`r--------`），所以偏差记在这里而不是回改文档。测试改成反面断言：按钮仍写 `Commit all tracked changes (2)`、`[data-commit-scope]` 仍报 `all-tracked`、而提示行是**空**的、整棵子树里再也找不到 `add -u` |
+| **删掉提交框里那句解释 `add -u` 的文案**（产品方要求：「将执行 git add -u：只包含已跟踪文件，未跟踪文件不会被提交。文案删除」）。删掉的只是页脚那一句，按钮自己的文案「提交全部已跟踪更改（N）」不动：**范围仍然显式**——哪些文件进这次提交、几个，都在按钮上；不再说的是**机制**。那格 span 照样渲染，因为它是把按钮顶到右端的那一格，`data-commit-scope` 也还挂着（面板与测试仍从这里读范围，空文本不改变布局：`flex: auto` 吃掉余量） | `ui/CommitBox.tsx` 的 `hintOf`：`all-tracked` 返回**空串**（就地注释说明为什么这一格是空的），`locales.ts` 的 `commit.hintAllTracked` 中英两条一并删除（不留没人读的键，类型联合随 zh 字典收窄）。**与文档的一处偏差**：`requirements.md` FR-3.4 的原话是「按钮文案变为『提交全部已跟踪更改』**并明示将执行 `add -u`**」——后半句按产品方要求去掉；`requirements.md` 是只读的定稿（v1.0，`r--------`；该文件已于 2026-09-13 删除），所以偏差记在这里而不是回改文档。测试改成反面断言：按钮仍写 `Commit all tracked changes (2)`、`[data-commit-scope]` 仍报 `all-tracked`、而提示行是**空**的、整棵子树里再也找不到 `add -u` |
 | **分支下拉不再占满整条侧栏**（产品方要求：「选择分支的下拉框，太宽了，设置最大宽度即可，最大宽度为现在宽度的 1/3，如果小于最大宽度则根据文字宽度适应」）。浮层从此有**两种宽度、由调用方明说**：`panel`（面板整宽）与 `content`（自己的最长一行宽，上限面板的 1/3）。分支列表是后者；贮藏栈仍是前者——它一行是「选择器 + subject」两行再加一排控件，整宽下都会换行（`.stashActions` 的注释记着这件事），收窄只会更难读，所以**没有**跟着收 | `ui/popover.tsx`：`PopoverProps` 新增**必填**的 `width: 'panel' \| 'content'`（照 `PaneResizer` 的 `edge` 先例不给默认值：调用方必须说出自己开的是哪一种），渲染成 `data-width`；模块文档的「四个决定」改成五个。`styles.ts` 新增 `.dgp-popover[data-width='content'] { right: auto; width: max-content; max-width: calc(100% / 3) }`——层是 `position: absolute`，那个 `100%` 就是它所在的面板，于是「现在宽度的 1/3」与面板宽度自动同步。`StatusPanel` 两处调用分别写明 `content` / `panel`。测试 +1 项：分支层带 `data-width='content'`，并读出样式表钉住 `width: max-content` 与 `max-width: calc(100% / 3)`（jsdom 排不了 `max-content`，所以断言的是规则文本）；贮藏那侧在它自己的用例里钉 `data-width='panel'`。**代价**：长分支名会在 1/3 处截断——行内 `branchPickName` 本来就有省略号，tooltip（`branch.switchTo`）里仍是全名；上限要改就是这一个数 |
 | **分支行的删除图标太小、看着没跟文字对齐**（产品方要求：「分支删除的 icon 太小了，而且垂直没有居中。改成和文字一样大并居中，hover 展示为红色」）。尺寸：从 glyph 自己的 13px 默认提到 **16px**，与文件行上的 `+`（`PlusGlyph size={16}`）同一档——这个 bin 的 viewBox 四周留了 3.4 单位边距，13px 时墨迹只有 **~8.5px**（名字的字高约 9px、文件行 `+` 的墨迹约 10px），16px 时约 **10.5px**。居中：**几何上本来就是居中的**——行的 `align-items: center`，`.tool` 是 26×26 的方框且 `align-items/justify-content: center`，bin 的墨迹在 16×16 的 viewBox 里是 3.4–12.6、中心正好 8.0，两侧对称；所以这一条没动布局，动的是「看得出来」的那一半：墨迹长大之后才和文字落在同一条中线上，而这套几何现在有测试钉住。悬停：**红墨**（`--dsw-alias-state-error-primary`），正是旁边那个武装 `danger` 按钮用的同一个 token；底色仍是普通 hover 洗色（§4.3 不给第一次点击配红底） | `ui/BranchPicker.tsx` 的 `<TrashGlyph size={13} />` → `size={16}`（就地注释写明 16 的出处）；`styles.ts` 新增 `.dgp-branch-row > .dgp-tool:hover:not(:disabled) { color: var(--dsw-alias-state-error-primary, …) }`——选择器限定在行内那一个按钮上，所以下拉底部的关闭按钮仍是中性墨；测试 +1 项：bin 的 `width`/`height` 是 16、行与按钮的 `align-items`/`justify-content` 都是 `center`、样式表里那条红墨规则在（并断言页脚的关闭按钮不在其中）。**未改**：贮藏（stash）行里的删除仍是 13px / 中性墨——产品方这次只点了分支这一处 |
 | **状态栏上的分支按钮不再占满整行**（产品方 2026-09-13 截图澄清：上一条说的「选择分支的下拉框」指的是**分支按钮**本身——截图上那根通栏灰条——而不是它弹出的列表；我上一轮改的是列表，故补这一条）。原因：`.dgp-branch` 是 `flex: auto`，而轨道上还有一个同样 `flex: auto` 的 `.dgp-spacer`，两者平分余量，于是「仓库在 master 上」会画出一根几乎通栏的灰条，读起来像输入框而不是按钮 | `styles.ts` 的 `.dgp-branch`：`flex: auto` → **`flex: 0 1 auto`**，并加 **`max-width: calc(100% / 3)`**（与弹出列表同一个上限、同一个理由，就地注释写明）。于是余量全归 spacer、动作按钮照旧靠右，按钮自己贴着名字——「现在宽度的 1/3」按轨道宽度算（百分比对 flex 项目就是容器内容盒宽度）。测试 +1 项：按钮的 `flexGrow` 是 0、`flexShrink` 是 1、`display: flex`，tooltip 里仍是全名（`main — …`），并从样式表读出 `max-width: calc(100% / 3)`——jsdom 会把 `calc(100% / 3)` 简化成像素值，所以这条只能读规则文本。**代价**：长分支名在状态栏上会截断（原本也会截，只是阈值更宽），让位的是名字（`branchName` 带省略号），图钉、状态字与 caret 保持自己的宽度；tooltip 里仍是全名 |
@@ -891,11 +889,51 @@ rail 的两层保持原样（它们本来就该是同一个东西）。
 | 测试 | +2 项（588 总计）：样式表 1 项（两个占位锚点在 CSS 里登记：gap 行的类 + `data-op-group='gap'`、行尾槽的 `::after` 宽度）；面板 1 项（头部视图操作为一组、带 label、四枚控件的顺序不变：布局两枚 → 提升 → 刷新；内联 6 行与左右对照 8 格都带 `data-op-group="line"`，且行内没有额外的占位元素）|
 | 已知边界 | 仍是 jsdom 证据。22px 的行尾槽是从每行文本里让出的宽度（约两个字），真机是否可接受需要产品方在浏览器里看一眼（§10.4）|
 
+### 验收期新增：冲突行的三个按钮（FR-9.2，2026-09-13，产品方提出）
+
+产品方要求在冲突文件行上给出「接受对方的 / 接受我的 / 合并」三枚按钮：前两枚可用，「合并」
+置灰并悬浮说明「待后续迭代，建议先由大模型处理」。位置定在冲突行现有的动作条里（图标按钮 +
+tooltip）；前两枚沿用 §4.3 的两次点击确认——它们会覆盖工作区里当前的冲突内容，包括手动解决
+到一半的东西。
+
+| 落点 | 内容 |
+|---|---|
+| `core/types.ts` | 新增 `ConflictSide = 'mine' \| 'other'`。**刻意不用 git 的 `ours`/`theirs`**：那对名字在 `git rebase` 下意思相反 |
+| `core/ports.ts` / `host/git-service.ts` | 新方法 `resolveConflict(sessionId, side, paths)`：先 `git diff --name-only --diff-filter=U -z` 核实这些路径确实未合并（有落单的整请求 `bad-request`——拒绝而不是猜，避免 `restore` 在已解决的文件上退化成普通还原、静默覆盖工作区），再 `git restore --ours\|--theirs -- <paths>` 写工作区、`git add -- <paths>` 收掉三段索引，最后审计一行。**哪一侧是「我的」由 host 按 `operationInProgress` 判定**：rebase 下 `--ours` 是目标分支、`--theirs` 才是被重放的我的提交；merge / cherry-pick / revert 是常规。与 FR-9.4 同一条「执行时重新核实」 |
+| `host/adapter/routes.ts` / `client/adapter/git-client.ts` | 新写操作 `POST /git-panel/resolveConflict`（`side` 只接受 `mine` / `other`），进 `WRITE_OPERATIONS` |
+| `client/ui/ChangeGroup.tsx` | 冲突行的动作条在「标记为已解决」之后加三枚：接受我的、接受对方的（各自武装，key 按动作区分：`discard:` / `accept-mine:` / `accept-theirs:`），以及一枚 disabled 的合并按钮。**合并的悬浮说明挂在外层 `<span title>`** 而非按钮上：disabled 按钮在部分引擎不再投递指针事件，包一层才能保证 hover 出字（样式表里的 `.dgp-tool-wrap`） |
+| `client/ui/row-actions.ts` / `StatusPanel.tsx` | 新谓词 `canResolveConflict(area)`，行内按钮与右键行菜单共用（菜单里同步两条武装条目 + 一条 disabled 的合并条目）；面板新增 `resolve` 动作与 `resolve.doneMine` / `resolve.doneTheirs` 通知句 |
+| `ui/icons.tsx` | 新增 `AcceptMineGlyph` / `AcceptTheirsGlyph`（互为镜像）与 `MergeGlyph`（两条线汇成一条；**不复用** `SplitGlyph`，它已经表示左右对照布局） |
+| 测试 | +11 项（606 总计）：服务层 6 项真仓库（接受任一侧并收掉索引、拒绝非未合并路径且工作区不动、rebase 下两侧含义互换各一条、非法路径被拒）、路由 1 项（POST 走通 / GET 405 / 非法 `side` 拒绝）、面板 4 项（三枚按钮与置灰文案、两侧各自的武装与调用、行菜单同步）|
+
+**明确不做**：「合并」的实际逻辑（按产品方要求置灰）与大模型接入——按钮的说明文字把它指向
+后续迭代，登记在 `docs/TODO.md` 的 A-15。这条记录当初没进 `requirements.md`（该文件权限是
+`400`），只落本文件；该文件已于 2026-09-13 删除。
+
+### 验收期新增：冲突的两侧对比（FR-9.2，2026-09-13，产品方提出）
+
+产品方看到三个按钮后追问：「冲突的 diff 也要展示啊，不然我怎么知道我怎么处理」。点开冲突行
+原本只有一句「合并差异（diff --cc），本视图不解析」——等于没有可判断的内容。现在未合并路径
+走 **`git diff <stage2-oid> <stage3-oid>`**，得到「我的 → 对方的」**普通 unified diff**，直接
+沿用现有渲染器：红/绿、词级高亮、上下/左右对照、折叠门全部照旧。
+
+| 落点 | 内容 |
+|---|---|
+| `host/git-service.ts` | `diffPath` 的 worktree 分支先做一次 `git ls-files -u -z -- <file>`：stage 2 与 3 都在就 diff 这两个 oid，并以 `conflict: true` 返回。只有一侧时（modify/delete）返回 `conflict: true` 且**无 hunks**——不能落到下面，因为 `git diff` 对这种路径只吐一行 `* Unmerged path`，会被读成「没有差异」。用 **oid** 而不是 `:2:<path>`：路径里含 `:` 会破坏 revision 语法 |
+| `core/types.ts` / `core/diff-parse.ts` | `FileDiff` 加必填 `conflict`（「这是未合并路径的读法」）；`ParseUnifiedDiffOptions` 加**可选** `conflict`，默认 false，免得惊动 11 处与本条无关的测试调用点 |
+| `ui/DiffView.tsx` / `ui/styles.ts` / `locales.ts` | 有 hunks 时在头部下加一行图例「冲突对比：我的（红）→ 对方的（绿）」（两种布局都成立，因为红/绿用的是同一套增删底色）；根节点加 `data-diff-conflict`；`conflict` 且无 hunks 时新增状态 `oneSided` 与 `diff.conflictOneSide`；`diff.combined` 的文案改回中性——它现在只对应真正的 `--cc` |
+| 测试 | +5 项（611 总计）：解析层的 `conflict` 透传与默认为假、服务层真仓库两项（两侧对比的内容与增删计数；改/删冲突仍被标成冲突且没有 hunks）、面板两项（图例与 hunks 同现；只有一侧时的文案） |
+
+**已知边界**：冲突里只有一侧存在时（另一侧删除或新增）无法配对，本期只给出「只有一侧」的
+说明，不做 base→存活一侧的对比，也不读工作区文件里的 `<<<<<<<` 标记——后者会给 host 引入
+「直接读仓库文件」这一新能力（今天所有内容变更都经 git 子命令），值得单独评估。
+
 ### 10.3 M5 之外登记在案、尚未排期
 
 | 事项 | 说明 |
 |---|---|
 | **检出远程分支（rebase onto origin / drop local commits）** | 只读列表已交付（D43）；把它变成动作依赖 FR-9。届时的分支判定：没有同名本地分支 → `git switch -c <name> --track <remote>/<name>`；能快进 → 快进；分叉 → 让用户选 **Rebase onto origin**（本地提交重放到远程之上）或 **Drop local commits**（`reset --hard` 到远程，破坏性，需 `ui/armed.ts` 的武装确认）。两条路都可能进入冲突态，所以先有冲突处理才安全。另需定义：本地有未提交改动时怎么办、去掉 `<remote>/` 前缀后的重名规则 |
+| **分支之间的合并与变基（本地）** | 产品方 2026-09-13 提出（`requirements.md` 已于同日删除，无 FR 编号）。面板没有发起分支间合并 / 变基的入口：**合并**只在 pull 里被动产生（`--no-rebase --no-edit`，D8），事后由在途操作条继续 / 跳过 / 中止（D50）；**变基**只出现在检出远程分支的 Rebase onto origin（上一行）与顺序 9 的提交改写（`rebase --onto` / `-i`，D49），都不能把当前分支变基到任意本地分支。要定：merge 是否总是产生合并提交（`--no-ff` 还是允许快进）、合并信息怎么来（`--no-edit`）、rebase 是否只做非交互的 `git rebase <branch>`（手工编辑 todo 一直是非目标）、变基范围内含合并提交时是否照 D49 拒绝。两条都是写操作，走既有的 POST + 同源网关；冲突态交给既有在途操作条 |
 | **非仓库时的「初始化仓库」按钮**（§4.3 空态引导） | 现在只有一句 `noRepo.hint` 文案，文档要求一个执行 `git init` 的按钮 |
 | **通知时长接进 DSH 设置**（D40 的尾巴） | 现在 `NOTICE_DURATION_MS = 4000` 是面板传给 `Notice` 的固定值。要「在设置里自定义」得先有插件的配置面：DSH 的 `settings.section` 槽（`@deepseek-ai/dsh-client-ui-settings`）注册一张卡，host 侧要有 settings 命名空间与一对读写路由（better-sidebar 的「Side card」是现成例子）。产品方 2026-09-12 决定：先不做，等真有功能需要设置时一起加；在此之前要改时长就改代码里的常量 |
 | **上下方向键导航文件列表**（§4.3 键盘，P1） | `Ctrl+Enter` 与 `Esc` 已有，这条没有 |
@@ -907,6 +945,7 @@ rail 的两层保持原样（它们本来就该是同一个东西）。
 | **diff 行间操作：展开两处 hunk 之间的行** | 缺的曾经是数据。**2026-09-13 已定**：① **行数**不用新数据，hunk 头就带起止（`src/core/types.ts:481`），`gap.oldCount = next.oldStart - (prev.oldStart + prev.oldCount)`；两处 hunk 之间是唯一不需要文件总行数的情形（`FileDiff` 没有这个字段），故"第一个 hunk 之上 / 最后一个 hunk 之下"不做。② **内容**走"逐处展开、开到底"：新增 `GET /git-panel/fileLines`（进 `READ_OPERATIONS`），host 按 `DiffTarget` 解析出 **old 侧**的 rev（`worktree` → `:<path>`、`index` → `HEAD:<path>`、`commit` → `<hash>^:<path>`）、取整个 blob 后切出 `[from, from+count)` 只回那几行。缝隙两侧逐字相同，所以**只读一侧**即可，且不必读文件系统（本插件至今没直接读过文件）。客户端按 gap 存展开集合、per-file promise 缓存 + epoch 守卫；渲染层只需把 `DiffHunks`/`SplitHunks` 改成遍历 hunk 与 gap 交替的 segments，`splitRows` 与 `LineCell` 不动。已否决的替代：复用现成 `diff` 路由把 `context` 加到 50——context 是整请求共同参数、相邻 hunk 会合并、且 50 行封顶，"点一处开一处、开到底"做不到。做法与验收见 [plan/diff-expand-gap.md](plan/diff-expand-gap.md) |
 | **展示 work tree（仓库的多个工作树只读列表）** | 产品方 2026-09-13 提出。本插件现在完全没有 worktree 概念（§12 把「工作树隔离」记成非目标；同 profile 的 `dsh-client-ui-git-graph` 有 `/git/worktree-*`）。数据源是 `git worktree list --porcelain`（本机实测：空行分隔的 record，`worktree <path>` / `HEAD <oid>` / `branch refs/heads/<name>`，无 `branch` 行即游离，另有可选的 `bare` / `locked [reason]` / `prunable [reason]`），纯读、进 `READ_OPERATIONS`。基础已经具备：`host/git-dir.ts:30` 的 `gitDirOf` 会读 linked worktree 的 `.git` **文件**，所以面板在非主工作树里本来就能跑。要产品方定四件事：入口（仓库下拉的只读分组 / 分支行新开一层 / dock 新标签）、是否允许切到另一个工作树（若做 = `selectRepo` 到那条路径，但工作树常在会话目录之外，而 `resolveRepo` 只认会话目录及一层子目录，越界路径的校验是安全面）、只有一条 record 时是否隐藏、主工作树要不要标记。做法与验收见 [plan/worktree-list.md](plan/worktree-list.md) |
 | **git 操作缺端到端超时（点 fetch 一直转圈）** | 产品方 2026-09-13 报来。host 每个 **git 进程**有 15s deadline（`host/git-exec.ts:39`），但它是 `execFile` 的 `timeout`：到点**只发 SIGTERM、不升级 SIGKILL**，而回调挂在进程 `close` 上（要等子进程退出且 stdio 管道关闭）——子进程不理会 SIGTERM 时 promise 永不 settle，**实测 deadline 15s 而 31s 后仍未 settle**（替身对应真实情形：`git-remote-*` / `ssh` helper 活过父进程占着管道；或进程处于 D 状态）。同一层第二处缺口：`DirectoryQueues`（`git-exec.ts:120`）对排队等待不设 deadline。client（`client/adapter/git-client.ts`）**没有任何 deadline**，只带标签页的 `AbortSignal`（`ui/StatusPanel.tsx:133`，标签页关闭才 abort），也没有取消按钮——任一层不回答，spinner（`busy`／`pending`）就一直转。**已排除**：黑洞 http/https/ssh 远端都会在 ~15s 以 `timedOut: true` 返回，普通网络挂起是有救的。另有配置洞：`Config.gitTimeoutMs` 写 0 会在 Node 里等于不限时（`host/index.ts:39`），静默关掉安全网。做法与验收见 [plan/operation-deadline.md](plan/operation-deadline.md) |
+| **侧边栏里的定义/引用跳转（代码导航）** | 产品方 2026-09-13 提出。现在侧边栏没有任何代码导航：本插件两个 tab 都是只读视图，编辑器属于另一个插件。**接缝已经具备、不必新增依赖**：原生右侧栏的两级注册已在使用（`src/client/index.tsx:46`、`:63`、`:77`），且已有 resource 类型的先例（diff tab：`patterns: ['dsh-resource://git-diff/**']` + `canOpen` + 地址编解码，`src/client/adapter/sidebar-tab.tsx:159`），resource tab 按地址认领、按 (kind, contentId) 去重正是「一个文件一个 tab」；行号是原生参数——`openResource(address, { params: { line } })`，`file` 类型已声明 `{ line?: number }`、自己的类型并进 `SidebarRightResourceParamsMap` 即可（`@deepseek-ai/dsh-client-ui-sidebar-right/lib/types/client/contract/params.d.ts:6`），因此**不存在**「better-sidebar 的 `openFile` 没有行号」那个缺口。**引擎路线（2026-09-13 定方向）**：不把官方 `ctx.lsp` 当唯一路径——它只有 4 个只读操作、要部署方自装语言服务器、provider 独占扩展名（`LSP_UNAVAILABLE` / `LSP_CONFLICT`）、没有 documentSymbol；改为 host 半一个 CodeIntel 服务 + 多条 adapter，`ts-service`（`ts.createLanguageService`，常驻增量）先做，`ctags` 兜其它语言，`ctx.lsp` 只当「用户已经配好了就用」的第三路。要产品方定五件事（范围是否留在本插件、要不要可编辑、默认开哪几条 adapter、首查延迟怎么呈现、入口落在哪）。做法与验收见 [plan/code-navigation.md](plan/code-navigation.md) |
 
 ### 10.4 不排期（等条件，不是代码工作量）
 
