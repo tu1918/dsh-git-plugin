@@ -8,9 +8,9 @@
  * box, each taking a row above the change list. Every one of them pushed the list,
  * the commit box and the dock down for as long as it was on screen, and the list
  * is the panel's subject: an operation's own report should not move the thing the
- * user is about to click. Floating it over the top of the panel (under the rail)
- * costs the list nothing, and the notice is the only thing on screen that wants to
- * be read right now.
+ * user is about to click. Floating it over the panel — on the bottom edge, clear
+ * of the list's head — costs the list nothing, and the notice is the only thing on
+ * screen that wants to be read right now.
  *
  * It is a LAYER, not a modal: nothing is blocked, the list stays live underneath,
  * and pressing anywhere else does not dismiss it (that is `ui/popover.tsx`'s

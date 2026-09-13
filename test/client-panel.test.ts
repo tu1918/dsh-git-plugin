@@ -2206,9 +2206,10 @@ describe('the operation feedback (§4.3)', () => {
 
       const notice = must<HTMLElement>(container, '[data-action-done="unstage"]')
       // A layer over the panel, not a band in the column: it is positioned
-      // against the panel's own box (`position: relative`) and the change list is
-      // still underneath it.
+      // against the panel's own box (`position: relative`), it hangs on that box's
+      // bottom edge, and the change list is still underneath it.
       assert.equal(window.getComputedStyle(notice).position, 'absolute')
+      assert.equal(window.getComputedStyle(notice).bottom, '8px')
       assert.ok(container.querySelector(`[data-group="staged"] .${cls.row}`), 'the list survives')
 
       await act(async () => {
@@ -2267,6 +2268,34 @@ describe('the operation feedback (§4.3)', () => {
     } finally {
       mock.timers.reset()
     }
+  })
+
+  it('edged in the theme colour, at the panel’s foot rather than under the rail', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Asked for from the running panel: the notice hangs on the bottom edge now
+    // (see the rule's own comment) and wears the theme's accent as its edge, so it
+    // reads as the card to look at before any word is read.
+    assert.match(sheet, new RegExp(`\\.${cls.notice}\\s*\\{[^}]*bottom: 8px`, 'u'))
+    assert.doesNotMatch(sheet, new RegExp(`\\.${cls.notice}\\s*\\{[^}]*top:`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.notice}\\s*\\{[^}]*border: 1px solid var\\(--dsw-alias-brand-primary\\)`,
+        'u',
+      ),
+    )
+    // A failure still overrides that colour, so the two kinds are told apart by
+    // the edge alone.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.notice}\\[data-notice='error'\\]\\s*\\{[^}]*border-color: var\\(--dsw-alias-state-error-primary\\)`,
+        'u',
+      ),
+    )
   })
 })
 

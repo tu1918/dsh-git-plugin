@@ -1540,13 +1540,23 @@ export const css = `
 
 /* The feedback floats over the column instead of taking rows in it: §4.3 asks
    for the failure where the operation was, and the change list is still the
-   user's. It hangs under the rail — the region the operation came from — and
-   covers the top of the list rather than pushing it down. Nothing below is
-   blocked: the layer is absolute, and only its own × (or the success clock)
-   takes it away. */
+   user's. It hangs on the panel's bottom edge, over the foot of the dock, rather
+   than under the rail as it first did: the rail's end of the column is the change
+   list, and the layer was covering the head of the very thing the operation was
+   about. Nothing below is blocked: the layer is absolute, and only its own × (or
+   the success clock) takes it away.
+
+   The ceiling is unchanged and still keeps the rail clear: anchored at the foot,
+   '100% - (RAIL_HEIGHT + 16)' is the tallest a long refusal — or the credential
+   form that grows inside one — may get before it would reach up over the rail.
+
+   The edge is the theme's own brand colour, and a full pixel rather than the
+   half-pixel hairline the panel draws between its regions: the notice is the one
+   card on screen that wants to be read right now, and at half a pixel a coloured
+   line reads as no line at all. */
 .${cls.notice} {
   position: absolute;
-  top: ${RAIL_HEIGHT + 8}px;
+  bottom: 8px;
   right: 8px;
   left: 8px;
   z-index: 4;
@@ -1554,7 +1564,7 @@ export const css = `
   flex-direction: column;
   overflow: hidden;
   max-height: calc(100% - ${RAIL_HEIGHT + 16}px);
-  border: 0.5px solid var(--dsw-alias-border-l3);
+  border: 1px solid var(--dsw-alias-brand-primary);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: 0 6px 16px var(--dsw-alias-bg-mask-2);
