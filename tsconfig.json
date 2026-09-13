@@ -17,5 +17,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "test", "build"]
+  "include": ["src", "test", "build"],
+  "exclude": ["test/dsh-git-plugin-sandbox"]
 }

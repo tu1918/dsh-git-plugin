@@ -52,8 +52,8 @@ contrib/
 # repository's history, and a nested work tree would otherwise appear here as an
 # untracked directory.
 #
-# One consequence worth knowing: `tsconfig.json`'s `include` is `["src", "test",
-# "build"]`, so its `.ts` files ARE typechecked by `npm run check`. They pass
-# today; a future edit to the sandbox that does not typecheck would turn this
-# repository's check red.
+# It is also named in `tsconfig.json`'s `exclude`, because it is another
+# repository: it has to be free to sit in whatever state its own experiments
+# leave it — including a conflicted merge, whose markers are not TypeScript —
+# without turning this repository's `npm run check` red.
 test/dsh-git-plugin-sandbox/
