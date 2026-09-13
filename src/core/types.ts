@@ -531,10 +531,24 @@ export interface FileDiff {
   readonly binary: boolean
   /**
    * True when git answered with a combined (`diff --cc`) diff, which this
-   * renderer does not read — the conflict view proper is FR-9. Stated so the
-   * panel can say "not this renderer" instead of "no differences".
+   * renderer does not read. It is what an unmerged path still yields when only
+   * one side exists — the other deleted the file, or has no version to pair
+   * with; a conflict whose two sides are both present arrives as
+   * {@link FileDiff.conflict} instead. Stated so the panel can say "not this
+   * renderer" rather than "no differences".
    */
   readonly combined: boolean
+  /**
+   * True when the path is unmerged, so this is a conflict's reading rather than
+   * one state against another.
+   *
+   * With hunks, the comparison is mine (index stage 2) against the other side
+   * (stage 3), and the renderer names them from this flag: the two sides of a
+   * conflict are not an "old" and a "new". With no hunks, the two sides could not
+   * be paired at all — one of them is missing, as in a modify/delete conflict —
+   * which is a different thing from "no differences" and is said differently.
+   */
+  readonly conflict: boolean
   /**
    * True when `lines` exceeds the panel's one-shot render budget, so the panel
    * opens folded (FR-2.6). The host never folds: it counts and says so.

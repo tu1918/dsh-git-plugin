@@ -196,6 +196,7 @@ export const cls = {
   diffSeg: `${P}-diff-seg`,
   diffSegButton: `${P}-diff-seg-button`,
   diffState: `${P}-diff-state`,
+  diffConflict: `${P}-diff-conflict`,
   diffHunks: `${P}-diff-hunks`,
   diffHunk: `${P}-diff-hunk`,
   diffGap: `${P}-diff-gap`,
@@ -2385,6 +2386,17 @@ export const css = `
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* The conflict legend: one quiet line above the hunks naming the two sides.
+   It scrolls with nothing — the hunks below keep their own scrollers. */
+.${cls.diffConflict} {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 .${cls.diffFoldHint} { margin: 0; }

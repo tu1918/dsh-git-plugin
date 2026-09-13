@@ -620,11 +620,29 @@ export function DiffView({
   onOpenInTab,
 }: DiffViewProps): ReactNode {
   const { directory, name } = pathParts(diff.path)
-  const state = diff.binary ? 'binary' : diff.combined ? 'combined' : diff.hunks.length === 0 ? 'empty' : 'lines'
+  // No hunks is two different facts: a conflict whose sides could not be paired
+  // (one of them is missing) says so, where an ordinary file simply has nothing
+  // to show.
+  const empty = diff.hunks.length === 0
+  const state = diff.binary
+    ? 'binary'
+    : diff.combined
+      ? 'combined'
+      : !empty
+        ? 'lines'
+        : diff.conflict
+          ? 'oneSided'
+          : 'empty'
   const folded = diff.large && !expanded
 
   return (
-    <div className={cls.diffView} data-diff-area={diff.area} data-diff-state={state} aria-busy={busy}>
+    <div
+      className={cls.diffView}
+      data-diff-area={diff.area}
+      data-diff-state={state}
+      data-diff-conflict={String(diff.conflict)}
+      aria-busy={busy}
+    >
       <div className={cls.diffHead}>
         <span className={cls.diffPath} title={diff.path}>
           {directory !== '' && <span className={cls.diffPathDir}>{directory}</span>}
@@ -683,11 +701,19 @@ export function DiffView({
         </ViewOps>
       </div>
 
+      {/* The sides of a conflict are not an "old" and a "new", so red/green alone
+          would leave the reader guessing which version they are looking at. One
+          line names them; it holds in both layouts, because the removed ink is
+          the same ink on a whole row and on a side-by-side cell. */}
+      {diff.conflict && !empty && <p className={cls.diffConflict}>{t('diff.conflictSides')}</p>}
+
       {diff.binary ? (
         <p className={cls.diffState}>{t('diff.binary')}</p>
       ) : diff.combined ? (
         <p className={cls.diffState}>{t('diff.combined')}</p>
-      ) : diff.hunks.length === 0 ? (
+      ) : diff.conflict && empty ? (
+        <p className={cls.diffState}>{t('diff.conflictOneSide')}</p>
+      ) : empty ? (
         <p className={cls.diffState}>{t('diff.empty')}</p>
       ) : folded ? (
         <div className={cls.diffState}>

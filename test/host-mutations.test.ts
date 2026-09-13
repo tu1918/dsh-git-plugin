@@ -335,7 +335,7 @@ describe('discarding (FR-6.1)', () => {
   })
 })
 
-describe('resolving conflicts (FR-9.2)', () => {
+describe('conflicts: resolving them and reading their diff (FR-9.2)', () => {
   /** A repository stopped on a merge conflict in c.txt: ours says "ours". */
   function conflictedRepo(name: string): string {
     const repo = makeRepo(name)
@@ -446,6 +446,75 @@ describe('resolving conflicts (FR-9.2)', () => {
     }
     // Nothing ran: the conflict is exactly as git left it.
     assert.notEqual(gitTry(repo, ['ls-files', '-u']).stdout, '')
+  })
+
+  it('takes one side for several paths in one request, which is what the header sends', async () => {
+    const repo = makeRepo('mut-resolve-batch')
+    for (const name of ['c.txt', 'd.txt']) write(repo, name, 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'other'])
+    write(repo, 'c.txt', 'theirs c\n')
+    write(repo, 'd.txt', 'theirs d\n')
+    git(repo, ['add', 'c.txt', 'd.txt'])
+    git(repo, ['commit', '-q', '--no-gpg-sign', '-m', 'theirs'])
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'c.txt', 'ours c\n')
+    write(repo, 'd.txt', 'ours d\n')
+    git(repo, ['add', 'c.txt', 'd.txt'])
+    git(repo, ['commit', '-q', '--no-gpg-sign', '-m', 'ours'])
+    assert.notEqual(gitTry(repo, ['merge', 'other']).code, 0, 'the merge must conflict')
+
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'mine', ['c.txt', 'd.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(readFileSync(join(repo, 'c.txt'), 'utf8'), 'ours c\n')
+    assert.equal(readFileSync(join(repo, 'd.txt'), 'utf8'), 'ours d\n')
+    assert.equal(gitTry(repo, ['ls-files', '-u']).stdout, '', 'both are resolved in one call')
+  })
+
+  it('shows the two sides as an ordinary diff, so the row has something to decide on', async () => {
+    const repo = conflictedRepo('mut-resolve-diff')
+    const result = await serviceFor({ s1: repo }).diff('s1', 'c.txt', { area: 'worktree' }, 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // Not the combined (`--cc`) answer the plain `git diff` gives, which this
+    // renderer skips whole: mine against theirs, as any other pair.
+    assert.equal(result.value.conflict, true)
+    assert.equal(result.value.combined, false)
+    assert.equal(result.value.additions, 1)
+    assert.equal(result.value.deletions, 1)
+    const lines = result.value.hunks.flatMap((hunk) =>
+      hunk.lines.map((line) => `${line.kind}:${line.text}`),
+    )
+    assert.ok(lines.includes('removed:ours'), `expected mine removed, got ${lines.join(', ')}`)
+    assert.ok(lines.includes('added:theirs'), `expected theirs added, got ${lines.join(', ')}`)
+  })
+
+  it('still names a conflict it cannot pair, rather than reporting no differences', async () => {
+    // A modify/delete conflict has no stage 3 to pair with stage 2 (probed: git
+    // refuses to diff them), and the plain `git diff` answers with a bare
+    // `* Unmerged path` line — which read as an ordinary diff would say "nothing
+    // changed". It is a conflict with nothing to show, and says that.
+    const repo = makeRepo('mut-resolve-diff-delete')
+    write(repo, 'd.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'gone'])
+    git(repo, ['rm', '-q', 'd.txt'])
+    commit(repo, 'delete it')
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'd.txt', 'edited\n')
+    git(repo, ['add', 'd.txt'])
+    commit(repo, 'edit it')
+    assert.notEqual(gitTry(repo, ['merge', 'gone']).code, 0, 'the merge must conflict')
+
+    const result = await serviceFor({ s1: repo }).diff('s1', 'd.txt', { area: 'worktree' }, 3)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(result.value.conflict, true, 'the path is still a conflict')
+    assert.equal(result.value.combined, false)
+    assert.deepEqual(result.value.hunks, [], 'nothing to pair, and nothing invented')
   })
 })
 

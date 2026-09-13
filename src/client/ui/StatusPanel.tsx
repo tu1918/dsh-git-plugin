@@ -45,7 +45,7 @@ import type {
   StashEntry,
 } from '../../core/types.ts'
 import type { GitPanelKey } from '../locales.ts'
-import { Group, ToolButton } from './ChangeGroup.tsx'
+import { Group, ToolButton, type GroupAction } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { StashPicker } from './StashPicker.tsx'
 import { ContextToolbar, type ToolbarEntry, type ToolbarPoint } from './toolbar.tsx'
@@ -1303,6 +1303,45 @@ export function StatusPanel({
       onFire: () => discardSelected(paths),
     }
   }
+  /**
+   * The conflict group's two whole-selection takes (FR-9.2).
+   *
+   * Each acts on the checked rows, or on every conflict when nothing is checked —
+   * the rule the other groups' bulk buttons follow, and the reason the label
+   * always carries a count. Each arms: taking a side overwrites the working tree
+   * of every file it touches, which is not a one-click decision.
+   */
+  const resolveActions: readonly GroupAction[] = (() => {
+    if (conflicted.length === 0) return []
+    const targets =
+      conflictedSel.length > 0 ? conflictedSel : conflicted.map((entry) => entry.path)
+    return (['mine', 'other'] as const).map((side): GroupAction => {
+      const key = side === 'mine' ? 'accept-mine-bulk' : 'accept-theirs-bulk'
+      const armed = armedKey === key
+      return {
+        id: side === 'mine' ? 'acceptMineBulk' : 'acceptTheirsBulk',
+        label: t(side === 'mine' ? 'action.acceptMineBulk' : 'action.acceptTheirsBulk', {
+          count: targets.length,
+        }),
+        icon: side === 'mine' ? <AcceptMineGlyph /> : <AcceptTheirsGlyph />,
+        ...(armed
+          ? {
+              armedLabel: t(
+                side === 'mine' ? 'action.acceptMineBulkArmed' : 'action.acceptTheirsBulkArmed',
+                { count: targets.length },
+              ),
+            }
+          : {}),
+        onSelect: () => {
+          if (!armed) {
+            armKey(key)
+            return
+          }
+          resolveConflictSelected(side, targets)
+        },
+      }
+    })
+  })()
   const scope = commitScopeOf(status.groups)
   // The branch listing is the only source that distinguishes a gone upstream
   // from a branch that simply has no counts.
@@ -1375,6 +1414,31 @@ export function StatusPanel({
         ok: true,
         value: say(side === 'mine' ? 'resolve.doneMine' : 'resolve.doneTheirs', {
           path: entry.path,
+        }),
+      }
+    })
+  }
+
+  /**
+   * Accept one side for several conflicted files at once (FR-9.2).
+   *
+   * The header builds the list as "the checked rows, or the whole group", so it
+   * is never empty: the host refuses an empty one, and a request that comes back
+   * as "the request was incomplete" is not an answer anyone can use.
+   * @param side - Which side the user accepted, in the user's words.
+   * @param paths - The conflicted paths to take it for.
+   */
+  const resolveConflictSelected = (side: ConflictSide, paths: readonly string[]): void => {
+    if (paths.length === 0) return
+    disarm()
+    const label = say(side === 'mine' ? 'action.acceptMine' : 'action.acceptTheirs')
+    void perform('resolve', label, async () => {
+      const result = await git.resolveConflict(sessionId, side, paths, signal)
+      if (!result.ok) return result
+      return {
+        ok: true,
+        value: say(side === 'mine' ? 'resolve.doneMineSelected' : 'resolve.doneTheirsSelected', {
+          count: paths.length,
         }),
       }
     })
@@ -2568,12 +2632,13 @@ export function StatusPanel({
             batch={
               conflictedSel.length > 0
                 ? {
-                    kind: 'stage',
+                    kind: 'resolve',
                     run: () => stage(conflicted.map((entry) => entry.path)),
                     selection: selectionOf('stage', conflictedSel),
                   }
                 : undefined
             }
+            actions={resolveActions}
             collapsed={collapsedGroups.has('conflicted')}
             view={view}
             onToggle={() => toggleGroup('conflicted')}

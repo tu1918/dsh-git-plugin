@@ -65,6 +65,13 @@ export interface ParseUnifiedDiffOptions {
    * own flag is passed through.
    */
   readonly truncated: boolean
+  /**
+   * Whether the text compares the two sides of an unmerged path rather than one
+   * state against another. The text cannot say — both are ordinary unified
+   * diffs — so the host, which knows which command it ran, passes it through.
+   * Optional, and false, for the callers that only read a plain diff.
+   */
+  readonly conflict?: boolean
 }
 
 /** A hunk while it is being read. */
@@ -222,6 +229,7 @@ export function parseUnifiedDiff(text: string, options: ParseUnifiedDiffOptions)
     lines,
     binary,
     combined,
+    conflict: options.conflict ?? false,
     large: lines > MAX_DIFF_LINES,
     truncated: options.truncated,
   }

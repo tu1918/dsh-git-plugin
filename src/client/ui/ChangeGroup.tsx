@@ -460,8 +460,14 @@ const acceptTheirsKey = (path: string): string => `accept-theirs:${path}`
 
 /** A group's bulk action (FR-3.2). */
 export interface GroupBatch {
-  /** Which way the group moves. */
-  readonly kind: 'stage' | 'unstage'
+  /**
+   * Which bulk action this is.
+   *
+   * `resolve` is the conflict group's reading of the same `git add` that `stage`
+   * is — the panel names a command by what it does to the rows at hand, and
+   * "stage" is not what adding a conflicted file means.
+   */
+  readonly kind: 'stage' | 'unstage' | 'resolve'
   /** Run it over every path in the group. */
   readonly run: () => void
   /**
@@ -492,6 +498,55 @@ export interface GroupDanger {
   readonly onArm: () => void
   /** The second click: discard the selection. */
   readonly onFire: () => void
+}
+
+/**
+ * One more control a group's header offers, beside its bulk action (FR-9.2's
+ * conflict takes).
+ *
+ * Additive to {@link GroupBatch} rather than another `kind` of it: the bulk
+ * button is one action whose sentence the group derives from what is selected,
+ * while these arrive with their own words and may arm. Taking a whole selection's
+ * side is destructive — it overwrites the working tree of every file it touches —
+ * so it needs §4.3's two clicks, which a batch button does not have.
+ */
+export interface GroupAction {
+  /** Identity, so a test can name the control. */
+  readonly id: string
+  /**
+   * The quiet state: the tooltip, and the button's accessible name.
+   *
+   * It carries the count, which is the only thing that says how far the click
+   * reaches — the button is an icon, and the header is too narrow for a sentence.
+   */
+  readonly label: string
+  readonly icon: ReactNode
+  /**
+   * Set while the action is armed: the button becomes this sentence, and the
+   * second click runs {@link GroupAction.onSelect}. Absent means a plain icon
+   * button that fires on the first click.
+   */
+  readonly armedLabel?: string
+  readonly disabled?: boolean
+  readonly onSelect: () => void
+}
+
+/**
+ * The mark and the two sentences of each bulk action.
+ *
+ * A table rather than a chain of ternaries: three actions with two labels each
+ * was already the point where a reader had to hold four branches in their head,
+ * and the conflict group's arrival is what made it three.
+ */
+const BATCH: Readonly<
+  Record<
+    GroupBatch['kind'],
+    { readonly icon: ReactNode; readonly all: GitPanelKey; readonly selected: GitPanelKey }
+  >
+> = {
+  stage: { icon: <PlusGlyph size={13} />, all: 'action.stageAll', selected: 'action.stageSelected' },
+  unstage: { icon: <MinusGlyph size={13} />, all: 'action.unstageAll', selected: 'action.unstageSelected' },
+  resolve: { icon: <CheckGlyph size={13} />, all: 'action.resolveAll', selected: 'action.resolveSelected' },
 }
 
 /**
@@ -662,6 +717,7 @@ export function Group({
   t,
   busy,
   batch,
+  actions,
   danger,
   emptyNote,
   resident,
@@ -683,6 +739,13 @@ export function Group({
   readonly t: Translate
   readonly busy: boolean
   readonly batch?: GroupBatch
+  /**
+   * Further controls the header carries, after the bulk action (FR-9.2).
+   *
+   * The conflict group's two takes live here: it has no single "bulk" reading of
+   * `git add`, but it does have two whole-selection answers, and each arms.
+   */
+  readonly actions?: readonly GroupAction[]
   /**
    * The selection's destructive action, beside the bulk action.
    *
@@ -756,7 +819,8 @@ export function Group({
             the same button becomes the selection's action: what it will move is
             no longer "everything" but "these N", and its label says so. */}
         {(batch !== undefined && (entries.length > 0 || emptyNote !== undefined)) ||
-        danger !== undefined ? (
+        danger !== undefined ||
+        (actions !== undefined && actions.length > 0) ? (
           <span className={cls.groupActions}>
             {danger !== undefined && (
               // The selection's discard is the one irreversible bulk action, and it
@@ -795,22 +859,52 @@ export function Group({
                 disabled={busy || entries.length === 0}
                 title={
                   entries.length === 0 && emptyNote !== undefined
-                    ? `${batch.kind === 'stage' ? t('action.stageAll') : t('action.unstageAll')} · ${emptyNote}`
+                    ? `${t(BATCH[batch.kind].all)} · ${emptyNote}`
                     : undefined
                 }
                 onClick={batch.selection !== undefined ? batch.selection.run : batch.run}
               >
-                {/* The glyph says which way the rows move before the label is read:
-                    + is stage (and marking a conflict resolved), − is unstage. */}
-                {batch.kind === 'stage' ? <PlusGlyph size={13} /> : <MinusGlyph size={13} />}
+                {/* The glyph says what the rows become before the label is read:
+                    + is stage, − is unstage, ✓ is a conflict marked resolved. */}
+                {BATCH[batch.kind].icon}
                 {batch.selection !== undefined
-                  ? batch.kind === 'stage'
-                    ? t('action.stageSelected', { count: batch.selection.count })
-                    : t('action.unstageSelected', { count: batch.selection.count })
-                  : batch.kind === 'stage'
-                    ? t('action.stageAll')
-                    : t('action.unstageAll')}
+                  ? t(BATCH[batch.kind].selected, { count: batch.selection.count })
+                  : t(BATCH[batch.kind].all)}
               </button>
+            )}
+            {actions?.map((action) =>
+              action.armedLabel === undefined ? (
+                // The wrapper carries the title, not the button: a disabled button
+                // stops delivering the pointer events some engines route their
+                // tooltip through (the same wrapper `ChangeRow` uses).
+                <span key={action.id} className={cls.toolWrap} title={action.label}>
+                  <button
+                    type="button"
+                    className={cls.tool}
+                    data-id={action.id}
+                    aria-label={action.label}
+                    disabled={busy || action.disabled === true}
+                    onClick={action.onSelect}
+                  >
+                    {action.icon}
+                  </button>
+                </span>
+              ) : (
+                // Armed is words, not an icon: §4.3's pattern only works if the
+                // second click is visibly a different click.
+                <button
+                  key={action.id}
+                  type="button"
+                  className={cls.danger}
+                  data-id={action.id}
+                  data-armed="true"
+                  disabled={busy}
+                  title={action.label}
+                  onClick={action.onSelect}
+                >
+                  {action.armedLabel}
+                </button>
+              ),
             )}
           </span>
         ) : null}

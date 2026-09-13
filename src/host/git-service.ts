@@ -320,6 +320,36 @@ function fullOutput(outcome: GitRunResult): string {
 }
 
 /**
+ * git's answer for an unmerged path it will not diff.
+ *
+ * With fewer than three stages there is no combined patch to print — a
+ * modify/delete conflict, for instance — so git prints this line instead.
+ * Recognised so the host can tell that answer apart from an ordinary diff.
+ */
+const UNMERGED_PATH = /^\* Unmerged path /mu
+
+/**
+ * The object name of one index stage in `git ls-files -u -z` output.
+ *
+ * A record is `<mode> <oid> <stage>\t<path>`; only the fields before the TAB are
+ * read, which is also why the caller passes `-z` — a path may contain anything
+ * but NUL, including a TAB. A stage that is not in the output is a side the
+ * conflict does not have (a modify/delete conflict lists two of the three).
+ * @param stdout - The command's stdout, verbatim.
+ * @param stage - Which stage to read: 1 is the base, 2 ours, 3 theirs.
+ * @returns The object name, or `undefined` when that stage is not there.
+ */
+function stageOid(stdout: string, stage: number): string | undefined {
+  for (const record of stdout.split('\0')) {
+    if (record === '') continue
+    const separator = record.indexOf('\t')
+    const fields = (separator === -1 ? record : record.slice(0, separator)).split(' ')
+    if (fields.length >= 3 && fields[2] === String(stage)) return fields[1]
+  }
+  return undefined
+}
+
+/**
  * Map a failed git process onto a code the panel can act on.
  * @param outcome - The non-zero run.
  * @returns The failure to hand the browser, with git's own words as detail.
@@ -1172,9 +1202,9 @@ export function createGitService(
         ? Math.min(contextLines, MAX_CONTEXT_LINES)
         : DEFAULT_CONTEXT_LINES
     const format = ['--no-color', '--no-ext-diff', '--no-textconv', `--unified=${context}`]
-    const parsed = (text: string, truncated: boolean): Result<FileDiff> => ({
+    const parsed = (text: string, truncated: boolean, conflict = false): Result<FileDiff> => ({
       ok: true,
-      value: parseUnifiedDiff(text, { path: file, area, truncated }),
+      value: parseUnifiedDiff(text, { path: file, area, truncated, conflict }),
     })
 
     if (revision !== null) {
@@ -1195,7 +1225,30 @@ export function createGitService(
     const worktree = await run(['diff', ...format, '--', file], root.value)
     if (!worktree.ok) return worktree
     if (worktree.value.stdout !== '') {
-      return parsed(worktree.value.stdout, worktree.value.truncated)
+      const plain = parsed(worktree.value.stdout, worktree.value.truncated)
+      // git has two answers for an unmerged path, and neither is a diff this
+      // renderer reads: a combined (`--cc`) one, or a bare `* Unmerged path`
+      // line. Both say the path has stages rather than an old and a new, which is
+      // exactly what the conflict row's accept-mine / accept-theirs acts on, so
+      // the reader is handed the two stages side by side instead. The index is
+      // asked only on this branch, so an ordinary file still costs the one call
+      // it always did.
+      if (plain.ok && (plain.value.combined || UNMERGED_PATH.test(worktree.value.stdout))) {
+        const stages = await run(['ls-files', '-u', '-z', '--', file], root.value)
+        if (!stages.ok) return stages
+        const mine = stageOid(stages.value.stdout, 2)
+        const other = stageOid(stages.value.stdout, 3)
+        if (mine !== undefined && other !== undefined) {
+          const sides = await run(['diff', ...format, mine, other], root.value)
+          if (!sides.ok) return sides
+          return parsed(sides.value.stdout, sides.value.truncated, true)
+        }
+        // Unmerged with only one side left to pair — a modify/delete conflict,
+        // say. Nothing to draw, but it is still a conflict, and "no differences"
+        // would be a lie about it.
+        return parsed('', false, true)
+      }
+      return plain
     }
 
     // Empty output means one of two things `git diff` does not distinguish: the

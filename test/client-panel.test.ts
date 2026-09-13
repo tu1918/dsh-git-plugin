@@ -254,6 +254,7 @@ function diffFixture(overrides: Partial<FileDiff> = {}): FileDiff {
     lines: 6,
     binary: false,
     combined: false,
+    conflict: false,
     large: false,
     truncated: false,
     ...overrides,
@@ -2382,6 +2383,24 @@ describe('selecting rows for batch actions', () => {
     )
   }
 
+  /** The tooltip of one header action, which the wrapper carries (the button may be disabled). */
+  function buttonTitle(header: HTMLElement, id: string): string {
+    const button = must<HTMLElement>(header, `[data-id="${id}"]`)
+    return button.getAttribute('title') ?? button.parentElement?.getAttribute('title') ?? ''
+  }
+
+  /** Conflicted entries for a status a test builds itself. */
+  function conflictRows(...paths: readonly string[]): RepoStatus['groups']['conflicted'] {
+    return paths.map((path) => ({
+      path,
+      index: 'U',
+      worktree: 'U',
+      staged: true,
+      untracked: false,
+      conflicted: true,
+    }))
+  }
+
   it('stages exactly the checked unstaged rows from the group header', async () => {
     const calls: ActionLog = { entries: [] }
     const status = statusWith({
@@ -2627,17 +2646,83 @@ describe('selecting rows for batch actions', () => {
     )
     await settle()
 
-    // The conflict group has no whole-group bulk action — half-resolved merges
-    // must not be stageable in one click — so its header starts empty...
-    assert.equal(container.querySelector(`[data-group="conflicted"] .${cls.groupActions}`), null)
-    // ...and grows one only for a selection.
+    // The header carries the conflict's two takes even with nothing checked —
+    // they reach the whole group then — but NOT a bulk button: marking every
+    // conflict resolved in one click would stage whatever is on disk, conflict
+    // markers included, so that one is selection-only.
+    const header = must(container, `[data-group="conflicted"] .${cls.groupActions}`)
+    assert.deepEqual(
+      [...header.querySelectorAll('[data-id]')].map((element) => element.getAttribute('data-id')),
+      ['acceptMineBulk', 'acceptTheirsBulk'],
+    )
+    assert.equal(header.querySelector(`.${cls.ghost}`), null, 'no bulk button before a selection')
+
+    // A selection brings it in, under the conflict's own name for `git add`.
     await click(
       must<HTMLButtonElement>(must(container, `[data-group="conflicted"] .${cls.row}`), `.${cls.selectBox}`),
     )
     const button = bulkButton(container, 'conflicted')
-    assert.equal(button.textContent, 'Stage selected (1)')
+    assert.equal(button.textContent, 'Mark resolved (1)')
     await click(button)
     assert.deepEqual(calls.entries, ['stage:both.txt'])
+  })
+
+  it('accepts one side for exactly the checked conflicts, after arming', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          status: { ok: true, value: statusWith({ conflicted: conflictRows('a.txt', 'b.txt', 'c.txt') }) },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const header = must<HTMLElement>(container, `[data-group="conflicted"] .${cls.groupActions}`)
+    // Nothing is checked: the count names the whole group, which is what the
+    // click would reach — the tooltip is the only place that says so.
+    assert.match(buttonTitle(header, 'acceptMineBulk'), /Accept mine \(3\)/)
+
+    const rows = [...must(container, '[data-group="conflicted"]').querySelectorAll(`.${cls.row}`)]
+    await click(boxOf(rows[0] as Element))
+    await click(boxOf(rows[1] as Element))
+    assert.match(buttonTitle(header, 'acceptMineBulk'), /Accept mine \(2\)/, 'the count follows the selection')
+
+    // §4.3's first click arms — taking a side overwrites the working tree — and
+    // says what the second one will do.
+    await click(must<HTMLElement>(header, '[data-id="acceptMineBulk"]'))
+    assert.deepEqual(calls.entries, [])
+    const armed = must<HTMLElement>(header, '[data-armed="true"]')
+    assert.match(armed.textContent ?? '', /Click again to accept mine for 2/)
+
+    await click(armed)
+    assert.deepEqual(calls.entries, ['resolveConflict:mine:a.txt,b.txt'])
+  })
+
+  it('takes the whole conflict group when nothing is checked', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          calls,
+          status: { ok: true, value: statusWith({ conflicted: conflictRows('a.txt', 'b.txt') }) },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const header = must<HTMLElement>(container, `[data-group="conflicted"] .${cls.groupActions}`)
+    await click(must<HTMLElement>(header, '[data-id="acceptTheirsBulk"]'))
+    assert.deepEqual(calls.entries, [], 'the first click only arms')
+    await click(must<HTMLElement>(header, '[data-armed="true"]'))
+    assert.deepEqual(calls.entries, ['resolveConflict:other:a.txt,b.txt'])
   })
 
   it('forgets the selection when the panel switches sessions', async () => {
@@ -3549,8 +3634,8 @@ describe('the diff view (FR-2)', () => {
   })
 
   it('names the combined diff it cannot read rather than calling it empty', async () => {
-    // FR-9's conflict view is a later milestone; until then the honest answer is
-    // "not this renderer", not "no differences".
+    // This is what a conflict still yields when only one side exists — the honest
+    // answer there is "not this renderer", not "no differences".
     const combined = diffFixture({ combined: true, hunks: [] })
     const container = await render(
       h(StatusPanel, {
@@ -3568,6 +3653,55 @@ describe('the diff view (FR-2)', () => {
       'combined',
     )
     assert.match(container.textContent ?? '', /combined \(diff --cc\) diff/)
+  })
+
+  it('draws a conflict as its two sides, and names which is which', async () => {
+    // The row's "accept mine / accept theirs" is only usable if the reader can
+    // see both versions; the legend is what makes the red and the green mean
+    // something here, since a conflict is not an "old" and a "new".
+    const conflict = diffFixture({ conflict: true })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: conflict }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="conflicted"] .${cls.row}`))
+
+    const view = must(container, `.${cls.diffView}`)
+    assert.equal(view.getAttribute('data-diff-state'), 'lines')
+    assert.equal(view.getAttribute('data-diff-conflict'), 'true')
+    assert.equal(container.querySelectorAll(`.${cls.diffLine}`).length, 6)
+    assert.match(container.textContent ?? '', /Conflict: mine \(red\) → theirs \(green\)/)
+  })
+
+  it('says a conflict has only one side when there is nothing to pair', async () => {
+    // The host answers an unpairable conflict with no hunks; without this the
+    // view would fall through to "nothing to show", which is a different claim.
+    const oneSided = diffFixture({
+      conflict: true,
+      hunks: [],
+      additions: 0,
+      deletions: 0,
+      lines: 0,
+    })
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ diff: () => ({ ok: true, value: oneSided }) }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="conflicted"] .${cls.row}`))
+
+    const view = must(container, `.${cls.diffView}`)
+    assert.equal(view.getAttribute('data-diff-state'), 'oneSided')
+    assert.match(container.textContent ?? '', /Only one side of this conflict/)
   })
 
   it('reports a truncated diff as missing its tail, not as folded (FR-2.6)', async () => {
@@ -6220,7 +6354,9 @@ describe('the conflict row and the merge bar (FR-9.2–9.3)', () => {
     await settle()
 
     const group = must(container, '[data-group="conflicted"]')
-    const action = must(group, `.${cls.tool}`)
+    // The ROW's button, not the header's: the header now carries conflict actions
+    // of its own, and it comes first in the DOM.
+    const action = must(must(group, `.${cls.row}`), `.${cls.tool}`)
     assert.equal(action.getAttribute('title'), 'Mark both.txt as resolved')
     // The command is the same one the `+` always ran: `git add` IS how a conflict
     // is marked resolved, so there is no second code path to go wrong.

@@ -153,9 +153,11 @@ describe('parseUnifiedDiff', () => {
   })
 
   it('sets a combined diff aside instead of misreading it', () => {
-    // `git diff` answers a conflicted path with `diff --cc` and `@@@` headers,
+    // `git diff` answers an unmerged path with `diff --cc` and `@@@` headers,
     // whose body has two prefix columns. Parsing that as ordinary hunks would
-    // invent lines; the conflict view that renders it is FR-9.
+    // invent lines. It is what a conflict still yields when only one side exists
+    // — a conflict with both sides is delivered as two diffs' worth of ordinary
+    // hunks instead (see `conflict` below).
     const text = [
       'diff --cc src/conflict.ts',
       'index 1111111,2222222..3333333',
@@ -172,6 +174,23 @@ describe('parseUnifiedDiff', () => {
     assert.equal(diff.combined, true)
     assert.deepEqual(diff.hunks, [])
     assert.equal(diff.binary, false)
+    assert.equal(diff.conflict, false)
+  })
+
+  it('carries the host’s word for a conflict through, and defaults it to false', () => {
+    // A conflict's two sides arrive as an ordinary unified diff, so which
+    // comparison it is cannot be read off the text: the flag travels from the
+    // host, which is the half that knows which command it ran.
+    const plain = parseUnifiedDiff(TWO_HUNKS, { path: 'src/app.ts', area: 'worktree', truncated: false })
+    assert.equal(plain.conflict, false)
+
+    const sides = parseUnifiedDiff(TWO_HUNKS, {
+      path: 'src/app.ts',
+      area: 'worktree',
+      truncated: false,
+      conflict: true,
+    })
+    assert.equal(sides.conflict, true)
   })
 
   it('ignores the no-newline marker', () => {
