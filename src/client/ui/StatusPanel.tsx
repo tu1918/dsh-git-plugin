@@ -47,7 +47,7 @@ import type { GitPanelKey } from '../locales.ts'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { StashPicker } from './StashPicker.tsx'
-import { Menu, type MenuEntry } from './menu.tsx'
+import { ContextToolbar, type ToolbarEntry, type ToolbarPoint } from './toolbar.tsx'
 import { Popover } from './popover.tsx'
 import { CommitBox } from './CommitBox.tsx'
 import { errorCopy } from './error-copy.ts'
@@ -79,14 +79,24 @@ import {
   ArrowUpGlyph,
   BranchGlyph,
   CaretGlyph,
+  CheckGlyph,
+  CherryPickGlyph,
+  CopyGlyph,
+  DiscardGlyph,
   FetchGlyph,
   ListGlyph,
+  MinusGlyph,
   PlusGlyph,
   RefreshGlyph,
+  ResetGlyph,
+  RevertGlyph,
   RingGlyph,
+  SquashGlyph,
   StashGlyph,
   SyncGlyph,
   TreeGlyph,
+  TrashGlyph,
+  UndoGlyph,
 } from './icons.tsx'
 
 export type { Translate }
@@ -193,11 +203,16 @@ interface CredentialRequest {
   readonly retry: () => Promise<void>
 }
 
-/** The change-list row whose menu is open, and the element its layer hangs from. */
+/** The change-list row whose toolbar is open, and the point it was summoned at. */
 interface FileRowMenu {
   readonly kind: 'file'
-  /** The row element: the layer is measured from its bottom (or top) edge. */
-  readonly anchor: HTMLElement
+  /**
+   * Where the card opens, in viewport coordinates.
+   *
+   * A point rather than the row element: the pointer path has no element to hang
+   * from, and the row is not what the card belongs to — see `ui/toolbar.tsx`.
+   */
+  readonly origin: ToolbarPoint
   /** The file the menu acts on. */
   readonly entry: FileChange
   /** The group the row was opened in, which decides what the row can do. */
@@ -205,7 +220,7 @@ interface FileRowMenu {
 }
 
 /**
- * The commit whose menu is open (§9's commit menu), and its anchor row.
+ * The commit whose toolbar is open (§9's commit menu), and where it was summoned.
  *
  * The panel never checks whether the commit is STILL the newest: the history is
  * the bottom pane's reading, not this snapshot's, and the host re-resolves HEAD
@@ -219,7 +234,8 @@ interface FileRowMenu {
  */
 interface CommitRowMenu {
   readonly kind: 'commit'
-  readonly anchor: HTMLElement
+  /** Where the card opens, in viewport coordinates. */
+  readonly origin: ToolbarPoint
   readonly commit: CommitInfo
   /** Whether this row is the newest one, and so the one FR-3.8 may undo. */
   readonly canUndo: boolean
@@ -1026,12 +1042,13 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     })
   }, [snapshot, busy])
 
-  // The same rule for an open menu: the row it hangs from can leave the list
-  // under it — another window commits or discards the file — and a menu over a
-  // row that is gone would act on a path the panel no longer lists. A commit
-  // menu has no such check here (the history is the bottom pane's reading, not
-  // this snapshot's); its stale case is the host's refusal, which FR-3.8's
-  // re-verification exists to produce.
+  // The same rule for an open toolbar: the row it was summoned from can leave the
+  // list — another window commits or discards the file — and a card acting on a
+  // path the panel no longer lists is a card about nothing. This is now the ONLY
+  // staleness check the toolbar has: it no longer hangs off the row, so nothing
+  // detaches under it. A commit menu has no such check here (the history is the
+  // bottom pane's reading, not this snapshot's); its stale case is the host's
+  // refusal, which FR-3.8's re-verification exists to produce.
   useEffect(() => {
     if (menu === null || menu.kind !== 'file' || busy || snapshot === null || snapshot.kind !== 'ready') return
     const { groups } = snapshot.status
@@ -1637,11 +1654,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * Show one file's diff, opening its tab if it is not already open (FR-2.1).
    *
-   * The row IS the open menu's anchor, and a press on the anchor is not an
-   * "outside" press — so without the layer clearing the menu would stay up over
-   * the diff it just opened. The same goes for the two layers the rail opens: a
-   * row can be activated by Enter, which the layer's pointerdown listener never
-   * sees.
+   * The open toolbar is put away first. A pointer press elsewhere closes it on its
+   * own, but a row activated by Enter never sends one — and the two layers the
+   * rail opens have the same hole — so without this the card would sit over the
+   * diff it had just opened.
    * @param file - The path and the comparison to read it with.
    */
   const showDiff = (file: OpenFile): void => {
@@ -1699,17 +1715,17 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
-   * Open one row's menu (§9's file menu), anchored on the row that asked for it.
+   * Open one row's toolbar (§9's file menu), at the point the row handed over.
    * @param entry - The row the menu acts on.
    * @param area - The group the row was opened in.
-   * @param anchor - The row element, which the layer is measured from.
+   * @param origin - Where the card opens: the pointer, or the row for a keyboard.
    */
-  const openMenu = (entry: FileChange, area: ChangeArea, anchor: HTMLElement): void => {
+  const openMenu = (entry: FileChange, area: ChangeArea, origin: ToolbarPoint): void => {
     // Shift+F10 reaches here without a press, so the branch list or the stash stack
     // would otherwise stay open behind the menu: two layers, one panel.
     setPickerOpen(false)
     setStashOpen(false)
-    setMenu({ kind: 'file', anchor, entry, area })
+    setMenu({ kind: 'file', origin, entry, area })
   }
 
   /**
@@ -1739,16 +1755,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
-   * Open one commit row's menu (§9's commit menu), anchored on the row that asked.
+   * Open one commit row's toolbar (§9's commit menu), at the point it handed over.
    * @param commit - The commit the menu acts on.
-   * @param anchor - The row element, which the layer is measured from.
+   * @param origin - Where the card opens: the pointer, or the row for a keyboard.
    * @param canUndo - Whether this row is the newest, and so may carry FR-3.8's undo.
    */
-  const openCommitMenu = (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean): void => {
+  const openCommitMenu = (commit: CommitInfo, origin: ToolbarPoint, canUndo: boolean): void => {
     // Same one-layer rule as the file menu: Shift+F10 arrives without a press.
     setPickerOpen(false)
     setStashOpen(false)
-    setMenu({ kind: 'commit', anchor, commit, canUndo, resetOpen: false })
+    setMenu({ kind: 'commit', origin, commit, canUndo, resetOpen: false })
   }
 
   /**
@@ -1782,25 +1798,28 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     `discard:${area}:${entry.path}`
 
   /**
-   * The entries of one file row's menu (§9's file menu).
+   * The entries of one file row's toolbar (§9's file menu).
    *
    * The row's own staging action comes first — `git add` under the name that fits
    * the row (`mark resolved` for a conflict, FR-9.2) — then the destructive entry,
    * then the two copying entries §9 lists (order 6), each group after a hairline.
+   * Every entry carries a mark, because a card this small is read by shape before
+   * it is read by word.
    *
    * Discard appears exactly where `ui/row-actions.ts` says the row has a button for
    * it: the working-tree rows. It is an armed entry (`stayOpen`), so the first click
-   * arms it and the menu stays up for the second — §4.3's two-click confirmation,
+   * arms it and the card stays up for the second — §4.3's two-click confirmation,
    * with the entry itself becoming the confirmation. The copies are on every row,
    * because a path is copyable whatever its state.
    */
-  const fileMenuEntries = (row: FileRowMenu): readonly MenuEntry[] => {
-    const staging: MenuEntry =
+  const fileMenuEntries = (row: FileRowMenu): readonly ToolbarEntry[] => {
+    const staging: ToolbarEntry =
       row.area === 'staged'
         ? {
             kind: 'item',
             id: 'unstage',
             label: t('action.unstage'),
+            icon: <MinusGlyph />,
             disabled: pending,
             onSelect: () => unstage([row.entry.path]),
           }
@@ -1808,21 +1827,26 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             kind: 'item',
             id: 'stage',
             label: row.area === 'conflicted' ? t('action.resolve') : t('action.stage'),
+            // For a conflict the same command means the other thing, and its mark
+            // says which: a tick for "resolved", a plus for "staged".
+            icon: row.area === 'conflicted' ? <CheckGlyph /> : <PlusGlyph />,
             disabled: pending,
             onSelect: () => stage([row.entry.path]),
           }
-    const copies: readonly MenuEntry[] = [
+    const copies: readonly ToolbarEntry[] = [
       { kind: 'separator' },
       {
         kind: 'item',
         id: 'copyRelativePath',
         label: t('copy.relativePath'),
+        icon: <CopyGlyph />,
         onSelect: () => void copyToClipboard(say('copy.relativePath'), row.entry.path),
       },
       {
         kind: 'item',
         id: 'copyAbsolutePath',
         label: t('copy.absolutePath'),
+        icon: <CopyGlyph />,
         onSelect: () =>
           void copyToClipboard(
             say('copy.absolutePath'),
@@ -1840,6 +1864,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         kind: 'item',
         id: 'discard',
         label: armedHere ? t('action.discardArmed') : t('action.discard'),
+        icon: <DiscardGlyph />,
         danger: true,
         stayOpen: true,
         disabled: pending,
@@ -1860,7 +1885,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   }
 
   /**
-   * The entries of one commit row's menu (§9's commit menu).
+   * The entries of one commit row's toolbar (§9's commit menu).
    *
    * Three groups, each after a hairline. The copying entries are on every row —
    * a hash or a message is worth taking from any commit. The rewriting entries
@@ -1875,25 +1900,32 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * parents and ancestry for the rest), so the two cannot disagree about what is
    * coming. Revert and cherry-pick refuse a merge commit, squash refuses the
    * first commit — all of them with the host's own sentence beside the list.
+   *
+   * The rewriting entries carry the marks that tell them apart at a glance. They
+   * are the four things this panel can do to history that are not a plain copy,
+   * and a card of nine text rows is read by shape before it is read by word.
    */
-  const commitMenuEntries = (row: CommitRowMenu): readonly MenuEntry[] => {
-    const copies: readonly MenuEntry[] = [
+  const commitMenuEntries = (row: CommitRowMenu): readonly ToolbarEntry[] => {
+    const copies: readonly ToolbarEntry[] = [
       {
         kind: 'item',
         id: 'copyShortHash',
         label: t('copy.shortHash'),
+        icon: <CopyGlyph />,
         onSelect: () => void copyToClipboard(say('copy.shortHash'), row.commit.shortOid),
       },
       {
         kind: 'item',
         id: 'copyFullHash',
         label: t('copy.fullHash'),
+        icon: <CopyGlyph />,
         onSelect: () => void copyToClipboard(say('copy.fullHash'), row.commit.oid),
       },
       {
         kind: 'item',
         id: 'copyMessage',
         label: t('copy.message'),
+        icon: <CopyGlyph />,
         // The history list reads `%s`, the subject line; the body is not on this
         // side of the wire, so this copies what the row itself shows.
         onSelect: () => void copyToClipboard(say('copy.message'), row.commit.subject),
@@ -1906,6 +1938,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
      * @param armingKey - The panel-wide armed-state key for this entry.
      * @param idle - Label before it is armed.
      * @param confirmation - Label once armed; it says what the second click does.
+     * @param icon - The mark in the entry's leading column.
      * @param run - What the second click runs.
      * @param disabled - Whether the entry cannot do anything at all.
      */
@@ -1914,14 +1947,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       armingKey: string,
       idle: GitPanelKey,
       confirmation: GitPanelKey,
+      icon: ReactNode,
       run: () => void,
       disabled = false,
-    ): MenuEntry => {
+    ): ToolbarEntry => {
       const armedHere = armedKey === armingKey
       return {
         kind: 'item',
         id,
         label: armedHere ? t(confirmation) : t(idle),
+        icon,
         danger: true,
         stayOpen: true,
         disabled: pending || disabled,
@@ -1957,6 +1992,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             `reset:${row.commit.oid}:${entry.mode}`,
             entry.label,
             entry.confirmation,
+            // One mark for all three: they are three answers to one question,
+            // and the labels are what tell the answers apart.
+            <ResetGlyph />,
             () => resetTo(row.commit, entry.mode),
           ),
         ),
@@ -1965,17 +2003,20 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           kind: 'item',
           id: 'resetBack',
           label: t('action.resetBack'),
+          // No mark: the column stays reserved so the modes above keep their
+          // alignment, and the gap reads as the way back out of the sub-list.
           onSelect: () => setMenu({ ...row, resetOpen: false }),
         },
       ]
     }
 
-    const rewrites: readonly MenuEntry[] = [
+    const rewrites: readonly ToolbarEntry[] = [
       armable(
         'revert',
         `revert:${row.commit.oid}`,
         'action.revertCommit',
         'action.revertCommitArmed',
+        <RevertGlyph />,
         () => revertCommit(row.commit),
       ),
       armable(
@@ -1983,6 +2024,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         `cherryPick:${row.commit.oid}`,
         'action.cherryPick',
         'action.cherryPickArmed',
+        <CherryPickGlyph />,
         () => cherryPick(row.commit),
       ),
       armable(
@@ -1990,6 +2032,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         `squash:${row.commit.oid}`,
         'action.squashCommit',
         'action.squashCommitArmed',
+        <SquashGlyph />,
         () => rewriteCommit(row.commit, 'squash'),
         // A first commit has nothing to fold into; the host says so too, but a
         // disabled entry is the cheaper answer.
@@ -2000,14 +2043,18 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         `drop:${row.commit.oid}`,
         'action.dropCommit',
         'action.dropCommitArmed',
+        // The bin again: dropping a commit really does delete it, which is the
+        // half of discard's story where a bin would have been honest.
+        <TrashGlyph />,
         () => rewriteCommit(row.commit, 'drop'),
       ),
     ]
 
-    const resetEntry: MenuEntry = {
+    const resetEntry: ToolbarEntry = {
       kind: 'item',
       id: 'resetHere',
       label: t('action.resetHere'),
+      icon: <ResetGlyph />,
       stayOpen: true,
       disabled: pending,
       onSelect: () => {
@@ -2018,7 +2065,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       },
     }
 
-    const entries: MenuEntry[] = [
+    const entries: ToolbarEntry[] = [
       ...copies,
       { kind: 'separator' },
       ...rewrites,
@@ -2039,6 +2086,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             ? t('action.undoCommitArmedRevert')
             : t('action.undoCommitArmedReset')
           : t('action.undoCommit'),
+        icon: <UndoGlyph />,
         danger: true,
         stayOpen: true,
         disabled: pending,
@@ -2059,9 +2107,9 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     menu === null
       ? ''
       : menu.kind === 'file'
-        ? t('menu.fileRow', { path: menu.entry.path })
-        : t('menu.commitRow', { hash: menu.commit.shortOid })
-  const menuEntries: readonly MenuEntry[] =
+        ? t('toolbar.fileRow', { path: menu.entry.path })
+        : t('toolbar.commitRow', { hash: menu.commit.shortOid })
+  const menuEntries: readonly ToolbarEntry[] =
     menu === null ? [] : menu.kind === 'file' ? fileMenuEntries(menu) : commitMenuEntries(menu)
 
   // The operation bar's own words, resolved at render time so a language switch
@@ -2093,7 +2141,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           pickerOpen={pickerOpen}
           onTogglePicker={() => {
             // The rail has two layers and one row to hang them from: opening one
-            // closes the other, which is the same rule the row menus follow.
+            // closes the other, which is the same rule the row toolbar follows.
+            // The toolbar has to be cleared here rather than left to its own
+            // outside-press rule: a rail button reached by keyboard sends Enter,
+            // and that never sends a pointerdown.
+            setMenu(null)
             setStashOpen(false)
             setPickerOpen((open) => !open)
           }}
@@ -2150,21 +2202,18 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             />
           </Popover>
         )}
-        {/* A change row's menu (§9's file menu): the same layer the branch list
-            uses, anchored on the row that opened it — right-click, Shift+F10, or
-            the menu key — so it covers the list instead of moving it. */}
+        {/* A row's toolbar (§9's two menus): NOT the layer above. The rail's
+            dropdowns hang off the control that opens them and span the column;
+            this card is placed at the point that summoned it — right-click,
+            Shift+F10, or the menu key — and is only as wide as its own words, so
+            a right-click never looks like the branch list opening. */}
         {menu !== null && (
-          <Popover
-            anchor={menu.anchor}
+          <ContextToolbar
+            origin={menu.origin}
+            entries={menuEntries}
             label={menuLabel}
             onClose={() => setMenu(null)}
-          >
-            <Menu
-              entries={menuEntries}
-              label={menuLabel}
-              onClose={() => setMenu(null)}
-            />
-          </Popover>
+          />
         )}
         {/* The ways out of an interrupted operation — FR-9.3's merge included.
             The bar exists because the state is otherwise invisible: with every

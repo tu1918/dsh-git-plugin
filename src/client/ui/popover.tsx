@@ -22,17 +22,18 @@
  *   capped at what is left of the panel, so a long list scrolls inside it instead
  *   of running off the bottom of a 400px sidebar.
  * - **The layer flips above the anchor when below cannot hold it.** The branch
- *   list hangs from the rail, where "below" is the whole panel; a row menu hangs
- *   from a row that can be the panel's last one, and a menu capped at the 4px
- *   between it and the bottom edge is a menu nobody can use. {@link placeLayer}
- *   decides, and it flips only when above is genuinely roomier — a long list
- *   under the rail stays below, where the user's eye already is.
+ *   list hangs from the rail, where "below" is the whole panel — but a short
+ *   window leaves it capped at the few pixels between the rail and the bottom
+ *   edge. {@link placeLayer} decides, and it flips only when above is genuinely
+ *   roomier — a long list under the rail stays below, where the user's eye
+ *   already is.
  * - **Dismissal is the layer's job, not the content's.** Outside press and Escape
- *   are the two things §4.3 asks of a dropdown, and both are the same for every
- *   layer that will use this: the branch list today, the row menus that M5a's
- *   work list calls for next (§10.1). The anchor owns its own toggle, so a press
- *   on it is not "outside" — closing here as well would make the second press
- *   close and reopen in one go.
+ *   are the two things §4.3 asks of a dropdown, and both are the same for both
+ *   layers that use this — the branch list and the stash stack, which is why they
+ *   are one module. The anchor owns its own toggle, so a press on it is not
+ *   "outside": closing here as well would make the second press close and reopen
+ *   in one go. (The right-click toolbar does NOT use this module, and has no
+ *   anchor to exempt; see `ui/toolbar.tsx`.)
  *
  * @module dsh-git-panel/client/ui/popover
  */
@@ -157,10 +158,10 @@ export function Popover({ anchor, onClose, label, id, gap = 4, children }: Popov
     const measure = (): void => {
       const layer = ref.current
       const panel = layer?.closest<HTMLElement>(`.${cls.root}`) ?? null
-      // A detached anchor has no rectangle to hang from: the row a menu was opened
-      // on can be re-rendered away while the menu is up, and measuring it would
-      // put the layer in the panel's corner. Leaving the last box alone keeps it
-      // where the user opened it until the panel closes the menu.
+      // A detached anchor has no rectangle to hang from: the control that opened
+      // the layer can be re-rendered away while the layer is up, and measuring it
+      // would put the layer in the panel's corner. Leaving the last box alone
+      // keeps it where the user opened it until the caller closes it.
       if (layer === null || panel === null || !anchor.isConnected) return
       setBox(
         placeLayer({

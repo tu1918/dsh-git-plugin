@@ -57,8 +57,8 @@ export const zh = {
   'action.discardArmed': '再点一次：不可恢复',
   'action.discardConfirm': '将丢弃「{path}」的更改，不可恢复',
 
-  'menu.fileRow': '{path} 的操作',
-  'menu.commitRow': '提交 {hash} 的操作',
+  'toolbar.fileRow': '{path} 的操作',
+  'toolbar.commitRow': '提交 {hash} 的操作',
 
   'copy.relativePath': '复制相对路径',
   'copy.absolutePath': '复制绝对路径',
@@ -313,8 +313,8 @@ export const en: Record<GitPanelKey, string> = {
   'action.discardArmed': 'Click again: cannot be undone',
   'action.discardConfirm': 'Discards the changes to {path}; this cannot be undone',
 
-  'menu.fileRow': 'Actions for {path}',
-  'menu.commitRow': 'Actions for commit {hash}',
+  'toolbar.fileRow': 'Actions for {path}',
+  'toolbar.commitRow': 'Actions for commit {hash}',
 
   'copy.relativePath': 'Copy relative path',
   'copy.absolutePath': 'Copy absolute path',

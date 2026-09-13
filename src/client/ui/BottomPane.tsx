@@ -78,6 +78,7 @@ import { DOCK_MIN_HEIGHT, DOCK_RESERVED } from './panel-layout.ts'
 import { DiffPane } from './DiffView.tsx'
 import { HistoryPanel } from './History.tsx'
 import { PaneResizer } from './pane-resizer.tsx'
+import type { ToolbarPoint } from './toolbar.ts'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
 import { CloseGlyph } from './icons.tsx'
@@ -154,7 +155,7 @@ export interface BottomPaneProps {
    * armed confirmation and the action feedback both live there. `canUndo` says
    * whether the row is the newest, which is the only one FR-3.8 may undo.
    */
-  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean) => void
+  readonly onCommitMenu?: (commit: CommitInfo, point: ToolbarPoint, canUndo: boolean) => void
   /**
    * Open one file of a commit as that commit changed it (FR-7.2).
    *

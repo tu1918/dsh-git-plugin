@@ -339,6 +339,125 @@ export function StashGlyph({ size = 14, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * Two sheets, one behind the other: take a copy of a value.
+ *
+ * The toolbar's five copying entries all draw this: the mark answers "what kind
+ * of thing is this entry", and the label beside it answers which value. Five
+ * variations on a sheet would be five pictures nobody can tell apart.
+ * @param props - Size and class.
+ */
+export function CopyGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <rect x="3" y="5.4" width="6.6" height="7.6" rx="1.1" />
+      <path d="M5.8 5.4V4.2c0-.7.5-1.2 1.2-1.2h4.6c.7 0 1.2.5 1.2 1.2v4.6c0 .7-.5 1.2-1.2 1.2h-1.2" />
+    </>,
+  )
+}
+
+/**
+ * A commit and an arrow leaving it backwards: revert this commit (order 9).
+ *
+ * The dot is the commit being reversed and the arrow is the new one that undoes
+ * it, which is the one thing about revert worth drawing — history is not
+ * rewritten, something is added to it. Deliberately not a closed loop, which
+ * would read as "reload" (see {@link DiscardGlyph} for the same warning).
+ * @param props - Size and class.
+ */
+export function RevertGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <circle cx="12.4" cy="8.4" r="1.2" />
+      <path d="M9.6 8.4H3.4" />
+      <path d="M6 5.8 3.4 8.4l2.6 2.6" />
+    </>,
+  )
+}
+
+/**
+ * A commit lifted off one line and set down on another: cherry-pick (order 9).
+ *
+ * The empty line at the bottom is the current branch and the dot above it is the
+ * commit on its way there. The gap between the arrow's head and the line is what
+ * says the commit has not landed yet.
+ * @param props - Size and class.
+ */
+export function CherryPickGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <circle cx="8" cy="4.2" r="1.5" />
+      <path d="M8 5.9v3.6" />
+      <path d="M6.2 7.7 8 9.5l1.8-1.8" />
+      <path d="M3 12.6h10" />
+    </>,
+  )
+}
+
+/**
+ * An arrow folding down onto a line: squash into the previous commit (order 9).
+ *
+ * The line is the commit underneath, and the arrow is the one above coming down
+ * onto it — the fold is the whole of what squash does.
+ * @param props - Size and class.
+ */
+export function SquashGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M8 3.4v5.2" />
+      <path d="M5.8 6.4 8 8.6l2.2-2.2" />
+      <path d="M3.6 12.2h8.8" />
+    </>,
+  )
+}
+
+/**
+ * Two chevrons pointing back: reset to a commit (order 9).
+ *
+ * The double arrow is the media-controls "rewind", which is the right register:
+ * reset moves the branch itself, where revert and cherry-pick add to it. The
+ * three modes share this mark and are told apart by their labels — soft, mixed
+ * and hard are three answers to one question, not three different actions.
+ * @param props - Size and class.
+ */
+export function ResetGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M7.4 4.6 3.8 8l3.6 3.4" />
+      <path d="M12.6 4.6 9 8l3.6 3.4" />
+    </>,
+  )
+}
+
+/**
+ * An elbow arrow hooking back to the left: undo the newest commit (FR-3.8).
+ *
+ * Drawn as an elbow rather than as {@link DiscardGlyph}'s curl so the two are not
+ * one shape seen twice: discard acts on a file's edits, undo acts on a commit.
+ * They never share a toolbar, but they do share a reader.
+ * @param props - Size and class.
+ */
+export function UndoGlyph({ size = 13, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M12.4 11.6V9.8a3.4 3.4 0 0 0-3.4-3.4H4.6" />
+      <path d="M7.2 3.8 4.6 6.4l2.6 2.6" />
+    </>,
+  )
+}
+
+/**
  * What each kind draws, on its own.
  *
  * No shared outline on purpose. The first version drew every kind as a mark inside

@@ -34,6 +34,7 @@ import { cls } from './styles.ts'
 import { useArmedKey } from './armed.ts'
 import { dirKey, type ChangeView, type FileIcons } from './change-view.ts'
 import { canDiscard } from './row-actions.ts'
+import type { ToolbarPoint } from './toolbar.ts'
 import {
   CaretGlyph,
   CheckGlyph,
@@ -150,11 +151,13 @@ export function RowCheckbox({
  * one-argument `onClick` signature, and the containment lives where the layout
  * says it does.
  *
- * The row also opens the panel's row menu (§9's file menu, M5a's first work
- * package): a right-click anywhere on the band, or Shift+F10 / the menu key while
- * the row has focus. The row is the anchor — the layer is measured from it — and
- * it is `event.currentTarget`, read here because a synthetic event's
- * `currentTarget` is only valid while the handler is running.
+ * The row also opens the panel's right-click toolbar (§9's file menu): a
+ * right-click anywhere on the band, or Shift+F10 / the menu key while the row has
+ * focus. What it hands over is a POINT, not itself — the card opens where the
+ * pointer was, and a keyboard has no pointer, so that path measures the row
+ * instead. Reading `event.currentTarget` here, rather than up in the panel, is
+ * what makes both possible: a synthetic event's `currentTarget` is only valid
+ * while the handler is running.
  *
  * And it carries FR-6.1's discard: on the working-tree rows (see
  * `ui/row-actions.ts` for which those are) the strip gains a third button which,
@@ -200,12 +203,13 @@ export function ChangeRow({
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   /**
-   * Open this row's menu, anchored on the row.
+   * Open this row's toolbar at a point, in viewport coordinates.
    *
-   * The element travels with the call because the menu's layer is measured from
-   * it, and only the row knows which element it is.
+   * The point travels with the call because the card is placed from it, and only
+   * the row knows where the pointer was — or, when the keyboard asked, where the
+   * row itself is.
    */
-  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   /** Discard this row's working-tree change, once the row is armed (FR-6.1). */
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
   /** Add this row to the selection, or take it out. */
@@ -246,7 +250,7 @@ export function ChangeRow({
         // A right-click on the row is the row's menu, not the browser's: the
         // native one would cover the panel and offer nothing this list can do.
         event.preventDefault()
-        onMenu(entry, area, event.currentTarget)
+        onMenu(entry, area, { x: event.clientX, y: event.clientY })
       }}
       onKeyDown={(event) => {
         // Only the row's own key press counts. A key press on the `+`/`−` inside
@@ -258,7 +262,10 @@ export function ChangeRow({
         // key, or what a keyboard without one sends — Shift+F10.
         if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
           event.preventDefault()
-          onMenu(entry, area, event.currentTarget)
+          // No pointer to open at: the row's own leading edge, just under it, is
+          // where the pointer would have been.
+          const rect = event.currentTarget.getBoundingClientRect()
+          onMenu(entry, area, { x: rect.left + 12, y: rect.bottom })
           return
         }
         if (event.key !== 'Enter' && event.key !== ' ') return
@@ -438,7 +445,7 @@ function TreeNodeView({
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
-  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
   /** Add a row to the selection, or take it out (called once per path). */
   readonly onToggleSelect: (path: string) => void
@@ -617,7 +624,7 @@ export function Group({
   readonly onStage: (paths: readonly string[]) => void
   readonly onUnstage: (paths: readonly string[]) => void
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
-  readonly onMenu: (entry: FileChange, area: ChangeArea, anchor: HTMLElement) => void
+  readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
   /** Add a row to the selection, or take it out (called once per path). */
   readonly onToggleSelect: (path: string) => void

@@ -35,6 +35,7 @@ import { cls } from './styles.ts'
 import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
 import { CloseGlyph, DotGlyph, RingGlyph } from './icons.tsx'
+import type { ToolbarPoint } from './toolbar.ts'
 
 /** Rows per page: FR-3.7's default, and what "load more" appends. */
 const LOG_PAGE_SIZE = 30
@@ -370,13 +371,15 @@ function CommitRow({
   readonly selected: boolean
   readonly onSelect: () => void
   /**
-   * Open the row's menu, anchored on the row element (§9's commit menu).
+   * Open the row's toolbar at a point, in viewport coordinates (§9's commit
+   * menu). The row measures itself for the keyboard path; the pointer path hands
+   * over where the pointer was.
    *
    * Every row carries the copying entries, and the panel above decides whether
    * this particular row may also undo. Absent only when nothing above owns a
    * menu, in which case the row leaves the native context menu alone.
    */
-  readonly onMenu?: (anchor: HTMLElement) => void
+  readonly onMenu?: (point: ToolbarPoint) => void
 }): ReactNode {
   const age = relativeTimeParts(commit.committedAt, now)
   const format = useMemo(() => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }), [locale])
@@ -400,7 +403,7 @@ function CommitRow({
             ? undefined
             : (event) => {
                 event.preventDefault()
-                onMenu(event.currentTarget)
+                onMenu({ x: event.clientX, y: event.clientY })
               }
         }
         onKeyDown={
@@ -410,7 +413,10 @@ function CommitRow({
                 // Shift+F10 is what a keyboard without a menu key sends.
                 if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return
                 event.preventDefault()
-                onMenu(event.currentTarget)
+                // No pointer to open at: the row's own leading edge, just under
+                // it, is where the pointer would have been.
+                const rect = event.currentTarget.getBoundingClientRect()
+                onMenu({ x: rect.left + 12, y: rect.bottom })
               }
         }
       >
@@ -464,7 +470,7 @@ export interface HistoryPanelProps {
    * FR-3.8 undoes exactly that one. It says so with `canUndo` rather than by
    * withholding the menu, because the copying entries are on every row.
    */
-  readonly onCommitMenu?: (commit: CommitInfo, anchor: HTMLElement, canUndo: boolean) => void
+  readonly onCommitMenu?: (commit: CommitInfo, point: ToolbarPoint, canUndo: boolean) => void
   /**
    * Open one file of the selected commit as that commit changed it (FR-7.2).
    *
@@ -642,7 +648,7 @@ export function HistoryPanel({
               onMenu={
                 onCommitMenu === undefined
                   ? undefined
-                  : (anchor) => onCommitMenu(commit, anchor, commit.oid === newestOid)
+                  : (point) => onCommitMenu(commit, point, commit.oid === newestOid)
               }
             />
           )
