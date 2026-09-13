@@ -486,10 +486,11 @@ function BranchRail({
   onSync,
   pickerOpen,
   onTogglePicker,
-  railRef,
+  branchRef,
   pickerId,
   stashOpen,
   onToggleStash,
+  stashRef,
   mode,
   onToggleMode,
   repos,
@@ -536,18 +537,21 @@ function BranchRail({
   /** Fold or unfold the branch picker (FR-4.1). */
   readonly onTogglePicker: () => void
   /**
-   * The rail itself, which the picker's layer is measured from.
+   * The branch button itself — the control the picker's layer hangs from.
    *
-   * A ref rather than a class lookup: the layer hangs under the control that
-   * opened it, and the rail is that control's row.
+   * A ref rather than a class lookup, and the BUTTON rather than the rail it sits
+   * in: the layer lines up with the control that opened it, and the rail's left
+   * edge is not that control's (the repository picker can sit in front of it).
    */
-  readonly railRef: Ref<HTMLDivElement>
+  readonly branchRef: Ref<HTMLButtonElement>
   /** Id of the picker's layer, which the branch button points at. */
   readonly pickerId: string
   /** Whether the stash list is unfolded (FR-6.2). */
   readonly stashOpen: boolean
   /** Fold or unfold the stash list. */
   readonly onToggleStash: () => void
+  /** The stash button, which the stash layer hangs from. */
+  readonly stashRef: Ref<HTMLButtonElement>
   /** FR-1.3: which shape the change list is drawn in. */
   readonly mode: ViewMode
   /** Switch between the flat list and the file tree. */
@@ -571,7 +575,7 @@ function BranchRail({
       : (branch.name ?? t('branch.detached'))
 
   return (
-    <div className={cls.head} ref={railRef}>
+    <div className={cls.head}>
       {/* Which repository this panel is reading (FR-8). Rendered ONLY when there
           is a choice, so a workspace that is one repository — the ordinary case —
           looks exactly as it did before this feature existed. */}
@@ -596,6 +600,7 @@ function BranchRail({
       <button
         type="button"
         className={cls.branch}
+        ref={branchRef}
         title={`${name} — ${track}`}
         aria-expanded={pickerOpen}
         aria-haspopup="dialog"
@@ -655,6 +660,7 @@ function BranchRail({
       <button
         type="button"
         className={cls.tool}
+        ref={stashRef}
         title={t('stash.open')}
         aria-label={t('stash.open')}
         aria-expanded={stashOpen}
@@ -790,8 +796,9 @@ export function StatusPanel({
   /** The change row whose menu is open (§9's file menu), or `null`. */
   /** The row whose menu is open (§9's file menu, or FR-3.8's commit menu), or `null`. */
   const [menu, setMenu] = useState<RowMenu | null>(null)
-  /** The rail the picker's layer is measured from, and the id that names it. */
-  const railRef = useRef<HTMLDivElement | null>(null)
+  /** The two rail controls whose layers hang from them, and the id that names the picker's. */
+  const branchRef = useRef<HTMLButtonElement | null>(null)
+  const stashRef = useRef<HTMLButtonElement | null>(null)
   const pickerId = useId()
   /** The last refused branch deletion, so an unmerged branch can arm its force click. */
   const [branchRefusal, setBranchRefusal] = useState<BranchRefusal | null>(null)
@@ -2197,7 +2204,7 @@ export function StatusPanel({
             setStashOpen(false)
             setPickerOpen((open) => !open)
           }}
-          railRef={railRef}
+          branchRef={branchRef}
           pickerId={pickerId}
           stashOpen={stashOpen}
           onToggleStash={() => {
@@ -2205,15 +2212,18 @@ export function StatusPanel({
             setPickerOpen(false)
             setStashOpen((open) => !open)
           }}
+          stashRef={stashRef}
           mode={mode}
           onToggleMode={() => setMode((current) => (current === 'tree' ? 'list' : 'tree'))}
         />
         {/* The branch list floats over the panel instead of taking a row in its
             column: it is opened from the rail, used, and dismissed, and the file
-            list underneath must not move while that happens (FR-4.1's dropdown). */}
+            list underneath must not move while that happens (FR-4.1's dropdown).
+            It hangs from the BUTTON, not the rail: that is the control the user
+            pressed, and the layer lines up with it. */}
         {pickerOpen && (
           <Popover
-            anchor={railRef.current}
+            anchor={branchRef.current}
             id={pickerId}
             label={t('branch.pickerLabel')}
             onClose={() => setPickerOpen(false)}
@@ -2231,11 +2241,11 @@ export function StatusPanel({
             />
           </Popover>
         )}
-        {/* The stash stack (FR-6.2): the same layer again, anchored on the rail
+        {/* The stash stack (FR-6.2): the same layer again, hanging from the button
             that opened it, so reading the stack never moves the change list. */}
         {stashOpen && (
           <Popover
-            anchor={railRef.current}
+            anchor={stashRef.current}
             label={t('stash.title')}
             onClose={() => setStashOpen(false)}
           >
@@ -2246,7 +2256,6 @@ export function StatusPanel({
               onSave={stashSave}
               onApply={stashApply}
               onDrop={stashDrop}
-              onClose={() => setStashOpen(false)}
             />
           </Popover>
         )}

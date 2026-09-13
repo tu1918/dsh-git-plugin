@@ -79,14 +79,22 @@ function labelOf(scope: CommitScope, t: Translate): string {
  * The sentence that says what the button will do.
  * @param scope - The current scope.
  * @param t - Translator.
- * @returns One line, never empty.
+ * @returns One line, or the empty string where the button's own words already
+ *   say it — see the `all-tracked` case.
  */
 function hintOf(scope: CommitScope, t: Translate): string {
   switch (scope.kind) {
     case 'staged':
       return t('commit.hintStaged', { count: scope.count })
     case 'all-tracked':
-      return t('commit.hintAllTracked')
+      // Deliberately empty (asked for from the running panel). The button's own
+      // label already names the widening and counts it
+      // (`commit.allTrackedCount`), and the sentence that used to spell out the
+      // `add -u` under it was one line of mechanism beside words already doing
+      // the job. The span stays in the markup and keeps carrying
+      // `data-commit-scope`: it is what holds the button against the right edge,
+      // and it is how the panel reads the scope back.
+      return ''
     case 'conflicted':
       return t('commit.hintConflicted', { count: scope.count })
     case 'untracked-only':

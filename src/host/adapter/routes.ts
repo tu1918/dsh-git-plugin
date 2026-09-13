@@ -414,7 +414,7 @@ export function registerGitPanelRoutes(
         }
         // FR-3.4's two commits differ only in this flag: the panel sets it when
         // its button reads "commit all tracked changes", and the service then
-        // does the `add -u` the label promised.
+        // does the `add -u` that widening implies.
         return body['all'] === true
           ? await service.commitAll(sessionId, message)
           : await service.commit(sessionId, message)

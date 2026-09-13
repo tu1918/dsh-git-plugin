@@ -182,8 +182,9 @@ export function createGitRemoteClient(): GitRemoteClient {
       mutate<OperationReport>('/discard', { session: sessionId, paths }, signal),
     commit: (sessionId, message, signal) =>
       mutate<CommitInfo>('/commit', { session: sessionId, message }, signal),
-    // The one argument that separates FR-3.4's two commits, named as the flag the
-    // button's copy promises: `add -u` first, then commit.
+    // The one argument that separates FR-3.4's two commits: `add -u` first, then
+    // commit — the widening the button's own words name ("commit all tracked
+    // changes"), without the panel spelling out the flag anywhere.
     commitAll: (sessionId, message, signal) =>
       mutate<CommitInfo>('/commit', { session: sessionId, message, all: true }, signal),
     push: (sessionId, signal) => mutate<OperationReport>('/push', { session: sessionId }, signal),

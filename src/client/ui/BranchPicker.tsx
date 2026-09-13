@@ -34,7 +34,7 @@ import { useArmedKey } from './armed.ts'
 import { ToolButton } from './ChangeGroup.tsx'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
-import { CheckGlyph, CloseGlyph, TrashGlyph } from './icons.tsx'
+import { CheckGlyph, TrashGlyph } from './icons.tsx'
 
 /** A delete the host refused, so the row can offer the forced click. */
 export interface BranchRefusal {
@@ -146,7 +146,13 @@ export function BranchPicker({
                 disabled={busy}
                 onClick={() => arm(branch.name)}
               >
-                <TrashGlyph size={13} />
+                {/* The same 16px a file row's '+' uses, not the glyph's own 13px
+                    default: the bin draws inside a 16-unit viewBox with a 3.4-unit
+                    margin, so at 13 its ink is only ~8px tall next to a 13px
+                    name — reported from the running panel as a mark too small for
+                    a row control. At 16 the ink is ~10px, level with the name's
+                    cap height. */}
+                <TrashGlyph size={16} />
               </ToolButton>
             )}
             {armedHere && (
@@ -257,11 +263,6 @@ export function BranchPicker({
             <span className={cls.branchRemoteSubject}>{remote.subject}</span>
           </div>
         ))}
-      </div>
-      <div className={cls.branchFooter}>
-        <ToolButton label={t('branch.pickerClose')} onClick={onClose}>
-          <CloseGlyph size={12} />
-        </ToolButton>
       </div>
     </div>
   )

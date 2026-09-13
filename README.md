@@ -35,7 +35,7 @@ shipped.
 | A state-file poll as the fallback when events are unavailable (network drives, platforms without recursive watch), and a `stat` of the same files when even that fails | ✅ |
 | Live git status/branches/log over `/git-panel/*` | ✅ |
 | Stage / unstage, one file or a whole group | ✅ |
-| Commit box with an explicit scope: index only, or the announced `add -u` | ✅ |
+| Commit box with an explicit scope: the index only, or every tracked change (the button says which, and how many) | ✅ |
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
 | Fetch every remote — a dashed ↓ beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
@@ -57,7 +57,7 @@ shipped.
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
 | Branch picker: switch, create (from HEAD or a chosen branch), delete — with the unmerged case asking for a second, forced click | ✅ |
-| That picker as a real dropdown: it floats over the panel (measured from the rail, capped at the room left) instead of pushing the staged drawer, the commit box and the change list down; an outside press or Escape closes it | ✅ |
+| That picker as a real dropdown: it floats over the panel (hanging off the branch button and lined up with it, capped at the room left) instead of pushing the staged drawer, the commit box and the change list down; an outside press or Escape closes it | ✅ |
 | A blocked switch shows git's own multi-line refusal, verbatim | ✅ |
 | An interrupted operation's own bar: a merge, a revert, a cherry-pick or a rewrite that stopped on conflicts (or on a pick that became empty) says which one it is and offers the moves that operation really has — continue, abort, and (for a rebase) skip. The state comes from stat-ing the markers in the git directory (`MERGE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD`, `rebase-merge/`), not from the conflict list: once every conflict is staged the list is empty while the operation is still open, and a stopped rebase may have no conflict at all. Continue and skip wait until no unmerged path is left, abort takes two clicks | ✅ |
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |

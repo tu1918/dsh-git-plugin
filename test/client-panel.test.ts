@@ -579,18 +579,59 @@ async function press(node: Element): Promise<void> {
 }
 
 /** A rectangle for stubbing layout, since jsdom has none. */
-function rect(top: number, height: number): DOMRect {
+function rect(top: number, height: number, left = 0, width = 320): DOMRect {
   return {
     top,
     bottom: top + height,
     height,
-    left: 0,
-    right: 320,
-    width: 320,
-    x: 0,
+    left,
+    right: left + width,
+    width,
+    x: left,
     y: top,
     toJSON: () => ({}),
   } as DOMRect
+}
+
+/**
+ * A `ResizeObserver` stand-in, because jsdom has none.
+ *
+ * The floating layer re-places itself when a box it measured from changes, and in
+ * a browser the observer is what reports that. A test can therefore do both halves
+ * of the same thing: state the rectangles, then {@link FakeResizeObserver.fire} the
+ * callback the browser would have called.
+ */
+class FakeResizeObserver {
+  /** Everything it was asked to watch. */
+  readonly targets: Element[] = []
+  private readonly callback: () => void
+  constructor(callback: () => void) {
+    this.callback = callback
+    fakeObservers.push(this)
+  }
+  observe(target: Element): void {
+    this.targets.push(target)
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+  /** Report a change, the way the browser does. */
+  fire(): void {
+    this.callback()
+  }
+}
+
+/** The observers handed out since the current test installed the stand-in. */
+const fakeObservers: FakeResizeObserver[] = []
+
+/** Install the stand-in, so a test can drive the observer by hand. */
+function installFakeResizeObserver(): void {
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver
+}
+
+/** Put the global back, so the next test is not left with a stand-in. */
+function removeFakeResizeObserver(): void {
+  delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
+  fakeObservers.length = 0
 }
 
 /** Set a textarea's value the way React's controlled inputs expect. */
@@ -678,8 +719,10 @@ afterEach(async () => {
     for (const root of pending) root.unmount()
   })
   document.body.textContent = ''
-  // A clipboard stub from one copying test must not answer the next one's.
+  // A clipboard stub from one copying test must not answer the next one's, and the
+  // ResizeObserver stand-in must not outlive the test that installed it.
   removeClipboard()
+  removeFakeResizeObserver()
 })
 
 after(() => {
@@ -1369,6 +1412,12 @@ describe('StatusPanel rendering', () => {
     // A refused commit's reason and the AI's truncation note land in this box, so
     // its ceiling scrolls rather than hiding them.
     assert.equal(box.overflow, 'auto')
+    // The band under the commit button is a gutter, not dead space (asked for
+    // from the running panel, in two rounds: 8px read as too much, nothing at all
+    // read as the button being stuck to the "Changes" header under it). The
+    // floor's leftover goes to the textarea instead of collecting there.
+    assert.equal(box.paddingBottom, '6px')
+    assert.equal(window.getComputedStyle(must(container, `.${cls.commitInputWrap}`)).flexGrow, '1')
 
     // The message is what varies inside that box, and it is bounded by its own
     // floor and ceiling rather than by the box clipping the commit button.
@@ -2678,7 +2727,7 @@ describe('the commit box (FR-3.3, FR-3.4)', () => {
     assert.deepEqual(calls.entries, [])
   })
 
-  it('announces the add -u widening when nothing is staged (FR-3.4)', async () => {
+  it('names the widening in the button’s own words when nothing is staged (FR-3.4)', async () => {
     const calls: ActionLog = { entries: [] }
     const status = statusWith({
       unstaged: [
@@ -2703,7 +2752,14 @@ describe('the commit box (FR-3.3, FR-3.4)', () => {
     // `add -u` will actually include — the untracked file is not in the count.
     const button = must<HTMLButtonElement>(container, `.${cls.commitButton}`)
     assert.equal(button.textContent, 'Commit all tracked changes (2)')
-    assert.match(container.textContent ?? '', /Runs git add -u first/)
+    // ...and it is the ONLY thing that says so: the sentence that used to explain
+    // `add -u` under the box was asked out from the running panel, so the scope
+    // line carries nothing here. The span stays for the layout — it is what holds
+    // the button against the right edge — and still reports the scope.
+    const scope = must<HTMLElement>(container, '[data-commit-scope]')
+    assert.equal(scope.getAttribute('data-commit-scope'), 'all-tracked')
+    assert.equal(scope.textContent, '')
+    assert.doesNotMatch(container.textContent ?? '', /add -u/u)
 
     await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'sweep')
     await click(button)
@@ -4211,6 +4267,52 @@ describe('the branch picker (FR-4.1–4.3)', () => {
     assert.deepEqual(calls.entries, ['deleteBranch:feature/x'])
   })
 
+  it('draws the row’s delete as a row control: full size, centered, red under the pointer', async () => {
+    installStyles(document)
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    const row = must(picker, `.${cls.branchRow}:not([data-current='true'])`)
+    const bin = must<SVGSVGElement>(row, `.${cls.tool} svg`)
+
+    // As big as the text beside it: the same 16px a file row's '+' is drawn at,
+    // rather than the glyph's own 13px default — the bin's viewBox leaves a
+    // 3.4-unit margin, so at 13 its ink is ~8px against the name's ~9px cap
+    // height and reads as a speck (reported from the running panel).
+    assert.equal(bin.getAttribute('width'), '16')
+    assert.equal(bin.getAttribute('height'), '16')
+
+    // And on the same centre line as that text: the row centers its items and the
+    // button centers its own content, so the glyph's ink — symmetric in its
+    // viewBox, 3.4 to 12.6 around the 8-unit middle — sits on the name's centre.
+    assert.equal(window.getComputedStyle(row).alignItems, 'center')
+    const box = window.getComputedStyle(must(row, `.${cls.tool}`))
+    assert.equal(box.alignItems, 'center')
+    assert.equal(box.justifyContent, 'center')
+
+    // Hovering it says what it does: the error ink, the token the armed danger
+    // button that replaces it uses. jsdom cannot resolve `var()`, so the rule is
+    // read off the sheet — and it is scoped to the row's own button rather than to
+    // every icon in the layer.
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.branchRow} > \\.${cls.tool}:hover:not\\(:disabled\\)\\s*\\{[^}]*` +
+          '--dsw-alias-state-error-primary',
+        'u',
+      ),
+    )
+    // ...while the generic icon hover stays neutral, which is what makes that
+    // scoping visible: every other glyph button in the panel keeps label-primary.
+    assert.match(sheet, new RegExp(`\\.${cls.tool}:hover\\s*\\{[^}]*label-primary`, 'u'))
+  })
+
   it('asks for a forced delete when the host refuses an unmerged branch (FR-4.3)', async () => {
     const calls: ActionLog = { entries: [] }
     const refusal = {
@@ -4338,7 +4440,7 @@ describe('the branch picker as a dropdown (§4.3, FR-4.1)', () => {
       [...panel.children].filter((child) => !before.includes(child)),
       [layer],
     )
-    // Its top edge is measured from the rail, which is why the rail is a ref.
+    // It renders where the rail does, as the next thing in the panel's column.
     assert.equal(layer.previousElementSibling, must(container, `.${cls.head}`))
     // And the control that opened it says so, to a screen reader as well.
     const trigger = must(container, `.${cls.branch}`)
@@ -4348,26 +4450,92 @@ describe('the branch picker as a dropdown (§4.3, FR-4.1)', () => {
     assert.equal(layer.getAttribute('role'), 'dialog')
   })
 
-  it('hangs under the rail, capped at the room the panel has left', async () => {
+  it('hangs under its button — lined up with it — capped at the room the panel has left', async () => {
     const container = await render(
       h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
     )
     await settle()
-    // jsdom has no layout, so the two rectangles a browser would compute are
-    // stated here: a 38px rail at the top of a 600px panel.
+    // jsdom has no layout, so the two rectangles a browser would compute are stated
+    // here: a 600px panel whose top edge sits at y=100, and the branch button — 26px
+    // tall, 12px into the rail.
     const panel = must(container, `.${cls.root}`)
-    const rail = must(container, `.${cls.head}`)
-    panel.getBoundingClientRect = () => rect(100, 600)
-    rail.getBoundingClientRect = () => rect(100, 38)
+    const button = must(container, `.${cls.branch}`)
+    panel.getBoundingClientRect = () => rect(100, 600, 0, 600)
+    button.getBoundingClientRect = () => rect(106, 26, 12, 66)
 
     await openPicker(container)
     const layer = must<HTMLElement>(container, '[data-popover="true"]')
 
-    // 38 of rail + the 4px gap, in the panel's own coordinates; and the list can
-    // only be as tall as the panel below it, so it scrolls instead of running
-    // out of the bottom of a narrow sidebar.
-    assert.equal(layer.style.top, '42px')
-    assert.equal(layer.style.maxHeight, '554px')
+    // The button's bottom edge + the 4px gap, in the panel's own coordinates, and
+    // the layer's left edge on the button's: the dropdown belongs to that control,
+    // so it starts where the control does rather than at the sidebar's corner.
+    assert.equal(layer.style.top, '36px')
+    assert.equal(layer.style.left, '12px')
+    // ...and it can only be as tall as the panel below it, so it scrolls instead of
+    // running out of the bottom of a narrow sidebar.
+    assert.equal(layer.style.maxHeight, '560px')
+  })
+
+  it('is as wide as its own lines need, and never wider than a third of the panel', async () => {
+    installStyles(document)
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    await openPicker(container)
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+
+    // jsdom cannot lay out `max-content`, so the rule is read off the sheet: as
+    // wide as the widest line, capped at a third of the panel the layer sits in —
+    // a dropdown of short names used to blank out the whole sidebar (asked for
+    // from the running panel). Both layers share this one rule, so the branch list
+    // and the stash stack — whose two-line rows were the reason it used to take
+    // the full width — are now the same shape.
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.popover}\\s*\\{[^}]*width:\\s*max-content`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.popover}\\s*\\{[^}]*max-width:\\s*calc\\(100% / 3\\)`, 'u'),
+    )
+    assert.match(sheet, new RegExp(`\\.${cls.popover}\\s*\\{[^}]*right:\\s*auto`, 'u'))
+    assert.equal(layer.getAttribute('data-width'), null, 'one width, not a variant')
+  })
+
+  it('keeps the branch button itself as wide as its name, not as wide as the rail', async () => {
+    installStyles(document)
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ branches: twoBranches() }), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The handle, not the menu. `flex: auto` let the button grow into every spare
+    // pixel the spacer left, so a repository on `master` drew a full-width bar that
+    // read as a text field (asked for from the running panel); it now takes its own
+    // content width and stops at a third of the rail — the same cap, for the same
+    // reason, as the list it opens. The name is what yields, carrying the ellipsis
+    // and the tooltip, so the cap can never hide which branch this is.
+    const button = window.getComputedStyle(must(container, `.${cls.branch}`))
+    assert.equal(button.flexGrow, '0', 'the button no longer drinks the rail’s slack')
+    assert.equal(button.flexShrink, '1', 'a narrow rail still squeezes it')
+    assert.equal(button.display, 'flex')
+    assert.match(container.innerHTML, /title="main — /u, 'the full name is in the tooltip')
+
+    // The cap itself comes off the sheet: jsdom simplifies `calc(100% / 3)` to a
+    // pixel value, which is jsdom's arithmetic rather than the browser's.
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.branch}\\s*\\{[^}]*max-width:\\s*calc\\(100% / 3\\)`, 'u'),
+    )
+    assert.match(sheet, new RegExp(`\\.${cls.branch}\\s*\\{[^}]*flex:\\s*0 1 auto`, 'u'))
   })
 
   it('closes on a press outside it, and keeps its state for a press inside', async () => {
@@ -4377,6 +4545,10 @@ describe('the branch picker as a dropdown (§4.3, FR-4.1)', () => {
     await settle()
 
     let picker = await openPicker(container)
+    // The layer has no close control of its own — the footer button that repeated
+    // the gesture was asked for removal from the running panel — so it ends where
+    // its own last section does.
+    assert.equal(picker.lastElementChild?.className, cls.branchRemotes)
     // Inside: the armed-delete flow and the create form live here, and a press
     // that dismisses the list mid-edit would make both unusable.
     await press(must(picker, `.${cls.branchRow}`))
@@ -4462,57 +4634,106 @@ async function clickEntry(menu: HTMLElement, id: string): Promise<void> {
 
 describe('where a floating layer goes (§4.3’s dropdowns)', () => {
   // jsdom has no layout, so every rectangle here is stated: a 600px panel whose
-  // top edge sits at y=100, and the 38px rail at its top.
-  const panel = { top: 100, height: 600 }
-  const rail = { top: 100, bottom: 138 }
+  // top edge sits at y=100, and a control 12px into the rail at its top.
+  const panel = { top: 100, height: 600, left: 0, width: 600 }
+  const button = { top: 106, bottom: 132, left: 12 }
 
   it('hangs under the anchor, capped at the room the panel has left', () => {
-    assert.deepEqual(placeLayer({ anchor: rail, panel, gap: 4, naturalHeight: 120 }), {
-      placement: 'below',
-      top: 42,
-      bottom: null,
-      maxHeight: 554,
+    assert.deepEqual(
+      placeLayer({ anchor: button, panel, gap: 4, naturalHeight: 120, layerWidth: 160 }),
+      {
+        placement: 'below',
+        top: 36,
+        bottom: null,
+        left: 12,
+        maxHeight: 560,
+      },
+    )
+  })
+
+  it('lines the layer up with its anchor, and pulls it back at the panel’s right edge', () => {
+    // The layer belongs to the control that opened it: the branch button sits 12px
+    // into the rail, so that is where the list starts — not at the panel's corner,
+    // which is what a layer pinned to `left: 0` did (reported from the running
+    // panel as "why did it go to the far left").
+    const lined = placeLayer({
+      anchor: button,
+      panel,
+      gap: 4,
+      naturalHeight: 120,
+      layerWidth: 160,
     })
+    assert.equal(lined.left, 12)
+
+    // The stash button sits at the far end of the rail, and a 200px layer under it
+    // would run past the panel's right edge, where the sidebar clips it. It is
+    // pulled back to the last offset that keeps it whole (600 - 200) rather than
+    // being allowed to hang off the side.
+    const stash = { top: 106, bottom: 132, left: 560 }
+    const pulled = placeLayer({
+      anchor: stash,
+      panel,
+      gap: 4,
+      naturalHeight: 120,
+      layerWidth: 200,
+    })
+    assert.equal(pulled.left, 400)
   })
 
   it('keeps a long list below when above is no roomier', () => {
-    // Thirty branches under the rail: the list scrolls where it was opened rather
-    // than jumping to the top of the panel, because there is nothing above the
-    // rail to gain.
-    const placed = placeLayer({ anchor: rail, panel, gap: 4, naturalHeight: 900 })
+    // Thirty branches: the list scrolls where it was opened rather than jumping to
+    // the top of the panel, because there is nothing above the button to gain.
+    const placed = placeLayer({
+      anchor: button,
+      panel,
+      gap: 4,
+      naturalHeight: 900,
+      layerWidth: 160,
+    })
     assert.equal(placed.placement, 'below')
-    assert.equal(placed.maxHeight, 554)
+    assert.equal(placed.maxHeight, 560)
   })
 
   it('flips above an anchor that has no room under it', () => {
-    // Neither live caller reaches this today — both layers hang off the rail,
-    // which is the panel's own top edge — but the flip is what makes this a
-    // placement rule rather than "always below", and it is the half a future
-    // layer under a row would need. A 26px anchor ending 14px above the bottom
-    // edge leaves 6px below, which is a layer nobody could use.
-    const row = { top: 660, bottom: 686 }
-    assert.deepEqual(placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44 }), {
-      placement: 'above',
-      top: null,
-      bottom: 44,
-      maxHeight: 552,
-    })
+    // Neither live caller reaches this today — both layers hang off buttons in the
+    // rail, which is the panel's own top edge — but the flip is what makes this a
+    // placement rule rather than "always below", and it is the half a future layer
+    // under a row would need. A 26px anchor ending 14px above the bottom edge
+    // leaves 6px below, which is a layer nobody could use.
+    const row = { top: 660, bottom: 686, left: 12 }
+    assert.deepEqual(
+      placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44, layerWidth: 160 }),
+      {
+        placement: 'above',
+        top: null,
+        bottom: 44,
+        left: 12,
+        maxHeight: 552,
+      },
+    )
   })
 
   it('leaves a short layer below when it fits, even near the bottom', () => {
-    const row = { top: 620, bottom: 646 }
-    const placed = placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44 })
+    const row = { top: 620, bottom: 646, left: 12 }
+    const placed = placeLayer({ anchor: row, panel, gap: 4, naturalHeight: 44, layerWidth: 160 })
     assert.equal(placed.placement, 'below')
     assert.equal(placed.maxHeight, 46)
   })
 
   it('does not move a layer inside a panel that has no height to measure', () => {
-    // jsdom, or a panel that is not visible: there is no room to run out of, so
-    // the layer stays under its anchor and keeps its height. (Both existing
-    // dropdown tests rely on this: they state the anchor's rectangle and nothing
-    // else.)
-    const placed = placeLayer({ anchor: rail, panel: { top: 100, height: 0 }, gap: 4, naturalHeight: 0 })
-    assert.deepEqual(placed, { placement: 'below', top: 42, bottom: null, maxHeight: null })
+    // jsdom, or a panel that is not visible: there is no room to run out of, so the
+    // layer stays under its anchor and keeps its height, and it takes the anchor's
+    // own offset because there is no panel width to pull back from either. (Both
+    // existing dropdown tests rely on this: they state the anchor's rectangle and
+    // nothing else.)
+    const placed = placeLayer({
+      anchor: button,
+      panel: { top: 100, height: 0, left: 0, width: 0 },
+      gap: 4,
+      naturalHeight: 0,
+      layerWidth: 0,
+    })
+    assert.deepEqual(placed, { placement: 'below', top: 36, bottom: null, left: 12, maxHeight: null })
   })
 })
 
@@ -5311,20 +5532,26 @@ describe('the history-rewriting entries (§10.2 order 9)', () => {
 /* ── M5a order 4: the stash, and FR-4.4's way out of a blocked switch ───── */
 
 /**
- * Open the stash layer from the rail, and return it.
- *
- * The rail's icon buttons carry their accessible name as the tooltip, so the
- * stash one is found by the dictionary rather than by position — which is what
- * keeps this helper working when the rail gains another button.
+ * The rail's stash button, found by its accessible name rather than by position —
+ * which is what keeps this working when the rail gains another button.
  * @param container - The rendered panel.
- * @returns The stash list's content element.
+ * @returns The stash button.
  */
-async function openStashes(container: HTMLElement): Promise<HTMLElement> {
+function stashButton(container: HTMLElement): HTMLButtonElement {
   const stash = [...container.querySelectorAll<HTMLButtonElement>(`.${cls.tool}`)].find(
     (button) => button.getAttribute('aria-label') === en['stash.open'],
   )
   if (stash === undefined) throw new Error('expected the rail to offer a stash button')
-  await click(stash)
+  return stash
+}
+
+/**
+ * Open the stash layer from the rail, and return it.
+ * @param container - The rendered panel.
+ * @returns The stash list's content element.
+ */
+async function openStashes(container: HTMLElement): Promise<HTMLElement> {
+  await click(stashButton(container))
   return must<HTMLElement>(container, '[data-stash-picker="true"]')
 }
 
@@ -5359,6 +5586,13 @@ describe('the stash list (FR-6.2, §4.3)', () => {
     assert.equal(container.querySelector('[data-stash-picker]'), null)
 
     const picker = await openStashes(container)
+    // The layer carries no close control of its own: outside press and Escape are
+    // the two ways out (see `ui/popover.tsx`), and the footer button that repeated
+    // the gesture was asked for removal from the running panel — so the layer now
+    // ends where its own last action does. Nor is there a width variant left: both
+    // layers take the one `content` width.
+    assert.equal(picker.lastElementChild?.className, cls.stashCreate)
+    assert.equal(container.querySelector('[data-popover="true"]')?.getAttribute('data-width'), null)
     const selectors = [...picker.querySelectorAll(`.${cls.stashSelector}`)].map(
       (node) => node.textContent,
     )
@@ -5370,6 +5604,45 @@ describe('the stash list (FR-6.2, §4.3)', () => {
     // footnotes (that is the fix for "I could not tell this text was clickable").
     const labels = [...picker.querySelectorAll(`.${cls.accent}`)].map((button) => button.textContent)
     assert.deepEqual(labels.slice(0, 4), ['Apply', 'Pop', 'Apply', 'Pop'])
+  })
+
+  it('re-places itself when the content changes the box it was placed with', async () => {
+    // Reported from the running panel: after an operation refreshed the list, the
+    // layer's width followed its content — that is `max-content` doing its job —
+    // while the offsets stayed where the first measurement had left them, so the
+    // dropdown sat somewhere its button was not. jsdom has no layout and no
+    // ResizeObserver, so both halves are stated here: the rectangles, and an
+    // observer whose callback the test fires, which is what a browser does when a
+    // box it watches changes.
+    installFakeResizeObserver()
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ stashes: [stashFixture()] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    // The panel and the button the layer hangs from: 600px wide, with the stash
+    // button 560px into it — so a 300px layer has to be pulled back to 300.
+    const panel = must(container, `.${cls.root}`)
+    const stash = stashButton(container)
+    panel.getBoundingClientRect = () => rect(100, 600, 0, 600)
+    stash.getBoundingClientRect = () => rect(106, 26, 560, 26)
+
+    await openStashes(container)
+    const layer = must<HTMLElement>(container, '[data-popover="true"]')
+    assert.equal(layer.style.left, '560px', 'placed under its button while the stack is still loading')
+
+    // The observer watches the layer itself — the box that moves when the content
+    // does — as well as the two boxes the placement was measured from.
+    const observer = fakeObservers.find((entry) => entry.targets.includes(layer))
+    assert.ok(observer, 'the layer is observed, so its own box is what re-places it')
+
+    // The list arrives (or an operation rewrites it) and the layer is now wider than
+    // the room left of the panel's right edge.
+    layer.getBoundingClientRect = () => rect(0, 40, 0, 300)
+    await act(async () => {
+      observer.fire()
+    })
+    assert.equal(layer.style.left, '300px', 'and the placement follows it')
   })
 
   it('stashes the message the user typed, with untracked files only when asked', async () => {

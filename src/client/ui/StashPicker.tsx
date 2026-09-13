@@ -31,7 +31,7 @@ import { useArmedKey } from './armed.ts'
 import { ToolButton } from './ChangeGroup.tsx'
 import { cls } from './styles.ts'
 import type { Translate } from './translate.ts'
-import { CloseGlyph, TrashGlyph } from './icons.tsx'
+import { TrashGlyph } from './icons.tsx'
 
 /** Everything the stash list renders from. */
 export interface StashPickerProps {
@@ -47,12 +47,16 @@ export interface StashPickerProps {
   readonly onApply: (entry: StashEntry, pop: boolean) => void
   /** Drop one entry without applying it (FR-6.2). */
   readonly onDrop: (entry: StashEntry) => void
-  /** Close the layer. */
-  readonly onClose: () => void
 }
 
 /**
  * The stash stack with its four actions.
+ *
+ * A layer with no close control of its own: outside press and Escape are the two
+ * ways out (see `ui/popover.tsx`), and the footer button that said so the second
+ * time was asked for removal from the running panel — it was a row of the layer's
+ * height spent on repeating a gesture every dropdown already accepts.
+ *
  * @param props - Entries, copy, and the panel's callbacks.
  */
 export function StashPicker({
@@ -62,7 +66,6 @@ export function StashPicker({
   onSave,
   onApply,
   onDrop,
-  onClose,
 }: StashPickerProps): ReactNode {
   // The arming lives here rather than in the panel, for the reason the branch
   // picker's does: the entry it belongs to dies with the layer, so a stacked
@@ -210,11 +213,6 @@ export function StashPicker({
             </span>
           </form>
         )}
-      </div>
-      <div className={cls.branchFooter}>
-        <ToolButton label={t('stash.close')} onClick={onClose}>
-          <CloseGlyph size={12} />
-        </ToolButton>
       </div>
     </div>
   )

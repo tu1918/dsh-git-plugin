@@ -86,7 +86,6 @@ export const cls = {
   credentialLabel: `${P}-credential-label`,
   credentialInput: `${P}-credential-input`,
   credentialActions: `${P}-credential-actions`,
-  branchFooter: `${P}-branch-footer`,
   fileIcon: `${P}-file-icon`,
   fileIconImg: `${P}-file-icon-img`,
   stashPicker: `${P}-stash-picker`,
@@ -242,14 +241,29 @@ export const css = `
 /* A dropdown hangs over the panel's content instead of taking a row in its
    column (see ui/popover.tsx). Its top edge and height ceiling are measured
    from the panel and the anchor that opened it, so what is written here is the
-   chrome: full panel width, above the sticky group headers (z-index 1) and the
+   chrome: the width, above the sticky group headers (z-index 1) and the
    bottom pane's tab strip (2). The shadow is the theme's own drop mask rather
    than a literal black — the same token the GUI uses for its own floating
-   layers, so a skin changes it too. */
+   layers, so a skin changes it too.
+
+   Width: as wide as the layer's own widest line, and never wider than a third of
+   the panel (the '100%' of an absolutely positioned layer is the panel it sits
+   in). Both layers that use this — the branch list and the stash stack — are
+   opened over the change list, and a layer that took the sidebar's whole width
+   blanked out the list it was opened over for a column of names and short rows
+   (asked for from the running panel). Content that does not fit truncates: a row
+   is a flex item of this column, so it takes the layer's width rather than its
+   own, and the name/subject spans carry the ellipses.
+
+   The 'left' here is only the value before the first measurement: the component
+   sets it inline, from the control that opened the layer, so the dropdown sits
+   under ITS button instead of at the panel's corner. */
 .${cls.popover} {
   position: absolute;
-  right: 0;
+  right: auto;
   left: 0;
+  width: max-content;
+  max-width: calc(100% / 3);
   z-index: 3;
   display: flex;
   flex-direction: column;
@@ -414,7 +428,15 @@ export const css = `
 .${cls.branch} {
   display: flex;
   min-width: 0;
-  flex: auto;
+  /* As wide as the branch it names, and never more than a third of the rail. With
+     'flex: auto' it grew into every spare pixel the spacer left, so a repository
+     on master drew a full-width bar that read as a text field rather than as the
+     button it is (asked for from the running panel — the same cap, for the same
+     reason, as the list it opens). The NAME is what yields when the two disagree:
+     it carries the ellipsis (see the name rule below) and the full name stays in
+     the tooltip, while the glyph, the state and the caret keep their widths. */
+  flex: 0 1 auto;
+  max-width: calc(100% / 3);
   align-items: center;
   gap: 6px;
   padding: 3px 6px;
@@ -469,6 +491,19 @@ export const css = `
 
 .${cls.branchRow}[data-current='true'] {
   color: var(--dsw-alias-label-primary);
+}
+
+/* The row's delete, and the one control in this layer that throws something away:
+   on hover it takes the error ink — the same token the armed danger button that
+   replaces it uses — where every other icon button in the panel keeps the neutral
+   one, so the pointer's arrival is what says which control is destructive (asked
+   for from the running panel). Nothing else about the button changes: it stays
+   the square centered box the tool class draws, which is what holds the glyph on
+   the same centre line as the name beside it (the row centers its items, the
+   button centers its own content). The wash stays the ordinary hover one — the
+   ink is the signal, and §4.3 keeps this panel off red fills for a first click. */
+.${cls.branchRow} > .${cls.tool}:hover:not(:disabled) {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
 }
 
 .${cls.branchPick} {
@@ -639,10 +674,19 @@ export const css = `
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The remote ref is the row's label, and in a layer capped at a third of the panel
+   it is the one that yields: a dependabot-style ref (origin/dependabot/npm_and_yarn/…)
+   is far wider than the layer, and a name that could not shrink would push the whole
+   layer past its cap and hand it a horizontal scrollbar. The tip's subject keeps its
+   own ellipsis, and the row itself has the tooltip for both halves. */
 .${cls.branchRemoteName} {
-  flex: none;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
   font-family: var(--dsh-font-mono);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .${cls.branchRemoteSubject} {
@@ -653,12 +697,6 @@ export const css = `
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.${cls.branchFooter} {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 2px;
 }
 
 /* ── stash list (FR-6.2) ────────────────────────────────────────────────── */
@@ -1414,7 +1452,17 @@ export const css = `
      a refused commit's reason and the AI's "the diff was cut" note. Both are
      things the user must be able to read (FR-3.5, §4.3), and a ceiling that hid
      them would be a ceiling that hides the answer to "why did nothing happen?" —
-     so the box scrolls instead, and only in that rare case. */
+     so the box scrolls instead, and only in that rare case.
+
+     The bottom padding is 6px rather than the 8px that would pair with the top
+     one, and that number came from the running panel twice over: at 8px the band
+     between the commit button and the "Changes" header under it read as dead
+     space (the floor's leftover was landing there as well), and with no bottom
+     padding at all the button sat stuck to that header. Six — plus the hairline
+     and the header's own top padding — is the gutter those two regions want; the
+     wrap below soaks up whatever the floor leaves over, so no blank can collect
+     here again. The box's own reason to hold anything under the footer, a
+     refusal's sentence or the AI note, keeps its 5px from the flex gap above. */
   display: flex;
   flex: none;
   flex-direction: column;
@@ -1424,13 +1472,23 @@ export const css = `
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
-  padding: 8px 12px;
+  padding: 8px 12px 6px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 
+/* The wrap takes the box's floor's leftover, so the TEXTAREA is what grows into
+   the slack between the content and 'min-height: 104px' — 7px with the default
+   metrics, which is why the message box rests at about 59px instead of its own
+   52px floor, and why the space under the commit button can be set by that
+   padding alone. The box is otherwise unchanged: same floor, same ceiling, same
+   footer. It is the WRAP that grows and not the textarea: this box is a column
+   and the wrap is its item, while the textarea is a row item that merely
+   stretches to whatever height the wrap ends up with — a 'flex-grow' on the
+   textarea would widen it and grow nothing. */
 .${cls.commitInputWrap} {
   position: relative;
   display: flex;
+  flex: 1 1 auto;
 }
 
 /* The ✨ lives inside the box's corner (§4.2 draws it that way) instead of in the
