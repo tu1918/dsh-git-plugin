@@ -11,13 +11,13 @@
 
 ## 现状
 
-- `.diffText` 是 `white-space: pre`（`styles.ts:2400-2407`），长行不折。
-- 上下对照靠 `.diffLine { min-width: min-content }`（`styles.ts:2366`）+ 容器横向滚动看全。
-- 左右对照是**两个各自滚动的半栏**（`SplitHunks`，`DiffView.tsx:251-311`），同步
-  `scrollTop` 与 `scrollLeft`（`:263-269`）。配对的两格靠内容自然撑高
-  （`.diffCell` 的 `min-height: 18px`，`styles.ts:2373-2377` 的注释写明"两格必须一样高，
+- `.diffText` 是 `white-space: pre`（`styles.ts:2460-2467`），长行不折。
+- 上下对照靠 `.diffLine { min-width: min-content }`（`styles.ts:2407`）+ 容器横向滚动看全。
+- 左右对照是**两个各自滚动的半栏**（`SplitHunks`，`DiffView.tsx:265-325`），同步
+  `scrollTop` 与 `scrollLeft`（`:277-283`）。配对的两格靠内容自然撑高
+  （`.diffCell` 的 `min-height: 18px`，`styles.ts:2409-2418` 的注释写明"两格必须一样高，
   否则读下去两半会错位"）。
-- 布局偏好的持久化范式已存在（`DIFF_LAYOUT_KEY`，`DiffView.tsx:64-87`）。
+- 布局偏好的持久化范式已存在（`DIFF_LAYOUT_KEY`，`DiffView.tsx:60-97`）。
 - 同 profile 的 `dsh-better-sidebar` **没有**这个开关：它的 diff 恒定 `pre-wrap`
   （`src/client/diff/diff.module.css:27`），没有可抄的开关实现。
 

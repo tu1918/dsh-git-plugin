@@ -26,6 +26,14 @@
  * ship their CSS: a `<style data-plugin-css>` element so a reload replaces
  * rather than accumulates it.
  *
+ * It also holds the diff view's three operation anchors, which is why some rules
+ * here name a class nothing renders yet: the header's VIEW group, the row between
+ * two hunks for BETWEEN-LINE actions, and the tail slot every diff row reserves
+ * for an action on that one line. The last two have no control built for them, so
+ * they reserve their space rather than drawing an empty (and, being clickable, a
+ * lying) box. A control added later goes into one of these three; it does not go
+ * back into the header.
+ *
  * @module dsh-git-panel/client/ui/styles
  */
 
@@ -184,11 +192,13 @@ export const cls = {
   diffStats: `${P}-diff-stats`,
   diffAdded: `${P}-diff-added`,
   diffRemoved: `${P}-diff-removed`,
+  diffOps: `${P}-diff-ops`,
   diffSeg: `${P}-diff-seg`,
   diffSegButton: `${P}-diff-seg-button`,
   diffState: `${P}-diff-state`,
   diffHunks: `${P}-diff-hunks`,
   diffHunk: `${P}-diff-hunk`,
+  diffGap: `${P}-diff-gap`,
   diffHunkHead: `${P}-diff-hunk-head`,
   diffHunkRange: `${P}-diff-hunk-range`,
   diffHunkHeading: `${P}-diff-hunk-heading`,
@@ -2220,6 +2230,23 @@ export const css = `
 .${cls.diffAdded} { color: var(--dsw-alias-state-success-primary); }
 .${cls.diffRemoved} { color: var(--dsw-alias-state-error-primary); }
 
+/* The diff's VIEW operations — the controls that change how the diff is read
+   rather than what it says (the layout pair today, the reload, and the
+   auto-wrap switch that is planned). They sit together at the header's right
+   end, told apart from the path and the counts by the hairline on their left:
+   the sidebar is too narrow for a visible group title, so the label lives on
+   the group itself. The data-op-group attribute names the class of operation,
+   and the between-line row and the per-line tail carry it too — three anchors,
+   because a diff's operations cannot share one toolbar. */
+.${cls.diffOps} {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 0.5px solid var(--dsw-alias-border-l3);
+}
+
 .${cls.diffSeg} {
   display: inline-flex;
   flex: none;
@@ -2318,6 +2345,18 @@ export const css = `
   white-space: nowrap;
 }
 
+/* The row between two hunks, and the BETWEEN-LINE operations' one anchor: an
+   "expand the lines git left out" control can only live on the row that stands
+   where those lines are. Nothing renders this class today — a diff whose hunks
+   touch has no row between them, and the control is a later change — but the
+   anchor is named here, with the class of operation in the selector, so that
+   control has one landing place and the naming cannot drift. */
+.${cls.diffGap}[data-op-group='gap'] {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+}
+
 /* The side-by-side split: two FIXED halves, each its own scroller.
 
    Fixed, because a long line must not move the halves apart (the min-content
@@ -2328,9 +2367,11 @@ export const css = `
    is what VS Code's side-by-side diff does.
 
    The gap is a LANE, not just breathing room: it sits between the two scrollers,
-   so nothing a half scrolls can push it around. That is what a per-line action
-   button needs — aligned with a line's row, travelling vertically with the halves
-   (they are synced), never dragged sideways by a long line. */
+   so nothing a half scrolls can push it around — it is what keeps a long line in
+   one half from crowding the other, and the hairline on the right half is
+   painted inside it. Per-line actions do NOT live here, tempting as the lane
+   looks: the halves are two independent scrollers with nothing per-row between
+   them, so a line's own action goes in that line's tail (below). */
 .${cls.diffSplit} {
   display: flex;
   gap: 16px;
@@ -2374,6 +2415,25 @@ export const css = `
   width: max-content;
   min-width: 100%;
   min-height: 18px;
+}
+
+/* The LINE operations' anchor: a fixed tail every row reserves for an action on
+   that one line. Reserved in CSS rather than by an empty element — a clickable
+   box with nothing behind it would be worse than no box (the same judgement as
+   D43's read-only remote rows), and no line action is built yet. The
+   pseudo-element is a flex item, so it takes part in the row's intrinsic width
+   and a long line's horizontal scroll can still reach it; padding would instead
+   have had to fight the cell's max-content width. 22px is the glyph-button
+   square the header's controls use. The inline row and each half's cell carry
+   their own, because in the split layout the halves are separate scrollers.
+
+   When a line action does arrive it goes HERE — in the tail of the row it acts
+   on — and not back into the header. */
+.${cls.diffLine}::after,
+.${cls.diffCell}::after {
+  content: '';
+  flex: none;
+  width: 22px;
 }
 
 .${cls.diffGutter} {

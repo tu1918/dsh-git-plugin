@@ -22,6 +22,16 @@
  *   `localStorage` rather than returning `null`, and a panel that crashed on
  *   remembering a preference would be its own bug.
  *
+ * The markup also fixes WHERE a diff operation goes, because the three kinds of
+ * operation cannot share one toolbar: **view operations** — how the diff is read,
+ * not what it says — live in the header's {@link ViewOps} group; **between-line
+ * operations** live on the row between two hunks, whose class `styles.ts` names;
+ * **line operations** live in the tail slot every row reserves there. Each anchor
+ * carries `data-op-group` (`view` / `gap` / `line`), so which kind a control
+ * belongs to is readable from the DOM. Only the first has controls today, so the
+ * other two reserve their space in CSS rather than drawing an empty box: a
+ * clickable area with no action behind it is worse than none at all.
+ *
  * @module dsh-git-panel/client/ui/DiffView
  */
 
@@ -212,7 +222,11 @@ function LineCell({
 }): ReactNode {
   const number = numberAt(line, edge)
   return (
-    <div className={cls.diffCell} data-line={line === null ? 'blank' : line.kind}>
+    <div
+      className={cls.diffCell}
+      data-line={line === null ? 'blank' : line.kind}
+      data-op-group="line"
+    >
       <span className={cls.diffGutter}>{number}</span>
       <span className={cls.diffText}>
         {line === null ? '' : <LineBody line={line} highlight={highlight} />}
@@ -338,6 +352,7 @@ function DiffHunks({
             <div
               className={cls.diffLine}
               data-kind={line.kind}
+              data-op-group="line"
               key={`l${line.oldLine ?? 0}-${line.newLine ?? 0}-${lineIndex}`}
             >
               <span className={cls.diffGutter}>{line.newLine ?? line.oldLine ?? ''}</span>
@@ -370,6 +385,29 @@ function DiffStats({
     <span className={cls.diffStats}>
       <span className={cls.diffAdded}>+{additions}</span>
       <span className={cls.diffRemoved}>−{deletions}</span>
+    </span>
+  )
+}
+
+/**
+ * The header's view-operation group: the controls that change how the diff is
+ * read rather than what it says.
+ *
+ * This is the only one of the diff's three operation anchors (see the module doc)
+ * that has anything to hold today, and the only one always on screen. The
+ * grouping is semantic as well as visual — the label rides the group, because the
+ * sidebar is too narrow to print it.
+ * @param props - The panel's translator, and the controls to group.
+ */
+function ViewOps({ t, children }: { t: Translate; children: ReactNode }): ReactNode {
+  return (
+    <span
+      className={cls.diffOps}
+      role="group"
+      aria-label={t('diff.groupView')}
+      data-op-group="view"
+    >
+      {children}
     </span>
   )
 }
@@ -437,40 +475,42 @@ export function DiffView({
         </span>
         <DiffStats additions={diff.additions} deletions={diff.deletions} />
         <span className={cls.spacer} />
-        {/* Two buttons rather than a switch: `aria-pressed` states which layout
-            is on, which a single toggle could only imply. */}
-        <span className={cls.diffSeg} role="group" aria-label={t('diff.layout')}>
+        <ViewOps t={t}>
+          {/* Two buttons rather than a switch: `aria-pressed` states which layout
+              is on, which a single toggle could only imply. */}
+          <span className={cls.diffSeg} role="group" aria-label={t('diff.layout')}>
+            <button
+              type="button"
+              className={cls.diffSegButton}
+              aria-pressed={layout === 'inline'}
+              title={t('diff.layoutInline')}
+              aria-label={t('diff.layoutInline')}
+              onClick={() => onLayout('inline')}
+            >
+              <ArrowDownGlyph size={12} />
+            </button>
+            <button
+              type="button"
+              className={cls.diffSegButton}
+              aria-pressed={layout === 'side-by-side'}
+              title={t('diff.layoutSplit')}
+              aria-label={t('diff.layoutSplit')}
+              onClick={() => onLayout('side-by-side')}
+            >
+              <SplitGlyph size={12} />
+            </button>
+          </span>
           <button
             type="button"
-            className={cls.diffSegButton}
-            aria-pressed={layout === 'inline'}
-            title={t('diff.layoutInline')}
-            aria-label={t('diff.layoutInline')}
-            onClick={() => onLayout('inline')}
+            className={cls.tool}
+            title={t('diff.reload')}
+            aria-label={t('diff.reload')}
+            disabled={busy}
+            onClick={onReload}
           >
-            <ArrowDownGlyph size={12} />
+            {busy ? <SpinnerGlyph className={cls.spinnerGlyph} size={12} /> : <RefreshGlyph />}
           </button>
-          <button
-            type="button"
-            className={cls.diffSegButton}
-            aria-pressed={layout === 'side-by-side'}
-            title={t('diff.layoutSplit')}
-            aria-label={t('diff.layoutSplit')}
-            onClick={() => onLayout('side-by-side')}
-          >
-            <SplitGlyph size={12} />
-          </button>
-        </span>
-        <button
-          type="button"
-          className={cls.tool}
-          title={t('diff.reload')}
-          aria-label={t('diff.reload')}
-          disabled={busy}
-          onClick={onReload}
-        >
-          {busy ? <SpinnerGlyph className={cls.spinnerGlyph} size={12} /> : <RefreshGlyph />}
-        </button>
+        </ViewOps>
       </div>
 
       {diff.binary ? (
@@ -669,16 +709,18 @@ export function DiffPane({
             {path}
           </span>
           <span className={cls.spacer} />
-          <button
-            type="button"
-            className={cls.tool}
-            title={t('diff.reload')}
-            aria-label={t('diff.reload')}
-            disabled={busy}
-            onClick={reload}
-          >
-            <RefreshGlyph />
-          </button>
+          <ViewOps t={t}>
+            <button
+              type="button"
+              className={cls.tool}
+              title={t('diff.reload')}
+              aria-label={t('diff.reload')}
+              disabled={busy}
+              onClick={reload}
+            >
+              <RefreshGlyph />
+            </button>
+          </ViewOps>
         </div>
         <div className={cls.status}>
           <p className={cls.statusTitle}>{title}</p>

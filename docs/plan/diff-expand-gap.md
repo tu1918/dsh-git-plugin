@@ -92,7 +92,8 @@ host 侧拿整个 blob 的 stdout、按行切开、切出 `[from, from+count)` �
 而 `splitRows` 对 context 的处理（`{ left: line, right: line }`，`DiffView.tsx:162-166`）
 已经是正确形状，两侧各取各的行号。所以 `splitRows` 与 `LineCell` 不用改，只需要能遍历
 "hunk 与缝隙交替"的序列：引入 `DiffSegment = {kind:'hunk',hunk} | {kind:'gap',gap}`，
-`DiffHunks` / `SplitHunks` 改为遍历 segments。gap 行的控件就是 A-9 说的**行间操作**载体。
+`DiffHunks` / `SplitHunks` 改为遍历 segments。gap 行就是 **A-9 已登记的行间操作载体**：
+`styles.ts` 里是 `.dgp-diff-gap[data-op-group='gap']`，这一条只需在其中放控件。
 
 ## 状态与并发
 

@@ -51,7 +51,8 @@ shipped.
 | A group with no rows offers no bulk action — except the staged drawer, which keeps its button on screen, disabled, with the empty note as the explanation | ✅ |
 | One bottom pane, one strip of tabs — recent commits, plus one tab per open diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping every open tab's content loaded; the fold and the height are remembered. Any number of diffs may be open at once, a tab is marked by the same rule as the history tab, and hovering (or focusing) a diff tab reveals that tab's own × — closing one file is not closing the pane | ✅ |
 | Diff view: click a change row → the diff opens as a tab of the bottom pane (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered; the diff's own header carries its operations only (layout, reload), and a long file name is ellipsized in the tab and in the diff header, with the directory giving way first (FR-1.2) | ✅ |
-| Side-by-side diff is a fixed split: each half is half of the pane whatever the lines are, and each half is its own scroller — a line too long for its half is reached with that half's scrollbar, and the two halves are kept in step on both axes so a paired line stays paired. The halves are separated by a 16px lane (outside both scrollers, so a per-line action placed there can never be pushed around by a long line), with a hairline down the divider. The inline layout is the single-scroller one, where the full width is the reading width | ✅ |
+| Diff operations have three anchors rather than one toolbar, because the three kinds cannot share a place: the header's labelled group carries the VIEW operations (layout, reload — `data-op-group="view"`), the row between two hunks is where BETWEEN-LINE operations go (registered but not built), and every line's tail reserves a slot in CSS for an operation on that line (`data-op-group="line"`). Nothing is drawn for the two ends that have no control yet: a clickable box with no action behind it is worse than none | ✅ |
+| Side-by-side diff is a fixed split: each half is half of the pane whatever the lines are, and each half is its own scroller — a line too long for its half is reached with that half's scrollbar, and the two halves are kept in step on both axes so a paired line stays paired. The halves are separated by a 16px lane (outside both scrollers, so nothing a half scrolls can push it around), with a hairline down the divider. The inline layout is the single-scroller one, where the full width is the reading width | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
 | Binary files, conflicts' combined diffs, and >5000-line diffs each stated rather than mis-drawn | ✅ |
@@ -241,8 +242,9 @@ npm test
   states, in-place operation errors, what one reported change re-reads (the panel,
   but the history only for `refs` and nothing at all when the reading came back the
   same), the diff pane (opening, folding, layout
-  memory, binary placeholder, the list→box→diff DOM order, and the dock's height
-  default and drag clamp), the branch picker (listing, switching, creating from
+  memory, the operation anchors — the header's view group, and every row carrying
+  the per-line one — binary placeholder, the list→box→diff DOM order, and the dock's
+  height default and drag clamp), the branch picker (listing, switching, creating from
   HEAD or a base, the two-click delete, the forced second ask for an unmerged
   branch, Escape), the branch dropdown's floating layer (absolute, measured from
   the rail, dismissed by a press outside but not by one inside it or on the

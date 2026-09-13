@@ -240,6 +240,7 @@ export const zh = {
 
   'diff.open': '打开 {path} 的差异',
   'diff.reload': '重新读取差异',
+  'diff.groupView': '差异视图操作',
   'diff.layout': '差异布局',
   'diff.layoutInline': '上下对照',
   'diff.layoutSplit': '左右对照',
@@ -503,6 +504,7 @@ export const en: Record<GitPanelKey, string> = {
 
   'diff.open': 'Open the diff of {path}',
   'diff.reload': 'Read the diff again',
+  'diff.groupView': 'Diff view operations',
   'diff.layout': 'Diff layout',
   'diff.layoutInline': 'Unified (inline)',
   'diff.layoutSplit': 'Side by side',

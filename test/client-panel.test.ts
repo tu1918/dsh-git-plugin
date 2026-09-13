@@ -929,6 +929,33 @@ describe('the panel stylesheet', () => {
     assert.match(sheet, new RegExp(`\\.${cls.diffLine}\\s*\\{[^}]*min-width: min-content`, 'u'))
   })
 
+  it('reserves the two diff-operation anchors nothing has been built for yet', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // The diff's operations come in three classes and each gets one anchor, so a
+    // later control has one place to land instead of growing the header again.
+    // Only the view group draws an element today; the other two are reserved in
+    // CSS rather than rendered as empty clickable boxes — the judgement D43's
+    // read-only remote rows made.
+    //
+    // The between-line row, whose selector names the class of operation it
+    // carries: the row is the carrier, and the control that will fill it is a
+    // later change.
+    assert.match(sheet, new RegExp(`\\.${cls.diffGap}\\[data-op-group='gap'\\]`, 'u'))
+    // The per-line tail is a flex spacer, so it counts in the row's intrinsic
+    // width (a long line's horizontal scroll still reaches it) and never fights
+    // the side-by-side cell's max-content width.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.diffLine}::after,\\s*\\.${cls.diffCell}::after\\s*\\{[^}]*width: 22px`,
+        'u',
+      ),
+    )
+  })
+
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -3372,6 +3399,48 @@ describe('the diff view (FR-2)', () => {
     const buttons = [...reopened.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)]
     assert.equal(buttons[1]?.getAttribute('aria-pressed'), 'true')
     assert.equal(reopened.querySelectorAll(`.${cls.diffCell}`).length, 8)
+  })
+
+  it('keeps the view operations in one labelled group, and marks the lines as the other anchor', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+
+    // View operations are one group at the header's right end — the layout pair
+    // and the reload today. The label rides the GROUP, because the sidebar has no
+    // room to print a title for it, and `data-op-group` is how the class of
+    // operation is readable from the DOM.
+    const ops = must(container, `.${cls.diffHead} .${cls.diffOps}`)
+    assert.equal(ops.getAttribute('data-op-group'), 'view')
+    assert.equal(ops.getAttribute('role'), 'group')
+    assert.equal(ops.getAttribute('aria-label'), 'Diff view operations')
+    assert.equal(ops.querySelectorAll(`.${cls.tool}`).length, 1)
+    assert.deepEqual(
+      [...ops.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')),
+      ['Unified (inline)', 'Side by side', 'Read the diff again'],
+    )
+
+    // The lines themselves are the per-line anchor, and carry it as an attribute
+    // rather than as an extra element: with no line action to offer, a box in the
+    // row's tail would be a control that does nothing.
+    const rows = [...container.querySelectorAll<HTMLElement>(`.${cls.diffLine}`)]
+    assert.equal(rows.length, 6)
+    for (const row of rows) {
+      assert.equal(row.getAttribute('data-op-group'), 'line')
+      assert.equal(row.querySelector('[data-op-group]'), null, 'the row is the anchor')
+    }
+
+    // And each half's cell carries the same anchor: the two halves are separate
+    // scrollers, so neither can hold the other's rows.
+    await click(
+      [...container.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)][1] as HTMLButtonElement,
+    )
+    await flush()
+    const cells = [...container.querySelectorAll<HTMLElement>(`.${cls.diffCell}`)]
+    assert.equal(cells.length, 8)
+    for (const cell of cells) assert.equal(cell.getAttribute('data-op-group'), 'line')
   })
 
   it('scrolls the two halves together, on both axes', async () => {
