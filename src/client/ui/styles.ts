@@ -307,15 +307,10 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* A destructive entry. §4.3 asks for the confirmation on the click; this is the
-   colour that says a confirmation is coming, before it does. Written before the
-   disabled rule below on purpose: while an operation is in flight even the
-   destructive entry is unavailable, and unavailable is the state that should
-   win. */
-.${cls.toolbarItem}[data-danger='true'] {
-  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
-}
-
+/* Nothing here is painted as dangerous. §4.3's warning is the two clicks and the
+   sentence the entry reads out between them, plus the panel's own report after
+   the fact — the colour said "this one is different" about entries the user had
+   already decided to use, on a card where every git action is checkable. */
 .${cls.toolbarItem}:disabled {
   color: var(--dsw-alias-label-dimmed);
   cursor: default;
@@ -323,9 +318,7 @@ export const css = `
 
 /* The leading column. Every entry reserves it whether or not it draws a mark, so
    the labels line up down the card; the mark itself is quiet ink, because the
-   words beside it are what the entry means. A destructive entry is the exception:
-   there the whole row — mark included — is one colour, since a light grey sign
-   beside a red sentence reads as two different entries. */
+   words beside it are what the entry means. */
 .${cls.toolbarIcon} {
   display: flex;
   width: 14px;
@@ -333,10 +326,6 @@ export const css = `
   align-items: center;
   justify-content: center;
   color: var(--dsw-alias-label-tertiary);
-}
-
-.${cls.toolbarItem}[data-danger='true'] .${cls.toolbarIcon} {
-  color: inherit;
 }
 
 /* The label wraps rather than widens the card: an armed confirmation is a whole

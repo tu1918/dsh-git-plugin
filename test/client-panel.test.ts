@@ -3829,6 +3829,19 @@ function entryGlyph(menu: HTMLElement, id: string): SVGElement | null {
   return menu.querySelector<SVGElement>(`[data-id="${id}"] svg`)
 }
 
+/**
+ * Click one named entry.
+ *
+ * By id rather than by position: the groups are ordered by what they are (git's
+ * own actions first, the copies after a hairline), and a test that counts rows
+ * would go red on a reordering that broke nothing.
+ * @param menu - The open toolbar.
+ * @param id - The entry's own id.
+ */
+async function clickEntry(menu: HTMLElement, id: string): Promise<void> {
+  await click(must(menu, `[data-id="${id}"]`))
+}
+
 describe('where a floating layer goes (§4.3’s dropdowns)', () => {
   // jsdom has no layout, so every rectangle here is stated: a 600px panel whose
   // top edge sits at y=100, and the 38px rail at its top.
@@ -3988,7 +4001,9 @@ describe('the right-click toolbar (§9’s file menu)', () => {
       'Copy relative path',
       'Copy absolute path',
     ])
-    assert.equal(card.querySelectorAll('[role="separator"]').length, 2)
+    // One hairline, between the two groups: what the row can DO, and what it can
+    // take away from it.
+    assert.equal(card.querySelectorAll('[role="separator"]').length, 1)
     // Every entry carries a mark, and the marks are what tell the actions apart in
     // a card this small: the staging entry is not drawn with the discard's glyph.
     assert.ok(entryGlyph(card, 'stage'), 'the staging entry has a mark')
@@ -4159,14 +4174,14 @@ describe('the right-click toolbar (§9’s file menu)', () => {
 
     // The relative entry copies the repo-relative path the model already holds.
     let menu = await openRowMenu(container, 'unstaged')
-    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][2] as HTMLElement)
-    assert.equal(container.querySelector('[data-toolbar="true"]'), null, 'a copy closes the menu')
+    await clickEntry(menu, 'copyRelativePath')
+    assert.equal(container.querySelector('[data-toolbar="true"]'), null, 'a copy closes the card')
     assert.deepEqual(clipboard.writes, ['deep/nested/dir/changed.ts'])
 
     // The absolute one roots it at `RepoStatus.root` — the host never has to be
     // asked, because the panel already has the prefix.
     menu = await openRowMenu(container, 'unstaged')
-    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][3] as HTMLElement)
+    await clickEntry(menu, 'copyAbsolutePath')
     assert.deepEqual(clipboard.writes, [
       'deep/nested/dir/changed.ts',
       '/repo/deep/nested/dir/changed.ts',
@@ -4236,13 +4251,13 @@ describe('discarding a change from its row (FR-6.1, §4.3)', () => {
     await settle()
 
     const menu = await openRowMenu(container, 'untracked')
-    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
+    await click(must(menu, '[data-id="discard"]'))
 
     // The first click is §4.3's arming, so the entry must not take the card down
     // with it — and it is the entry itself that now reads as the confirmation.
     assert.deepEqual(calls.entries, [])
     assert.equal(must(container, '[data-toolbar="true"]'), menu, 'the card never closed')
-    const armed = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    const armed = must<HTMLElement>(menu, '[data-id="discard"]')
     assert.match(armed.textContent ?? '', /cannot be undone/u)
 
     await click(armed)
@@ -4330,20 +4345,21 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     // A menu, named for the commit it belongs to.
     assert.equal(menu.getAttribute('role'), 'menu')
     assert.match(menu.getAttribute('aria-label') ?? '', /bbbbbbb/)
-    // The copies first, then the rewrites (order 9), then — only because this is
-    // the newest row — the armed undo, each group after a hairline.
+    // Two groups, git first: the rewrites (order 9), the reset entry, and — only
+    // because this is the newest row — the armed undo; then one hairline, then the
+    // copying entries, which are on every row.
     assert.deepEqual(menuLabels(menu), [
-      'Copy short hash',
-      'Copy full hash',
-      'Copy commit message',
       'Revert this commit',
       'Cherry-pick this commit',
       'Squash into the previous commit',
       'Drop this commit',
       'Reset to this commit…',
       'Undo this commit',
+      'Copy short hash',
+      'Copy full hash',
+      'Copy commit message',
     ])
-    assert.equal(menu.querySelectorAll('[role="separator"]').length, 2)
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
     // A first commit has nothing to fold into, so that one entry cannot run.
     assert.equal(must<HTMLButtonElement>(menu, '[data-id="squash"]').disabled, true)
     const undo = must<HTMLElement>(menu, '[data-id="undo"]')
@@ -4355,14 +4371,14 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     await keyDown(menu, { key: 'Escape' })
     const olderMenu = await openHistoryMenu(container, 1)
     assert.deepEqual(menuLabels(olderMenu), [
-      'Copy short hash',
-      'Copy full hash',
-      'Copy commit message',
       'Revert this commit',
       'Cherry-pick this commit',
       'Squash into the previous commit',
       'Drop this commit',
       'Reset to this commit…',
+      'Copy short hash',
+      'Copy full hash',
+      'Copy commit message',
     ])
     assert.equal(olderMenu.querySelectorAll('[role="separator"]').length, 1)
     assert.equal(olderMenu.querySelector('[data-id="undo"]'), null)
@@ -4378,17 +4394,17 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
 
     // Short hash, then full hash, then the subject — the row's own three values.
     let menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"]'))
-    assert.equal(container.querySelector('[data-toolbar="true"]'), null, 'a copy closes the menu')
+    await clickEntry(menu, 'copyShortHash')
+    assert.equal(container.querySelector('[data-toolbar="true"]'), null, 'a copy closes the card')
     assert.deepEqual(clipboard.writes, ['bbbbbbb'])
 
     menu = await openHistoryMenu(container)
-    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][1] as HTMLElement)
+    await clickEntry(menu, 'copyFullHash')
     assert.deepEqual(clipboard.writes, ['bbbbbbb', 'b'.repeat(40)])
 
     // The older row copies ITS values, not the newest row's.
     menu = await openHistoryMenu(container, 1)
-    await click([...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')][2] as HTMLElement)
+    await clickEntry(menu, 'copyMessage')
     assert.deepEqual(clipboard.writes, ['bbbbbbb', 'b'.repeat(40), 'a commit subject'])
 
     // The notice says what landed on the clipboard.
@@ -4405,7 +4421,7 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     await settle()
 
     const menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"]'))
+    await clickEntry(menu, 'copyShortHash')
 
     const box = must(container, '[data-action-error="copy"]')
     assert.match(box.textContent ?? '', /refused to write to the clipboard/)
@@ -4488,9 +4504,13 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     assert.equal(document.activeElement, menu)
     assert.equal(must<HTMLElement>(menu, '[role="menuitem"]').dataset.active, 'true')
 
-    // The copies come first, so the keyboard walks to the last entry — the armed
-    // undo — before Enter means undo.
-    await keyDown(menu, { key: 'End' })
+    // The git actions come first and the undo is the last of them. The walk steps
+    // over whatever is disabled on this row (squash is, on a first commit) instead
+    // of counting keys, so how many steps it takes is not part of the contract.
+    for (let step = 0; step < 9; step += 1) {
+      if (must<HTMLElement>(menu, '[data-id="undo"]').dataset.active === 'true') break
+      await keyDown(menu, { key: 'ArrowDown' })
+    }
     assert.equal(must<HTMLElement>(menu, '[data-id="undo"]').dataset.active, 'true')
 
     await keyDown(menu, { key: 'Enter' })
@@ -5013,19 +5033,20 @@ describe('the toolbar’s own entries and keyboard (ui/toolbar.tsx)', () => {
       { kind: 'item', id: 'first', label: 'First', onSelect: () => chosen.push('first') },
       { kind: 'separator' },
       { kind: 'item', id: 'off', label: 'Unavailable', disabled: true, onSelect: () => chosen.push('off') },
-      { kind: 'item', id: 'last', label: 'Discard', danger: true, onSelect: () => chosen.push('last') },
+      { kind: 'item', id: 'last', label: 'Discard', onSelect: () => chosen.push('last') },
     ]
     return render(
       h(ContextToolbar, { origin, entries, label: 'Actions', onClose: () => chosen.push('close') }),
     )
   }
 
-  it('draws one row per entry, marks the destructive one, and names the separator', async () => {
+  it('draws one row per entry and names the separator', async () => {
     const container = await renderMenu([])
     const menu = must<HTMLElement>(container, '[role="menu"]')
     assert.deepEqual(menuLabels(menu), ['First', 'Unavailable', 'Discard'])
     assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
-    assert.equal(must<HTMLButtonElement>(menu, '[data-danger="true"]').textContent, 'Discard')
+    // Nothing is painted as dangerous: an entry is a button, a label and a mark.
+    assert.equal(menu.querySelectorAll('[data-danger]').length, 0)
     assert.equal(must<HTMLButtonElement>(menu, 'button[disabled]').textContent, 'Unavailable')
   })
 
@@ -5133,7 +5154,7 @@ describe('the toolbar’s own entries and keyboard (ui/toolbar.tsx)', () => {
   it('moves the same highlight the pointer moves', async () => {
     const container = await renderMenu([])
     const menu = must<HTMLElement>(container, '[role="menu"]')
-    const last = must<HTMLElement>(menu, 'button[data-danger="true"]')
+    const last = must<HTMLElement>(menu, 'button[data-id="last"]')
 
     await act(async () => {
       last.dispatchEvent(new window.Event('pointermove', { bubbles: true }))

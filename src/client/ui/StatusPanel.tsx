@@ -1800,17 +1800,20 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * The entries of one file row's toolbar (§9's file menu).
    *
-   * The row's own staging action comes first — `git add` under the name that fits
-   * the row (`mark resolved` for a conflict, FR-9.2) — then the destructive entry,
-   * then the two copying entries §9 lists (order 6), each group after a hairline.
-   * Every entry carries a mark, because a card this small is read by shape before
-   * it is read by word.
+   * Two groups, one hairline: what this card can DO to the repository — stage,
+   * unstage or mark resolved, and discard where the row has working-tree edits —
+   * and then what it can take away from it, the two copying entries §9 lists
+   * (order 6). git first, because that is what a row's toolbar is for; the copies
+   * are the errand you occasionally have here. Every entry carries a mark, because
+   * a card this small is read by shape before it is read by word.
    *
    * Discard appears exactly where `ui/row-actions.ts` says the row has a button for
    * it: the working-tree rows. It is an armed entry (`stayOpen`), so the first click
    * arms it and the card stays up for the second — §4.3's two-click confirmation,
-   * with the entry itself becoming the confirmation. The copies are on every row,
-   * because a path is copyable whatever its state.
+   * with the entry itself becoming the confirmation. Note what is NOT doing the
+   * warning: colour. Nothing on this card is painted red (see `styles.ts`), so the
+   * confirmation is a sentence and a second click, not a hue. The copies are on
+   * every row, because a path is copyable whatever its state.
    */
   const fileMenuEntries = (row: FileRowMenu): readonly ToolbarEntry[] => {
     const staging: ToolbarEntry =
@@ -1859,23 +1862,21 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     const armedHere = armedKey === key
     return [
       staging,
-      { kind: 'separator' },
       {
         kind: 'item',
         id: 'discard',
         label: armedHere ? t('action.discardArmed') : t('action.discard'),
         icon: <DiscardGlyph />,
-        danger: true,
         stayOpen: true,
         disabled: pending,
         onSelect: () => {
           if (!armedHere) {
-            // §4.3's first click: arm, and leave the menu up for the second one.
+            // §4.3's first click: arm, and leave the card up for the second one.
             armKey(key)
             return
           }
           // The second click runs it, and the confirmation is done being useful:
-          // the menu goes the way every other entry takes it.
+          // the card goes the way every other entry takes it.
           setMenu(null)
           discard(row.entry)
         },
@@ -1887,12 +1888,16 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * The entries of one commit row's toolbar (§9's commit menu).
    *
-   * Three groups, each after a hairline. The copying entries are on every row —
-   * a hash or a message is worth taking from any commit. The rewriting entries
-   * are next: revert and cherry-pick produce a NEW commit ("还原 / 捡取"), squash
-   * and drop rewrite the branch, and the reset entry opens a second layer with
-   * its three modes. Undo is last and only on the newest row, because FR-3.8
-   * undoes exactly one commit.
+   * The same two groups as the file row's toolbar: what this card can do to the
+   * repository, then — after one hairline — what it can take away from it.
+   *
+   * The doing half starts with the rewriting entries: revert and cherry-pick
+   * produce a NEW commit ("还原 / 捡取"), squash and drop rewrite the branch, and
+   * the reset entry opens a second layer with its three modes. Undo comes last
+   * among them and only on the newest row, because FR-3.8 undoes exactly one
+   * commit; it shares the group because it is one of these, not a way of reading
+   * the commit. The copies are on every row — a hash or a message is worth taking
+   * from any commit.
    *
    * Every rewriting entry arms rather than fires: §4.3's two clicks, with the
    * entry itself becoming the confirmation. Which sentence it arms with is a
@@ -1900,10 +1905,12 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * parents and ancestry for the rest), so the two cannot disagree about what is
    * coming. Revert and cherry-pick refuse a merge commit, squash refuses the
    * first commit — all of them with the host's own sentence beside the list.
+   * None of them is painted red: the mark and the confirmation sentence are what
+   * carry the weight (see `styles.ts`).
    *
    * The rewriting entries carry the marks that tell them apart at a glance. They
-   * are the four things this panel can do to history that are not a plain copy,
-   * and a card of nine text rows is read by shape before it is read by word.
+   * are the things this panel can do to history, and a card of nine text rows is
+   * read by shape before it is read by word.
    */
   const commitMenuEntries = (row: CommitRowMenu): readonly ToolbarEntry[] => {
     const copies: readonly ToolbarEntry[] = [
@@ -1957,7 +1964,6 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         id,
         label: armedHere ? t(confirmation) : t(idle),
         icon,
-        danger: true,
         stayOpen: true,
         disabled: pending || disabled,
         onSelect: () => {
@@ -2065,20 +2071,15 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       },
     }
 
-    const entries: ToolbarEntry[] = [
-      ...copies,
-      { kind: 'separator' },
-      ...rewrites,
-      resetEntry,
-    ]
-    if (!row.canUndo) return entries
-
-    const key = `undo:${row.commit.oid}`
-    const armedHere = armedKey === key
-    return [
-      ...entries,
-      { kind: 'separator' },
-      {
+    // What the card can DO, as one group: the rewrites, the reset entry that opens
+    // its three modes, and — on the newest row only — the undo. Undo sits last
+    // among them because FR-3.8 undoes exactly one commit, not because it is a
+    // different kind of thing from the four above it.
+    const git: ToolbarEntry[] = [...rewrites, resetEntry]
+    if (row.canUndo) {
+      const key = `undo:${row.commit.oid}`
+      const armedHere = armedKey === key
+      git.push({
         kind: 'item',
         id: 'undo',
         label: armedHere
@@ -2087,20 +2088,22 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             : t('action.undoCommitArmedReset')
           : t('action.undoCommit'),
         icon: <UndoGlyph />,
-        danger: true,
         stayOpen: true,
         disabled: pending,
         onSelect: () => {
           if (!armedHere) {
-            // §4.3's first click: arm, and leave the menu up for the second one.
+            // §4.3's first click: arm, and leave the card up for the second one.
             armKey(key)
             return
           }
           setMenu(null)
           undoCommit(row.commit)
         },
-      },
-    ]
+      })
+    }
+    // One hairline, between the two kinds of thing this card holds: what it does
+    // to the repository, and what it takes away from it.
+    return [...git, { kind: 'separator' }, ...copies]
   }
 
   const menuLabel =

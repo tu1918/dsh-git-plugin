@@ -126,8 +126,6 @@ export interface ToolbarItem {
   readonly onSelect: () => void
   /** Whether this entry cannot run right now, such as while an operation is in flight. */
   readonly disabled?: boolean
-  /** Whether the entry destroys something, and so takes the danger colour (§4.3). */
-  readonly danger?: boolean
   /**
    * Whether activating this entry leaves the toolbar open.
    *
@@ -354,10 +352,9 @@ export function ContextToolbar({ origin, entries, label, onClose }: ContextToolb
             tabIndex={-1}
             disabled={entry.disabled === true}
             // The entry's own id, which is what lets a test name the one entry it
-            // means rather than counting danger-styled buttons.
+            // means rather than counting rows.
             data-id={entry.id}
             data-active={String(index === active)}
-            data-danger={String(entry.danger === true)}
             // The pointer and the arrow keys move the same highlight, so a toolbar
             // never points at an entry the pointer has already left.
             onPointerMove={() => setActive(index)}
