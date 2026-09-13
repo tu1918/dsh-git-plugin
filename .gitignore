@@ -27,6 +27,12 @@ lib/
 # here (see `.npmrc`). Large, machine-local, and never portable.
 .tooling/
 
+# ── Editor project state ─────────────────────────────────────────────────────
+# JetBrains' `.idea/` — module settings, inspection profiles, open-file history.
+# It belongs to whoever has the project open rather than to the project, and it
+# rewrites itself while the repository is only being read.
+.idea/
+
 # ── Scratch DSH homes ────────────────────────────────────────────────────────
 # A throwaway `$DSH_HOME` for booting an isolated instance to verify the plugin
 # without disturbing a running one. It accumulates credentials, session logs, and
