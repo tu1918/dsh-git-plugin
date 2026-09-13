@@ -24,8 +24,15 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 
 import { createGitRemoteClient } from './adapter/git-client.ts'
+import { GitDiffBody } from './adapter/diff-tab-body.tsx'
 import { bindGitPanelLocale } from './adapter/locale.ts'
-import { GIT_PANEL_ID, GitPanelTitle, gitPanelDefinition } from './adapter/sidebar-tab.tsx'
+import {
+  GIT_DIFF_ID,
+  GIT_PANEL_ID,
+  GitPanelTitle,
+  gitDiffDefinition,
+  gitPanelDefinition,
+} from './adapter/sidebar-tab.tsx'
 import { GitTabBody } from './adapter/tab-body.tsx'
 import { NS, en, zh } from './locales.ts'
 import { installStyles } from './ui/styles.ts'
@@ -57,6 +64,14 @@ export function apply(ctx: Context): void {
     'dsh-git-panel: git tab type',
   )
 
+  // The diff viewer, registered the same two-stage way. It is a RESOURCE type:
+  // the address names the file and the comparison, so the strip holds one tab
+  // per reading instead of one chip that overwrites itself.
+  ctx.effect(
+    () => ctx.sidebarRightTabs.register(gitDiffDefinition(t)),
+    'dsh-git-panel: diff tab type',
+  )
+
   ctx.effect(
     () =>
       ctx.slots.inject('sidebar.right.pane.tab', () =>
@@ -73,6 +88,19 @@ export function apply(ctx: Context): void {
         ),
       ),
     'dsh-git-panel: git tab body',
+  )
+
+  // The diff body needs no locale tag of its own — it draws no relative times —
+  // so the face it receives is the client alone.
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab', key: GIT_DIFF_ID, locale: NS, inject: () => ({ git }) },
+          GitDiffBody,
+        ),
+      ),
+    'dsh-git-panel: diff tab body',
   )
 
   ctx.effect(

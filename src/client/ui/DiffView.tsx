@@ -35,7 +35,7 @@
  * @module dsh-git-panel/client/ui/DiffView
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 
 import { pathParts } from '../../core/format.ts'
@@ -43,11 +43,13 @@ import { diffTargetKey } from '../../core/diff-target.ts'
 import type { GitPanelError, GitRemoteClient } from '../../core/ports.ts'
 import type { DiffHunk, DiffLine, DiffTarget, FileDiff } from '../../core/types.ts'
 import { cls } from './styles.ts'
+import { DiffScrollbar, type DiffAxis } from './diff-scrollbar.tsx'
 import { useRepoChange } from './repo-change.tsx'
 import type { Translate } from './translate.ts'
 import { errorCopy } from './error-copy.ts'
 import {
   ArrowDownGlyph,
+  OpenInTabGlyph,
   RefreshGlyph,
   SpinnerGlyph,
   SplitGlyph,
@@ -248,7 +250,8 @@ function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
 }
 
 /**
- * A side-by-side diff: two fixed halves, each its own scroller.
+ * A side-by-side diff: two fixed halves, each its own scroller, one shared bar
+ * pair.
  *
  * The split is fixed — each half is half of the pane, always — so a line longer
  * than its half has to go somewhere. Clipping it loses content ("如果有超出去的话
@@ -259,28 +262,153 @@ function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
  *
  * The two halves are kept in step on BOTH axes: a paired line that drifted apart
  * vertically would be worse than useless, and comparing a change means looking at
- * the same column offset on each side.
- * @param props - The hunks to split.
+ * the same column offset on each side. Since two independent scrollers cannot
+ * share a native bar, the halves hide theirs and {@link DiffScrollbar} draws one
+ * per axis for both — see `styles.ts` for why the grid looks the way it does.
+ * @param props - The hunks to split, and the panel's copy.
  */
-function SplitHunks({ hunks }: { readonly hunks: readonly DiffHunk[] }): ReactNode {
+function SplitHunks({
+  hunks,
+  t,
+}: {
+  readonly hunks: readonly DiffHunk[]
+  readonly t: Translate
+}): ReactNode {
   const leftRef = useRef<HTMLDivElement | null>(null)
   const rightRef = useRef<HTMLDivElement | null>(null)
+  const splitRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * Where each half was left by the last programmatic write, or `-1` when nothing
+   * was written to it.
+   *
+   * Needed because the two halves do NOT have the same scrollable range: the two
+   * sides of a diff hold different text, so one is routinely a few pixels wider.
+   * Mirroring "A moved, so set B" makes B fire its own scroll event, and a plain
+   * "are the two equal?" guard reads that echo as B having moved — then B's
+   * clamped value is written back onto A, which drags the half the reader is
+   * holding. The two then fight each other for as long as the drag lasts, which is
+   * exactly the reported "拖一边，另一边延迟闪动".
+   */
+  const echo = useRef<Record<'left' | 'right', { x: number; y: number }>>({
+    left: { x: -1, y: -1 },
+    right: { x: -1, y: -1 },
+  })
+  /** What the shared bars draw from: how far each axis can go, and where it is. */
+  const [extent, setExtent] = useState<{ x: DiffAxis; y: DiffAxis }>({
+    x: { content: 0, viewport: 0 },
+    y: { content: 0, viewport: 0 },
+  })
+  const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+
+  /**
+   * Re-read the halves' sizes.
+   *
+   * One bar serves two scrollers whose content differs, so an axis's range is the
+   * LARGER of the two: a shared bar that stopped at the narrower half's end could
+   * not reach the rest of the wider one. The viewport is the same on both by
+   * construction, so either half answers it.
+   */
+  const measure = useCallback((): void => {
+    const left = leftRef.current
+    const right = rightRef.current
+    if (left === null || right === null) return
+    const next = {
+      x: {
+        content: Math.max(left.scrollWidth, right.scrollWidth),
+        viewport: Math.min(left.clientWidth, right.clientWidth),
+      },
+      y: {
+        content: Math.max(left.scrollHeight, right.scrollHeight),
+        viewport: Math.min(left.clientHeight, right.clientHeight),
+      },
+    }
+    setExtent((current) =>
+      current.x.content === next.x.content &&
+      current.x.viewport === next.x.viewport &&
+      current.y.content === next.y.content &&
+      current.y.viewport === next.y.viewport
+        ? current
+        : next,
+    )
+  }, [])
+
+  /** Publish where the halves are, so the shared thumb follows a wheel or a drag. */
+  const record = useCallback((): void => {
+    const left = leftRef.current
+    const right = rightRef.current
+    if (left === null || right === null) return
+    const x = Math.max(left.scrollLeft, right.scrollLeft)
+    const y = Math.max(left.scrollTop, right.scrollTop)
+    setOffset((current) => (current.x === x && current.y === y ? current : { x, y }))
+  }, [])
+
+  useLayoutEffect(() => {
+    measure()
+    const split = splitRef.current
+    if (split === null) return
+    // The halves' width follows the pane's, and that changes how far a long line
+    // overflows — which is the difference between a bar and no bar.
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure())
+    observer?.observe(split)
+    // Web fonts land after the first paint and change every measured width.
+    void document.fonts?.ready.then(() => measure()).catch(() => undefined)
+    return () => observer?.disconnect()
+  }, [measure, hunks])
 
   /**
    * Mirror one half's position onto the other.
    *
-   * The guard is the assignment itself: the copy fires a scroll event on the
-   * other half, which finds both values already equal and stops. No timer and no
-   * lock to leak.
-   * @param from - The half the user scrolled.
+   * An event from a half whose position is the one we last wrote to it is our own
+   * echo, and is dropped. The record is spent on use — one write makes one event —
+   * so a later read that happens to land on the same pixel is still the reader's.
+   * @param from - The half that reported a scroll.
    */
   const sync = (from: 'left' | 'right'): void => {
     const source = (from === 'left' ? leftRef : rightRef).current
     const target = (from === 'left' ? rightRef : leftRef).current
     if (source === null || target === null) return
-    if (target.scrollTop !== source.scrollTop) target.scrollTop = source.scrollTop
-    if (target.scrollLeft !== source.scrollLeft) target.scrollLeft = source.scrollLeft
+
+    const written = echo.current[from]
+    if (written.x === source.scrollLeft && written.y === source.scrollTop) {
+      echo.current[from] = { x: -1, y: -1 }
+    } else {
+      const moves = target.scrollTop !== source.scrollTop || target.scrollLeft !== source.scrollLeft
+      if (target.scrollTop !== source.scrollTop) target.scrollTop = source.scrollTop
+      if (target.scrollLeft !== source.scrollLeft) target.scrollLeft = source.scrollLeft
+      // Read back rather than reuse what was asked for: a half that cannot go that
+      // far stops short, and it is the position it really reached that its own
+      // event will report.
+      echo.current[from === 'left' ? 'right' : 'left'] = moves
+        ? { x: target.scrollLeft, y: target.scrollTop }
+        : { x: -1, y: -1 }
+    }
+    record()
   }
+
+  /**
+   * Move both halves from a shared bar.
+   *
+   * Both are written in the same step, which is the point of the bar: there is no
+   * "other half" to catch up, so nothing here lags. Each stops at its own end,
+   * which `diff-scrollbar.tsx` accounts for by ranging over the wider one.
+   */
+  const scrollBoth = useCallback(
+    (axis: 'x' | 'y', value: number): void => {
+      const left = leftRef.current
+      const right = rightRef.current
+      if (left === null || right === null) return
+      if (axis === 'x') {
+        left.scrollLeft = value
+        right.scrollLeft = value
+      } else {
+        left.scrollTop = value
+        right.scrollTop = value
+      }
+      record()
+    },
+    [record],
+  )
 
   /**
    * One half: the same hunk structure as the other, one cell per row.
@@ -317,9 +445,25 @@ function SplitHunks({ hunks }: { readonly hunks: readonly DiffHunk[] }): ReactNo
   )
 
   return (
-    <div className={cls.diffSplit} data-diff-split="true">
-      {half('left', 'removed', leftRef)}
-      {half('right', 'added', rightRef)}
+    <div className={cls.diffSplit} data-diff-split="true" ref={splitRef}>
+      <div className={cls.diffHalves}>
+        {half('left', 'removed', leftRef)}
+        {half('right', 'added', rightRef)}
+      </div>
+      <DiffScrollbar
+        axis="y"
+        extent={extent.y}
+        offset={offset.y}
+        onScroll={(value) => scrollBoth('y', value)}
+        label={t('diff.scrollY')}
+      />
+      <DiffScrollbar
+        axis="x"
+        extent={extent.x}
+        offset={offset.x}
+        onScroll={(value) => scrollBoth('x', value)}
+        label={t('diff.scrollX')}
+      />
     </div>
   )
 }
@@ -330,18 +474,21 @@ function SplitHunks({ hunks }: { readonly hunks: readonly DiffHunk[] }): ReactNo
  * The hunk header is emitted for both layouts: it is where the two sides' line
  * numbers come from, and an inline diff without it loses the only anchor a reader
  * has for "where in the file is this".
- * @param props - Hunks and layout.
+ * @param props - Hunks, layout, and the panel's copy.
  */
 function DiffHunks({
   hunks,
   layout,
+  t,
 }: {
   readonly hunks: readonly DiffHunk[]
   readonly layout: DiffLayout
+  readonly t: Translate
 }): ReactNode {
-  // Side by side is two scrollers of its own (see {@link SplitHunks}); inline is
-  // one, because there the full width IS the reading width.
-  if (layout === 'side-by-side') return <SplitHunks hunks={hunks} />
+  // Side by side is two scrollers of its own under one pair of bars (see
+  // {@link SplitHunks}); inline is one scroller, because there the full width IS
+  // the reading width.
+  if (layout === 'side-by-side') return <SplitHunks hunks={hunks} t={t} />
 
   return (
     <div className={cls.diffHunks}>
@@ -438,6 +585,14 @@ export interface DiffViewProps {
   readonly onReload: () => void
   /** True while a read is in flight, so a reload cannot be started twice. */
   readonly busy: boolean
+  /**
+   * Promote this reading into a right-side tab of its own.
+   *
+   * Absent for a diff that is ALREADY in such a tab: there is nowhere further to
+   * open it, and a button that did nothing would be worse than no button. The
+   * dock passes it, which is the one place a diff can still be moved out of.
+   */
+  readonly onOpenInTab?: () => void
 }
 
 /**
@@ -447,8 +602,9 @@ export interface DiffViewProps {
  * commit's file later (FR-7.2) without a fetch of its own.
  *
  * Its header carries the diff's OWN operations and nothing else — the layout
- * pair and the reload. Closing is the tab strip's business (each tab has its own
- * ×), so this row never doubles as a way out of the pane.
+ * pair, the reload, and, in the dock, the move into a right-side tab of its own.
+ * Closing is the tab strip's business (each tab has its own ×), so this row
+ * never doubles as a way out of the pane.
  * @param props - The diff and the panel's callbacks.
  */
 export function DiffView({
@@ -461,6 +617,7 @@ export function DiffView({
   onCollapse,
   onReload,
   busy,
+  onOpenInTab,
 }: DiffViewProps): ReactNode {
   const { directory, name } = pathParts(diff.path)
   const state = diff.binary ? 'binary' : diff.combined ? 'combined' : diff.hunks.length === 0 ? 'empty' : 'lines'
@@ -500,6 +657,19 @@ export function DiffView({
               <SplitGlyph size={12} />
             </button>
           </span>
+          {/* Opening the same diff in the right sidebar is a view operation like
+              the rest: it changes where the diff is read, not what it says. */}
+          {onOpenInTab !== undefined && (
+            <button
+              type="button"
+              className={cls.tool}
+              title={t('diff.openInTab')}
+              aria-label={t('diff.openInTab')}
+              onClick={onOpenInTab}
+            >
+              <OpenInTabGlyph />
+            </button>
+          )}
           <button
             type="button"
             className={cls.tool}
@@ -528,7 +698,7 @@ export function DiffView({
         </div>
       ) : (
         <>
-          <DiffHunks hunks={diff.hunks} layout={layout} />
+          <DiffHunks hunks={diff.hunks} layout={layout} t={t} />
           {diff.large && onCollapse !== undefined && (
             <p className={cls.diffNote}>
               <button type="button" className={cls.ghost} onClick={onCollapse}>
@@ -576,6 +746,11 @@ export interface DiffPaneProps {
    * that owns the diff, so the header row stays "diff operations only".
    */
   readonly onClose: () => void
+  /**
+   * Move this diff into a right-side tab of its own, if there is somewhere to
+   * move it to. Omitted by a pane that is already such a tab.
+   */
+  readonly onOpenInTab?: () => void
 }
 
 /**
@@ -620,6 +795,7 @@ export function DiffPane({
   signal,
   active = true,
   onClose,
+  onOpenInTab,
 }: DiffPaneProps): ReactNode {
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [error, setError] = useState<GitPanelError | null>(null)
@@ -760,6 +936,7 @@ export function DiffPane({
       onCollapse={() => setExpanded(false)}
       onReload={reload}
       busy={busy}
+      onOpenInTab={onOpenInTab}
     />
   )
 }

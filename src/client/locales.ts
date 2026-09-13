@@ -26,6 +26,7 @@ export const NS = 'gitPanel'
 /** Simplified Chinese dictionary, and the key-set source of truth. */
 export const zh = {
   'type.label': 'Git',
+  'type.diffLabel': '差异',
   'guide.title': 'Git 变更',
   'guide.description': '查看当前工作区的改动与分支状态',
 
@@ -240,6 +241,7 @@ export const zh = {
 
   'diff.open': '打开 {path} 的差异',
   'diff.reload': '重新读取差异',
+  'diff.openInTab': '在右侧栏新标签页中打开',
   'diff.groupView': '差异视图操作',
   'diff.layout': '差异布局',
   'diff.layoutInline': '上下对照',
@@ -252,6 +254,9 @@ export const zh = {
   'diff.collapse': '折叠',
   'diff.truncated': '输出达到上限，差异的结尾没有读取。',
   'diff.resize': '拖动调整差异区域高度',
+  'diff.scrollX': '横向滚动',
+  'diff.scrollY': '纵向滚动',
+  'diffTab.missing': '这个标签页没有可以显示的差异。',
 
   'state.truncated': '改动太多，列表只显示了一部分。',
   'state.binary': '二进制文件',
@@ -283,6 +288,7 @@ export const zh = {
 /** English dictionary, checked against the Chinese key set. */
 export const en: Record<GitPanelKey, string> = {
   'type.label': 'Git',
+  'type.diffLabel': 'Diff',
   'guide.title': 'Git changes',
   'guide.description': 'Review this workspace’s changes and branch state',
 
@@ -504,6 +510,7 @@ export const en: Record<GitPanelKey, string> = {
 
   'diff.open': 'Open the diff of {path}',
   'diff.reload': 'Read the diff again',
+  'diff.openInTab': 'Open in a new tab in the right sidebar',
   'diff.groupView': 'Diff view operations',
   'diff.layout': 'Diff layout',
   'diff.layoutInline': 'Unified (inline)',
@@ -516,6 +523,9 @@ export const en: Record<GitPanelKey, string> = {
   'diff.collapse': 'Fold',
   'diff.truncated': 'The output hit its cap, so the end of the diff was not read.',
   'diff.resize': 'Drag to resize the diff',
+  'diff.scrollX': 'Scroll horizontally',
+  'diff.scrollY': 'Scroll vertically',
+  'diffTab.missing': 'This tab has no diff to show.',
 
   'state.truncated': 'Too many changes: the list shows only some of them.',
   'state.binary': 'Binary file',

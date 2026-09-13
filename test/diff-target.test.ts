@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { diffTargetKey } from '../src/core/diff-target.ts'
+import { diffTargetFromKey, diffTargetKey } from '../src/core/diff-target.ts'
 
 describe('diff target keys', () => {
   it('names each working comparison', () => {
@@ -32,5 +32,25 @@ describe('diff target keys', () => {
       diffTargetKey({ area: 'commit', hash: 'def456' }),
     ]
     assert.equal(new Set(keys).size, keys.length)
+  })
+})
+
+describe('reading a key back', () => {
+  it('recovers every target the key can name', () => {
+    // A right-side diff tab is restored from its address alone, so the key it was
+    // opened under has to name the whole target again.
+    for (const target of [
+      { area: 'worktree' },
+      { area: 'index' },
+      { area: 'commit', hash: 'abc123' },
+    ] as const) {
+      assert.deepEqual(diffTargetFromKey(diffTargetKey(target)), target)
+    }
+  })
+
+  it('refuses a string that is not a key', () => {
+    assert.equal(diffTargetFromKey(''), null)
+    assert.equal(diffTargetFromKey('staged'), null)
+    assert.equal(diffTargetFromKey('commit:'), null)
   })
 })

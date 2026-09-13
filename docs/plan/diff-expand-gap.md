@@ -89,7 +89,7 @@ host 侧拿整个 blob 的 stdout、按行切开、切出 `[from, from+count)` �
 ## 三、渲染
 
 补齐的行就是 `kind: 'context'` 的 `DiffLine`（两侧都填 `oldLine` / `newLine`），
-而 `splitRows` 对 context 的处理（`{ left: line, right: line }`，`DiffView.tsx:162-166`）
+而 `splitRows` 对 context 的处理（`{ left: line, right: line }`，`DiffView.tsx:172-176`）
 已经是正确形状，两侧各取各的行号。所以 `splitRows` 与 `LineCell` 不用改，只需要能遍历
 "hunk 与缝隙交替"的序列：引入 `DiffSegment = {kind:'hunk',hunk} | {kind:'gap',gap}`，
 `DiffHunks` / `SplitHunks` 改为遍历 segments。gap 行就是 **A-9 已登记的行间操作载体**：
@@ -98,7 +98,7 @@ host 侧拿整个 blob 的 stdout、按行切开、切出 `[from, from+count)` �
 ## 状态与并发
 
 - 展开状态是 `DiffPane` 里的一个 `Set`（key 形如 `gap\u0000oldStart`），切换文件 /
-  比较目标时清空（照 `expanded` 的重置写法，`DiffView.tsx:613-618`）。
+  比较目标时清空（照 `expanded` 的重置写法，`DiffView.tsx:829-834`）。
   `DiffView` 保持纯渲染，只多收 `expandedGaps` 与 `onResolveGap` 回调。
 - 同一文件多次展开共用一次读取：per-file 的 promise 缓存（key 含 path 与 side），
   外加一个 epoch 守卫作废 in-flight 的旧结果（better-sidebar 的

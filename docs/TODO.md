@@ -15,7 +15,7 @@
 ## 状态速览
 
 - 里程碑 M0–M5b 的功能**全部交付**，M5b 按 `docs/plan.md` §10.2 只剩顺序 10 发布收尾。
-- 下面 A 组 11 条来自 §3.6 / §10.3（产品方已登记、未排期）；B 组 1 条是发布收尾；
+- 下面 A 组 10 条来自 §3.6 / §10.3（产品方已登记、未排期）；B 组 1 条是发布收尾；
   C 组 2 条是文档在 D 决策里点名的具体缺口（做法已写明）；D 组是有意不做/等条件的；
   E 组只差验证，不是代码工作量。A-10~A-12 是 2026-09-13 提出的 diff 视图操作四条里的
   后三条（前一条「操作分区」已交付，见 `docs/plan.md` 的「验收期改动：diff 视图的操作分区」）：
@@ -37,15 +37,14 @@
 | # | 待办 | 文档条目 | 为什么没做 / 现状 | 计划 |
 |---|---|---|---|---|
 | A-1 | **检出远程分支**（新建跟踪分支 / 快进 / Rebase onto origin / Drop local commits） | requirements §3.6 第 1 行；FR-4.5；plan §10.3 第 1 行、D43 | 只读列表已交付；检出可能改写历史（rebase onto origin / drop local commits），且**先要冲突处理**才能安全收尾——FR-9 与顺序 9 的在途操作条现已交付，前置已解锁 | [plan/checkout-remote-branch.md](plan/checkout-remote-branch.md) |
-| A-2 | **在右侧栏自己的标签页里打开 diff**（不再只开在面板底部 dock） | requirements §3.6 第 8 行；plan §10.3 末行（产品方 2026-09-13 提出） | 路已通（已注入 `@deepseek-ai/dsh-client-ui-sidebar-right`，支持同 pane 多标签）；排期前要先定三件事 | [plan/diff-sidebar-tab.md](plan/diff-sidebar-tab.md) |
 | A-3 | **通知时长接进 DSH 设置**（插件配置面） | requirements §3.6 第 3 行；plan §10.3 第 3 行、D40 末尾 | 现在是代码常量 `NOTICE_DURATION_MS = 4000`；产品方 2026-09-12 决定「等真有功能需要设置时一起加」 | [plan/notice-duration-setting.md](plan/notice-duration-setting.md) |
 | A-4 | **非仓库时的「初始化仓库」按钮**（执行 `git init`） | requirements §3.6 第 2 行；§4.3 空态引导；plan §10.3 第 2 行 | 现在只有一句 `noRepo.hint` 文案，没有按钮 | 无（文档只给了目标，没给做法） |
 | A-5 | **上下方向键导航变更列表** | requirements §3.6 第 4 行；§4.3 键盘；plan §10.3 第 4 行 | `Ctrl+Enter` / `Esc` / `Shift+F10` 已有，这一条没有 | 无 |
 | A-6 | **diff 虚拟滚动** | requirements §3.6 第 5 行；§6 性能 P1；plan §10.3 第 5 行 | 现靠 FR-2.6 的「>5000 行默认折叠」兜底，展开后整块渲染 | 无 |
 | A-7 | **gpg 签名卡死的专门文案** | requirements §3.6 第 6 行；plan §10.3 第 6 行、§11 | `commit.gpgsign=true` 的仓库里提交会卡到 15s deadline；`GIT_TERMINAL_PROMPT=0` 管不到 gpg。M2 不传 `--no-gpg-sign`（会静默产生未签名提交，更糟） | 无（待办只说了「识别并给出文案」） |
 | A-8 | **凭据的其余角落**：SSH、代理、同主机多仓库不同凭据 | requirements §3.6 第 7 行；FR-11.4；plan §11 | 本期只覆盖 HTTPS 且按 origin 寻址（git 的提示串只到 origin，故同主机多仓库共用一份）；本地 provider 今天仍是明文 YAML | 无 |
-| A-10 | **diff 视图改成单按钮切换**（同行 ⇄ 左右；图标随当前布局变，沿用现有两枚字形） | plan §10.3（产品方 2026-09-13 提出） | 现在是两枚段控按钮、用 `aria-pressed` 标出当前布局（`ui/DiffView.tsx:442`）；改成单按钮后这个属性没有位置，要换成「点下去会变成什么」的文案。落点已定：留在 A-9 交付的 `ViewOps` 组里，视图操作区不是托盘 | [plan/diff-layout-toggle.md](plan/diff-layout-toggle.md) |
-| A-11 | **diff 视图增加「自动换行」开关** | plan §10.3（产品方 2026-09-13 提出） | 没有该开关；行文本不折行，长行靠左右两半各自的横向滚动条看全（`ui/DiffView.tsx:251`）。左右布局的两个滚动容器天然容不下折行（配对两格会错位），故**折行只在上下对照生效，左右对照下按钮禁用**（2026-09-13 定）。落点是 A-9 交付的头部视图操作区（`.dgp-diff-ops`） | [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
+| A-10 | **diff 视图改成单按钮切换**（同行 ⇄ 左右；图标随当前布局变，沿用现有两枚字形） | plan §10.3（产品方 2026-09-13 提出） | 现在是两枚段控按钮、用 `aria-pressed` 标出当前布局（`ui/DiffView.tsx:642`）；改成单按钮后这个属性没有位置，要换成「点下去会变成什么」的文案。落点已定：留在 A-9 交付的 `ViewOps` 组里，视图操作区不是托盘 | [plan/diff-layout-toggle.md](plan/diff-layout-toggle.md) |
+| A-11 | **diff 视图增加「自动换行」开关** | plan §10.3（产品方 2026-09-13 提出） | 没有该开关；行文本不折行，长行靠左右两半各自的横向滚动条看全（`ui/DiffView.tsx:253`）。左右布局的两个滚动容器天然容不下折行（配对两格会错位），故**折行只在上下对照生效，左右对照下按钮禁用**（2026-09-13 定）。落点是 A-9 交付的头部视图操作区（`.dgp-diff-ops`） | [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
 | A-12 | **diff 行间操作：展开两处 hunk 之间的行** | plan §10.3（产品方 2026-09-13 提出） | 缝隙的**行数**由 hunk 的起止行相减即得（2026-09-13 定，不需要新数据）；hunk 之间**一行内容都没有**（`FileDiff.hunks[].lines` 只含 hunk 内，`core/types.ts:495`），故走"逐处展开、开到底"（2026-09-13 定）：新增一条 `GET /git-panel/fileLines` 读 old 侧 blob 的指定行区间——缝隙两侧逐字相同，只读一侧即可，且不必读文件系统。落点是 A-9 登记的 `.dgp-diff-gap` 行（行间操作的载体） | [plan/diff-expand-gap.md](plan/diff-expand-gap.md) |
 
 ## B. 发布收尾

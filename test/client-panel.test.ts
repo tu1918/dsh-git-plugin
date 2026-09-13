@@ -82,6 +82,15 @@ const { FileKindGlyph, PlusGlyph } = await import('../src/client/ui/icons.tsx')
 const { GIT_PANEL_ID, GIT_PANEL_KIND, gitPanelDefinition } = await import(
   '../src/client/adapter/sidebar-tab.tsx'
 )
+const {
+  GIT_DIFF_ID,
+  GIT_DIFF_KIND,
+  diffTabAddress,
+  gitDiffDefinition,
+  parseDiffTabAddress,
+} = await import('../src/client/adapter/sidebar-tab.tsx')
+const { GitDiffBody } = await import('../src/client/adapter/diff-tab-body.tsx')
+const { DiffView } = await import('../src/client/ui/DiffView.tsx')
 const { apply } = await import('../src/client/index.tsx')
 
 import type {
@@ -99,6 +108,7 @@ import type {
 } from '../src/core/types.ts'
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
 import type { ToolbarEntry } from '../src/client/ui/toolbar.tsx'
+import type { OpenFile } from '../src/client/ui/BottomPane.tsx'
 
 /** A translator over one of the real dictionaries, with `{name}` substitution. */
 function translator(dict: Readonly<Record<string, string>>) {
@@ -888,7 +898,7 @@ describe('the panel stylesheet', () => {
     )
   })
 
-  it('gives each half of a side-by-side diff its own scrollbar, and keeps the halves fixed', () => {
+  it('keeps the halves fixed, and gives the split ONE scrollbar per axis', () => {
     installStyles(document)
     const sheet =
       document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
@@ -897,15 +907,36 @@ describe('the panel stylesheet', () => {
     // and then "如果有超出去的话在底部加滚动条". Letting the row grow to fit the
     // longest line pushed the right half off the pane; clipping it lost the rest of
     // the line. So each half is half of the pane whatever the lines are, and each
-    // half is its own scroller — the scrollbar for an over-long line appears at the
-    // bottom of the half that overflows.
-    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*display: flex`, 'u'))
+    // half is its own scroller.
     assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*flex: 1 1 50%`, 'u'))
     assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*overflow: auto`, 'u'))
+    // But two independent scrollers cannot share a native bar, and in the narrow
+    // right-side column that read as four bars — "会出现两个横向滚动条，纵向的也会
+    // 有这个问题". So the halves hide their natives and the split is a GRID that
+    // carries one bar per axis at its own edges.
+    assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*scrollbar-width: none`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.diffHalves} \\.${cls.diffSide}::-webkit-scrollbar\\s*\\{[^}]*display: none`,
+        'u',
+      ),
+    )
+    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*display: grid`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*grid-template-columns: minmax\\(0, 1fr\\) auto`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*grid-template-rows: minmax\\(0, 1fr\\) auto`, 'u'),
+    )
     // The divider is a LANE, not just breathing room: the gap sits between the two
-    // scrollers, so a per-line action placed there can never be dragged sideways by
-    // a long line, and the hairline is the boundary itself.
-    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*gap: 16px`, 'u'))
+    // scrollers, so nothing a half scrolls can push it around, and the hairline is
+    // the boundary itself. A per-line action does NOT live in that lane — the halves
+    // have nothing per-row between them — but in the tail of the line's own row.
+    assert.match(sheet, new RegExp(`\\.${cls.diffHalves}\\s*\\{[^}]*display: flex`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHalves}\\s*\\{[^}]*gap: 16px`, 'u'))
     assert.match(
       sheet,
       new RegExp(
@@ -956,6 +987,57 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('draws the shared bars where the axes run, not over the code', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // The vertical bar is its own grid column at the right edge, the horizontal one
+    // its own row across the bottom — so neither ever covers a line of the diff and
+    // the lane between the halves stays whole. The thumb is the only visible part.
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*grid-column: 2`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*grid-row: 1`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*grid-column: 1 / span 2`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*grid-row: 2`, 'u'))
+    // A drag that leaves the 10px strip must keep going, and must not pan the pane
+    // on a touch screen.
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*touch-action: none`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*touch-action: none`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffBarThumb}\\s*\\{[^}]*background: var\\(--dsw-alias-scrollbar-bg-l1\\)`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffHBar} \\.${cls.diffBarThumb}\\s*\\{[^}]*height: 6px`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffVBar} \\.${cls.diffBarThumb}\\s*\\{[^}]*width: 6px`, 'u'),
+    )
+  })
+
+  it('keeps the diff’s own scrollbars at the foot of a right-side tab', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Reported from the running panel, of the diff opened in a right-side tab
+    // instead of the dock: "横向滚动条应该放在底下，现在在中间". A tab body is a scroll
+    // container of its own (the dock kit's pane body is `overflow: auto` with a
+    // definite height), and a pane without a height is as tall as its content — so
+    // the tab body scrolled the whole tree, the inner scrollers never bounded
+    // themselves, and their bars rode the end of the CONTENT. The height is what
+    // puts the scrolling back inside the diff, and with it the bars at the bottom.
+    assert.match(sheet, new RegExp(`\\.${cls.diffView}\\s*\\{[^}]*height: 100%`, 'u'))
+    // And the same report's other half: "行间操作的区域没有全覆盖，只覆盖了左侧的
+    // 部分". A hunk's width has to come from its widest line, not from the scroller's
+    // content box, or the header band (and the gap a between-lines action will sit
+    // in) stops at the left edge of whatever the reader has scrolled to. The
+    // heading still loses first, so this never widens the pane by itself.
+    assert.match(sheet, new RegExp(`\\.${cls.diffHunk}\\s*\\{[^}]*min-width: min-content`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHunkHead}\\s*\\{[^}]*min-width: 0`, 'u'))
+  })
   it('sizes a change row by its border box, so its actions stay inside the list', async () => {
     // Reported from the running panel: "the +/− are too close to the edge and
     // blocked". The cause was geometric, not cosmetic. `.dgp-row` is `width: 100%`
@@ -3055,6 +3137,67 @@ describe('operation failures (§4.3)', () => {
 })
 
 describe('the diff view (FR-2)', () => {
+  /**
+   * Pretend every element is a 300x400 box holding 900x1200 of content.
+   *
+   * jsdom has no layout, so `clientWidth` and friends are all zero and a scrollbar
+   * would have nothing to compute from. Overriding the getters on the prototype is
+   * the only way to give the component numbers; `Element` owns them, so shadowing
+   * them on `HTMLElement` and deleting the shadow puts them back.
+   * @param sizes - The numbers to report; the defaults overflow on both axes.
+   * @returns A restore function to call in a `finally`.
+   */
+  function fakeDiffMetrics(
+    sizes: {
+      readonly viewportWidth?: number
+      readonly contentWidth?: number
+      readonly viewportHeight?: number
+      readonly contentHeight?: number
+    } = {},
+  ): () => void {
+    const {
+      viewportWidth = 300,
+      contentWidth = 900,
+      viewportHeight = 400,
+      contentHeight = 1200,
+    } = sizes
+    const proto = dom.window.HTMLElement.prototype
+    Object.defineProperties(proto, {
+      clientWidth: { configurable: true, get: () => viewportWidth },
+      scrollWidth: { configurable: true, get: () => contentWidth },
+      clientHeight: { configurable: true, get: () => viewportHeight },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+    })
+    return () => {
+      for (const name of ['clientWidth', 'scrollWidth', 'clientHeight', 'scrollHeight']) {
+        delete (proto as unknown as Record<string, unknown>)[name]
+      }
+    }
+  }
+
+  /** The callbacks one diff render needs; the tests never press the header. */
+  function diffViewProps() {
+    return {
+      diff: diffFixture(),
+      t,
+      expanded: true,
+      onLayout: () => undefined,
+      onExpand: () => undefined,
+      onCollapse: () => undefined,
+      onReload: () => undefined,
+      busy: false,
+    }
+  }
+
+  /** Render one side-by-side diff on its own, with no panel around it. */
+  async function renderSideBySideDiff(): Promise<HTMLElement> {
+    const container = await render(
+      h(DiffView, { ...diffViewProps(), layout: 'side-by-side' }),
+    )
+    await flush()
+    return container
+  }
+
   it('opens on a change row, draws the hunks and the word marks, and closes again', async () => {
     const diffCalls: string[] = []
     const container = await render(
@@ -3403,23 +3546,36 @@ describe('the diff view (FR-2)', () => {
 
   it('keeps the view operations in one labelled group, and marks the lines as the other anchor', async () => {
     const container = await render(
-      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({}),
+        t,
+        locale: 'en',
+        onOpenDiffTab: () => {},
+      }),
     )
     await settle()
     await click(must(container, `[data-group="unstaged"] .${cls.row}`))
 
-    // View operations are one group at the header's right end — the layout pair
-    // and the reload today. The label rides the GROUP, because the sidebar has no
-    // room to print a title for it, and `data-op-group` is how the class of
-    // operation is readable from the DOM.
+    // View operations are one group at the header's right end: the layout pair, the
+    // "open in a tab" control (offered only when the deployment has a right sidebar
+    // to move the diff into) and the reload. The label rides the GROUP, because the
+    // sidebar has no room to print a title for it, and `data-op-group` is how the
+    // class of operation is readable from the DOM — a later control that changes
+    // how the diff is read belongs here, not loose in the header.
     const ops = must(container, `.${cls.diffHead} .${cls.diffOps}`)
     assert.equal(ops.getAttribute('data-op-group'), 'view')
     assert.equal(ops.getAttribute('role'), 'group')
     assert.equal(ops.getAttribute('aria-label'), 'Diff view operations')
-    assert.equal(ops.querySelectorAll(`.${cls.tool}`).length, 1)
+    assert.equal(ops.querySelectorAll(`.${cls.tool}`).length, 2)
     assert.deepEqual(
       [...ops.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')),
-      ['Unified (inline)', 'Side by side', 'Read the diff again'],
+      [
+        'Unified (inline)',
+        'Side by side',
+        'Open in a new tab in the right sidebar',
+        'Read the diff again',
+      ],
     )
 
     // The lines themselves are the per-line anchor, and carry it as an attribute
@@ -3468,13 +3624,123 @@ describe('the diff view (FR-2)', () => {
     assert.equal(after.scrollTop, 120, 'the halves stay paired while reading down')
     assert.equal(after.scrollLeft, 40, 'and stay on the same column while reading across')
 
-    // And the mirror image: the guard is the values being equal, so the copy does
-    // not bounce back.
+    // The copy's own scroll event must not be read as the reader moving it. The
+    // two halves do not have the same scrollable range — the two sides hold
+    // different text — so a mirrored half that stops short would otherwise write
+    // its clamped value back and drag the half the reader is holding, which is the
+    // reported flicker while dragging one side.
+    before.scrollTop = 111
+    await act(async () => {
+      before.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(after.scrollTop, 111)
+    // The browser's echo of that write: same position, so it is ours, not theirs.
+    await act(async () => {
+      after.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(before.scrollTop, 111, 'the echo must not drag the reader’s half back')
+
+    // And the mirror image: a real move on the other half still carries over.
     after.scrollTop = 300
     await act(async () => {
       after.dispatchEvent(new dom.window.Event('scroll'))
     })
     assert.equal(before.scrollTop, 300)
+  })
+
+  it('draws ONE bar per axis for both halves, sized from their shared range', async () => {
+    // Reported from the running panel, of the side-by-side diff in a right-side
+    // tab: "会出现两个横向滚动条。纵向的也会有这个问题". Two independent scrollers
+    // cannot share a native bar, so the halves hide theirs and the split draws one
+    // per axis from the LARGER of the two ranges.
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await renderSideBySideDiff()
+      const bars = [...container.querySelectorAll(`.${cls.diffVBar}, .${cls.diffHBar}`)]
+      assert.equal(bars.length, 2, 'one bar per axis, not one per half')
+      // 300x400 of viewport over 900x1200 of content: 600 across, 800 down.
+      assert.equal(
+        must(container, `[data-diff-bar="x"]`).getAttribute('aria-valuemax'),
+        '600',
+      )
+      assert.equal(
+        must(container, `[data-diff-bar="y"]`).getAttribute('aria-valuemax'),
+        '800',
+      )
+      // The thumb is the viewport's share of the content: a third of the track.
+      const thumb = must<HTMLElement>(container, `[data-diff-bar="y"] [data-diff-bar-thumb]`)
+      assert.ok(Math.abs(Number.parseFloat(thumb.style.height) - 100 / 3) < 0.01)
+      assert.equal(Number.parseFloat(thumb.style.top), 0, 'at the top, it sits at the start')
+    } finally {
+      restore()
+    }
+  })
+
+  it('shows no bar for an axis that cannot move', async () => {
+    // A bar that cannot move is a control that does nothing, and the grid leaves it
+    // no room either: only the vertical axis overflows here.
+    const restore = fakeDiffMetrics({ contentWidth: 300, contentHeight: 1200 })
+    try {
+      const container = await renderSideBySideDiff()
+      assert.equal(container.querySelector(`.${cls.diffHBar}`), null)
+      assert.equal(container.querySelector(`.${cls.diffVBar}`) !== null, true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('moves both halves from one shared bar', async () => {
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await renderSideBySideDiff()
+      const [before, after] = [
+        ...container.querySelectorAll<HTMLElement>(`.${cls.diffSide}`),
+      ] as [HTMLElement, HTMLElement]
+      const hbar = must<HTMLElement>(container, `[data-diff-bar="x"]`)
+      const thumb = must<HTMLElement>(hbar, `[data-diff-bar-thumb]`)
+
+      // Grab the thumb and drag it half of its travel (the track is 300 wide and
+      // the thumb a third of it, so 100px is half of the 200px it may move).
+      await act(async () => {
+        thumb.dispatchEvent(
+          new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 0 }),
+        )
+      })
+      await act(async () => {
+        hbar.dispatchEvent(
+          new dom.window.PointerEvent('pointermove', { bubbles: true, clientX: 100 }),
+        )
+      })
+      await act(async () => {
+        hbar.dispatchEvent(
+          new dom.window.PointerEvent('pointerup', { bubbles: true, clientX: 100 }),
+        )
+      })
+
+      assert.ok(Math.abs(before.scrollLeft - 300) < 0.001, 'half of the 600px range')
+      assert.ok(Math.abs(after.scrollLeft - 300) < 0.001)
+      // And the bar reports where the halves now are: half of its 66.6667% travel.
+      assert.equal(hbar.getAttribute('aria-valuenow'), '300')
+      assert.ok(Math.abs(Number.parseFloat(thumb.style.left) - 100 / 3) < 0.01)
+    } finally {
+      restore()
+    }
+  })
+
+  it('leaves the inline layout to its own single scroller', async () => {
+    // Inline has nothing to share: one scroller, one native bar per axis.
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await render(
+        h(DiffView, { ...diffViewProps(), layout: 'inline' }),
+      )
+      await flush()
+      assert.equal(container.querySelector(`[data-diff-bar]`), null)
+      assert.equal(container.querySelector(`.${cls.diffHunks}`) !== null, true)
+      assert.equal(container.querySelector(`.${cls.diffSide}`), null)
+    } finally {
+      restore()
+    }
   })
 
   it('drops an open diff whose file is no longer changed', async () => {
@@ -3516,11 +3782,11 @@ describe('the diff view (FR-2)', () => {
 })
 
 describe('the plugin’s registration', () => {
-  it('registers the type, its body, and its title under one id', async () => {
+  it('registers both types, their bodies, and the panel’s title under their own ids', async () => {
     const calls = { types: 0, bodies: 0, titles: 0, dictionaries: 0 }
-    let definition: { id: string; kind: string } | undefined
-    let bodyKey: string | undefined
-    let titleKey: string | undefined
+    const definitions: { id: string; kind: string }[] = []
+    const bodyKeys: string[] = []
+    const titleKeys: string[] = []
 
     const ctx = {
       effect: (run: () => unknown) => {
@@ -3538,7 +3804,7 @@ describe('the plugin’s registration', () => {
       sidebarRightTabs: {
         register: (def: { id: string; kind: string }) => {
           calls.types += 1
-          definition = def
+          definitions.push(def)
           return () => undefined
         },
       },
@@ -3550,11 +3816,11 @@ describe('the plugin’s registration', () => {
         register: (options: { name: string; key: string }) => {
           if (options.name === 'sidebar.right.pane.tab') {
             calls.bodies += 1
-            bodyKey = options.key
+            bodyKeys.push(options.key)
           }
           if (options.name === 'sidebar.right.pane.tab.title') {
             calls.titles += 1
-            titleKey = options.key
+            titleKeys.push(options.key)
           }
           return () => undefined
         },
@@ -3563,15 +3829,20 @@ describe('the plugin’s registration', () => {
 
     apply(ctx as never)
 
-    assert.equal(calls.types, 1)
-    assert.equal(calls.bodies, 1)
+    assert.equal(calls.types, 2)
+    assert.equal(calls.bodies, 2)
+    // The diff type's chip shows the file's name, which the registry captured at
+    // open time; only the panel needs a live title component.
     assert.equal(calls.titles, 1)
     assert.equal(calls.dictionaries, 1)
-    assert.equal(definition?.id, GIT_PANEL_ID)
-    assert.equal(definition?.kind, GIT_PANEL_KIND)
+
+    const panel = definitions.find((def) => def.id === GIT_PANEL_ID)
+    const diff = definitions.find((def) => def.id === GIT_DIFF_ID)
+    assert.equal(panel?.kind, GIT_PANEL_KIND)
+    assert.equal(diff?.kind, GIT_DIFF_KIND)
     // DSH finds a body by the definition's `id`, so these must agree exactly.
-    assert.equal(bodyKey, GIT_PANEL_ID)
-    assert.equal(titleKey, GIT_PANEL_ID)
+    assert.deepEqual(bodyKeys.slice().sort(), [GIT_DIFF_ID, GIT_PANEL_ID].slice().sort())
+    assert.deepEqual(titleKeys, [GIT_PANEL_ID])
   })
 
   it('offers a guide entry, which is the only way to open a page type', () => {
@@ -3582,6 +3853,180 @@ describe('the plugin’s registration', () => {
     assert.ok(definition.guide?.[0]?.icon, 'a guide capsule needs a glyph')
     // A page type claims no resource address.
     assert.equal(definition.patterns, undefined)
+  })
+})
+
+describe('the diff tab type', () => {
+  const definition = gitDiffDefinition(((key: keyof typeof en) => en[key]) as never)
+
+  it('is a resource type with no guide entry', () => {
+    assert.equal(definition.id, GIT_DIFF_ID)
+    assert.equal(definition.kind, GIT_DIFF_KIND)
+    assert.equal(definition.priority, 'extension')
+    // A diff is opened from a row or from the dock, never picked off the guide:
+    // there is no file to name before one has been chosen.
+    assert.equal(definition.guide, undefined)
+    assert.deepEqual(definition.patterns, ['dsh-resource://git-diff/**'])
+  })
+
+  it('round-trips a path and a comparison through the address', () => {
+    // The address is the tab's whole identity — no parameters travel with it —
+    // so a restored tab reads back exactly what it was opened with.
+    for (const target of [
+      { area: 'worktree' },
+      { area: 'index' },
+      { area: 'commit', hash: 'abc123' },
+    ] as const) {
+      const file = { path: 'src/odd name/#1.ts', target }
+      assert.deepEqual(parseDiffTabAddress(diffTabAddress(file)), file)
+    }
+  })
+
+  it('gives the same path read two ways two addresses', () => {
+    const worktree = diffTabAddress({ path: 'src/a.ts', target: { area: 'worktree' } })
+    const index = diffTabAddress({ path: 'src/a.ts', target: { area: 'index' } })
+    assert.notEqual(worktree, index)
+  })
+
+  it('vetoes an address it could not draw', () => {
+    for (const address of [
+      'dsh-resource://file/session/s1/src/a.ts',
+      'dsh-resource://git-diff/only-one-segment',
+      'dsh-resource://git-diff/nonsense/src%2Fa.ts',
+      'dsh-resource://git-diff/worktree/',
+      'dsh-resource://git-diff/%ZZ/src%2Fa.ts',
+    ]) {
+      assert.equal(parseDiffTabAddress(address), null, address)
+      assert.equal(definition.canOpen?.(address), false, address)
+    }
+    assert.equal(definition.canOpen?.(diffTabAddress({ path: 'a.ts', target: { area: 'index' } })), true)
+  })
+
+  it('names the chip after the file, and falls back when the address is not one', () => {
+    assert.equal(
+      definition.title(diffTabAddress({ path: 'src/deep/changed.ts', target: { area: 'worktree' } })),
+      'changed.ts',
+    )
+    assert.equal(definition.title('dsh-resource://file/nope.ts'), 'Diff')
+  })
+})
+
+describe('promoting a diff to a right-side tab', () => {
+  it('moves it out of the dock in the same click', async () => {
+    const opened: OpenFile[] = []
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({}),
+        t,
+        locale: 'en',
+        onOpenDiffTab: (file) => opened.push(file),
+      }),
+    )
+    await settle()
+    // Nothing open yet, so there is nowhere to move and no operation to offer.
+    assert.equal(container.querySelector(`[aria-label="${t('diff.openInTab')}"]`), null)
+
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(container.querySelectorAll(`.${cls.diffView}`).length, 1)
+
+    await click(must(container, `[aria-label="${t('diff.openInTab')}"]`))
+    assert.deepEqual(opened, [{ path: 'deep/nested/dir/changed.ts', target: { area: 'worktree' } }])
+    // It left the dock in the same click: no diff body, and the strip is back on
+    // the history rather than on a hole.
+    assert.equal(container.querySelector(`.${cls.diffView}`), null)
+    assert.equal(must(container, '[data-bottom]').getAttribute('data-tab'), 'history')
+  })
+
+  it('reopens in the dock on a later click, the dock being the primary surface', async () => {
+    const opened: OpenFile[] = []
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({}),
+        t,
+        locale: 'en',
+        onOpenDiffTab: (file) => opened.push(file),
+      }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    await click(must(container, `[aria-label="${t('diff.openInTab')}"]`))
+    assert.equal(opened.length, 1)
+
+    // The panel keeps no memory of where the diff went: the Sidebar unmounts this
+    // panel when the new tab takes focus, so a "promoted" flag here would already
+    // be gone. Clicking the row means "show it in the dock".
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(opened.length, 1)
+    assert.equal(container.querySelectorAll(`.${cls.diffView}`).length, 1)
+  })
+
+  it('offers no button when there is nowhere to move the diff', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    assert.equal(container.querySelector(`.${cls.diffView}`) !== null, true)
+    assert.equal(container.querySelector(`[aria-label="${t('diff.openInTab')}"]`), null)
+  })
+})
+
+describe('the diff tab body', () => {
+  /** A tab record carrying just what the body reads. */
+  function tabAt(address: string, onClose: () => void) {
+    return {
+      title: 'changed.ts',
+      visible: true,
+      navigation: { address, params: undefined, revision: 1 },
+      signal: new AbortController().signal,
+      actions: { close: onClose, openResource: () => undefined, openTab: () => undefined },
+    }
+  }
+
+  it('reads the address back and draws the diff it names', async () => {
+    const diffCalls: string[] = []
+    let closed = 0
+    const useTabInfo = () => ({
+      tab: tabAt(diffTabAddress({ path: 'src/changed.ts', target: { area: 'index' } }), () => {
+        closed += 1
+      }),
+      panel: { id: 'p1' },
+      sidebar: { expanded: true, fullscreen: false },
+    })
+    const container = await render(
+      h(GitDiffBody as never, { sessionId: 's1', git: stubGit({ diffCalls }), t, useTabInfo }),
+    )
+    await flush()
+
+    assert.deepEqual(diffCalls, ['index:src/changed.ts@3'])
+    assert.equal(must(container, `.${cls.diffView}`).getAttribute('data-diff-area'), 'index')
+    // A diff already in a tab offers no way to open it in one.
+    assert.equal(container.querySelector(`[aria-label="${t('diff.openInTab')}"]`), null)
+
+    // Escape closes the tab itself, which is the strip's own close.
+    await act(async () => {
+      document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+    assert.equal(closed, 1)
+  })
+
+  it('says so when the address carries nothing readable', async () => {
+    const useTabInfo = () => ({
+      tab: tabAt('dsh-resource://git-diff/nonsense', () => undefined),
+      panel: { id: 'p1' },
+      sidebar: { expanded: true, fullscreen: false },
+    })
+    const container = await render(
+      h(GitDiffBody as never, { sessionId: 's1', git: stubGit({}), t, useTabInfo }),
+    )
+    await flush()
+    assert.equal(
+      must(container, `.${cls.diffState}`).textContent,
+      'This tab has no diff to show.',
+    )
   })
 })
 

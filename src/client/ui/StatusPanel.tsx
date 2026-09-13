@@ -131,6 +131,15 @@ export interface StatusPanelProps {
   readonly locale: string
   /** Aborted when the tab closes; cancels in-flight reads. */
   readonly signal?: AbortSignal
+  /**
+   * Move one open diff into a right-side tab of its own.
+   *
+   * Supplied by the DSH adapter, which is the only side that knows what a
+   * resource address is. Omitted in a bare render (and in the jsdom tests),
+   * which is also what keeps the diff header's promote button out of the markup:
+   * with nowhere to move a diff to, there is no operation to offer.
+   */
+  readonly onOpenDiffTab?: (file: OpenFile) => void
 }
 
 /** One reading of the repository, tagged with the session it describes. */
@@ -675,7 +684,14 @@ function BranchRail({
  * The git panel.
  * @param props - Session, git client, copy, and the tab's abort signal.
  */
-export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelProps): ReactNode {
+export function StatusPanel({
+  sessionId,
+  git,
+  t,
+  locale,
+  signal,
+  onOpenDiffTab,
+}: StatusPanelProps): ReactNode {
   // One bus per panel: the panes below subscribe to it instead of being handed a
   // generation number through the tree, and a second session's panel is a second
   // repository with its own changes.
@@ -1025,6 +1041,10 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   // history, and the file it names is usually not in the change list at all — so
   // this rule would close it the instant it opened. Its staleness is the host's
   // to answer, the same way an expired undo row's is.
+  //
+  // A promoted diff is out of reach here: it lives on the right, in a tab this
+  // panel does not own and cannot close. Its pane re-reads itself and reports the
+  // empty comparison on its own.
   useEffect(() => {
     if (busy || snapshot === null || snapshot.kind !== 'ready') return
     // Listed in ANY group, not just the one it was opened from: staging a file
@@ -1658,6 +1678,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
    * own, but a row activated by Enter never sends one — and the two layers the
    * rail opens have the same hole — so without this the card would sit over the
    * diff it had just opened.
+   *
+   * The dock is the change list's own reading surface, so this always opens (or
+   * selects) a dock tab even for a file the user once promoted: the right-side
+   * tab is a separate surface the user manages, and a file open in both is the
+   * same thing as a file open in two editor splits.
    * @param file - The path and the comparison to read it with.
    */
   const showDiff = (file: OpenFile): void => {
@@ -1712,6 +1737,26 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         ? { kind: 'history' }
         : { kind: 'file', key: openFileKey(neighbour) }
     })
+  }
+
+  /**
+   * Move one open diff into a right-side tab of its own, closing it here.
+   *
+   * The move is one intent, not an open followed by a close: the dock tab goes
+   * away in the same click that puts the reading on the right, which is what
+   * "open it in a tab" means when the diff is already on screen. Nothing is
+   * remembered about where it went — the panel cannot see the Sidebar's tabs, and
+   * the Sidebar unmounts this panel the moment the new tab takes focus, so any
+   * memory here would be gone by the time it was next asked for. A later click on
+   * the row opens it in the dock again, which is the dock being the primary
+   * surface.
+   * @param key - Which open diff to promote.
+   */
+  const promoteFile = (key: string): void => {
+    const file = openFiles.find((entry) => openFileKey(entry) === key)
+    if (file === undefined || onOpenDiffTab === undefined) return
+    onOpenDiffTab(file)
+    closeFile(key)
   }
 
   /**
@@ -2519,6 +2564,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
           tab={bottomTab}
           onTab={setBottomTab}
           onCloseFile={closeFile}
+          onPromoteDiff={onOpenDiffTab === undefined ? undefined : promoteFile}
           onCommitMenu={openCommitMenu}
           onOpenCommitFile={openCommitFile}
         />

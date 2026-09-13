@@ -12,11 +12,11 @@
 
 ## 现状
 
-- `DiffView.tsx:481-502`：两枚 `diffSegButton` 装在 `diffSeg` 托盘里，`aria-pressed`
+- `DiffView.tsx:638-659`：两枚 `diffSegButton` 装在 `diffSeg` 托盘里，`aria-pressed`
   标出当前布局；icon 分别是 `ArrowDownGlyph`（inline）与 `SplitGlyph`（split）。
-  选中态上色靠 `.diffSegButton[aria-pressed='true']`（`styles.ts:2281`）。
+  选中态上色靠 `.diffSegButton[aria-pressed='true']`（`styles.ts:2295`）。
 - 持久化已经有了：`readDiffLayout` / `writeDiffLayout` + `DIFF_LAYOUT_KEY`
-  （`DiffView.tsx:60-97`），写失败被刻意吞掉。
+  （`DiffView.tsx:62-99`），写失败被刻意吞掉。
 
 ## 做法
 
@@ -28,8 +28,8 @@
 3. 按钮归哪个容器**已定**（A-9 交付）：视图操作区**不是**托盘，只是一层带标签的分组
    （`ViewOps`），所以这一枚仍是自己的控件，形状由本条自己定。托盘 `diffSeg` 随两枚段的
    删除一起退休；`diff.layout` 这条 group 文案只服务那个托盘，一并处理。
-4. 测试要改：`test/client-panel.test.ts:3356`（取两枚按钮、点第二枚切左右）、`:3399`
-   （重开后仍在左右）、`:3455` 三处都写着「两枚」的假设，改成单按钮的点按 +
+4. 测试要改：`test/client-panel.test.ts:3498`（取两枚按钮、点第二枚切左右）、`:3541`
+   （重开后仍在左右）、`:3610` 三处都写着「两枚」的假设，改成单按钮的点按 +
    icon / `aria-label` 断言。
 
 ## 注意

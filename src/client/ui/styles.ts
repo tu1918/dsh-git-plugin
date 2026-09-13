@@ -203,7 +203,11 @@ export const cls = {
   diffHunkRange: `${P}-diff-hunk-range`,
   diffHunkHeading: `${P}-diff-hunk-heading`,
   diffSplit: `${P}-diff-split`,
+  diffHalves: `${P}-diff-halves`,
   diffSide: `${P}-diff-side`,
+  diffHBar: `${P}-diff-hbar`,
+  diffVBar: `${P}-diff-vbar`,
+  diffBarThumb: `${P}-diff-bar-thumb`,
   diffLine: `${P}-diff-line`,
   diffCell: `${P}-diff-cell`,
   diffGutter: `${P}-diff-gutter`,
@@ -2164,11 +2168,21 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* The pane fills the dock, and the hunks inside it do the scrolling, so the path
-   header and the layout buttons stay put while a long diff moves under them. */
+/* The pane fills whoever hands it a box — the dock, and a right-side tab — and
+   the hunks inside it do the scrolling, so the path header and the layout buttons
+   stay put while a long diff moves under them.
+
+   The height is what makes the second host work. A right-side tab body is a
+   scroll container of its own (the dock kit's pane body is 'overflow: auto' with
+   a definite height), and a pane without a height is as tall as its content: the
+   tab body then scrolls the whole tree, and each inner scroller's horizontal bar
+   rides the end of the CONTENT instead of the foot of the tab — reported from the
+   running panel ("横向滚动条应该放在底下，现在在中间"). Given the height, the
+   hunks (or each split half) keep the bars, and they sit at the bottom. */
 .${cls.diffView} {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   flex: auto;
 }
@@ -2231,9 +2245,10 @@ export const css = `
 .${cls.diffRemoved} { color: var(--dsw-alias-state-error-primary); }
 
 /* The diff's VIEW operations — the controls that change how the diff is read
-   rather than what it says (the layout pair today, the reload, and the
-   auto-wrap switch that is planned). They sit together at the header's right
-   end, told apart from the path and the counts by the hairline on their left:
+   rather than what it says (the layout pair, the promote-to-tab control and the
+   reload today; the auto-wrap switch that is planned). They sit together at the
+   header's right end, told apart from the path and the counts by the hairline on
+   their left:
    the sidebar is too narrow for a visible group title, so the label lives on
    the group itself. The data-op-group attribute names the class of operation,
    and the between-line row and the per-line tail carry it too — three anchors,
@@ -2313,8 +2328,16 @@ export const css = `
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
+/* A hunk is at least as wide as its widest line, so the header band above it
+   spans the code too. Without this the band — and the gap between hunks, which
+   is where a between-lines action will sit — stops at the scroller's content box
+   and only covers the left part of a row that has been scrolled sideways, which
+   is what a narrow right-side column shows constantly ("行间操作的区域没有全覆盖，
+   只覆盖了左侧的部分"). The header's own heading still ellipsizes (see the
+   .diffHunkHead rules): the width comes from the lines, never from the heading. */
 .${cls.diffHunk} {
   margin: 4px 0 6px;
+  min-width: min-content;
 }
 
 .${cls.diffHunkHead} {
@@ -2357,7 +2380,8 @@ export const css = `
   min-height: 18px;
 }
 
-/* The side-by-side split: two FIXED halves, each its own scroller.
+/* The side-by-side split: two FIXED halves, each its own scroller, and ONE pair
+   of scrollbars for both.
 
    Fixed, because a long line must not move the halves apart (the min-content
    minimum this used to have grew the tracks to fit the longest line and pushed
@@ -2366,6 +2390,13 @@ export const css = `
    half scrolls on its own and the two are kept in step from the component, which
    is what VS Code's side-by-side diff does.
 
+   Two independent scrollers cannot share a native scrollbar, and in a narrow
+   right-side column that showed as four bars — one horizontal and one vertical
+   per half — with the reader having to guess which one moved both. So the halves
+   hide their natives (see the .diffSide rules) and this grid draws one bar per axis
+   instead: the vertical one down the right edge, the horizontal one across the
+   bottom. SplitHunks measures the halves and drives both from either bar.
+
    The gap is a LANE, not just breathing room: it sits between the two scrollers,
    so nothing a half scrolls can push it around — it is what keeps a long line in
    one half from crowding the other, and the hairline on the right half is
@@ -2373,9 +2404,22 @@ export const css = `
    looks: the halves are two independent scrollers with nothing per-row between
    them, so a line's own action goes in that line's tail (below). */
 .${cls.diffSplit} {
+  display: grid;
+  /* The halves, then the vertical bar's own column; then a row for the
+     horizontal bar. A bar with nothing to scroll is not rendered, and "auto"
+     collapses its track to zero. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  flex: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.${cls.diffHalves} {
   display: flex;
   gap: 16px;
-  flex: auto;
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
 }
@@ -2385,8 +2429,47 @@ export const css = `
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+  /* The split's own bars are the only ones on screen. */
+  scrollbar-width: none;
+}
+
+.${cls.diffHalves} .${cls.diffSide}::-webkit-scrollbar {
+  display: none;
+}
+
+/* The shared bars. A track is invisible (the thumb is the whole control), the
+   thickness is what a native thin scrollbar takes, and "touch-action: none" keeps
+   a drag on it from also panning the pane on a touch screen. */
+.${cls.diffVBar} {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  width: 10px;
+  touch-action: none;
+}
+
+.${cls.diffHBar} {
+  position: relative;
+  grid-column: 1 / span 2;
+  grid-row: 2;
+  height: 10px;
+  touch-action: none;
+}
+
+.${cls.diffBarThumb} {
+  position: absolute;
+  border-radius: 5px;
+  background: var(--dsw-alias-scrollbar-bg-l1);
+}
+
+.${cls.diffHBar} .${cls.diffBarThumb} {
+  top: 2px;
+  height: 6px;
+}
+
+.${cls.diffVBar} .${cls.diffBarThumb} {
+  left: 2px;
+  width: 6px;
 }
 
 /* The divider itself, in the same hairline the commit detail's column uses for
@@ -2530,7 +2613,6 @@ export const css = `
  */
 .${cls.body},
 .${cls.diffHunks},
-.${cls.diffSide},
 .${cls.bottomScroll} {
   scrollbar-width: thin;
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
@@ -2538,7 +2620,6 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar,
 .${cls.diffHunks}::-webkit-scrollbar,
-.${cls.diffSide}::-webkit-scrollbar,
 .${cls.bottomScroll}::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -2546,7 +2627,6 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar-thumb,
 .${cls.diffHunks}::-webkit-scrollbar-thumb,
-.${cls.diffSide}::-webkit-scrollbar-thumb,
 .${cls.bottomScroll}::-webkit-scrollbar-thumb {
   border-radius: 5px;
   background: var(--dsw-alias-scrollbar-bg-l1);
@@ -2554,7 +2634,6 @@ export const css = `
 
 .${cls.body}::-webkit-scrollbar-track,
 .${cls.diffHunks}::-webkit-scrollbar-track,
-.${cls.diffSide}::-webkit-scrollbar-track,
 .${cls.bottomScroll}::-webkit-scrollbar-track {
   background: transparent;
 }

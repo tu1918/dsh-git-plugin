@@ -151,6 +151,13 @@ export interface BottomPaneProps {
    */
   readonly onCloseFile: (key: string) => void
   /**
+   * Move one open diff into a right-side tab of its own.
+   *
+   * Omitted when there is nowhere to move it to, which is also what hides the
+   * diff header's button: no destination, no operation.
+   */
+  readonly onPromoteDiff?: (key: string) => void
+  /**
    * Open a commit row's menu (§9's commit menu), owned by the panel above: the
    * armed confirmation and the action feedback both live there. `canUndo` says
    * whether the row is the newest, which is the only one FR-3.8 may undo.
@@ -182,6 +189,7 @@ export function BottomPane({
   tab,
   onTab,
   onCloseFile,
+  onPromoteDiff,
   onCommitMenu,
   onOpenCommitFile,
 }: BottomPaneProps): ReactNode {
@@ -362,6 +370,9 @@ export function BottomPane({
                   // once, which is not what "close this one" means.
                   active={on}
                   onClose={() => onCloseFile(key)}
+                  onOpenInTab={
+                    onPromoteDiff === undefined ? undefined : () => onPromoteDiff(key)
+                  }
                 />
               </div>
             )

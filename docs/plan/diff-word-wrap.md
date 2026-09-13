@@ -11,13 +11,14 @@
 
 ## 现状
 
-- `.diffText` 是 `white-space: pre`（`styles.ts:2460-2467`），长行不折。
-- 上下对照靠 `.diffLine { min-width: min-content }`（`styles.ts:2407`）+ 容器横向滚动看全。
-- 左右对照是**两个各自滚动的半栏**（`SplitHunks`，`DiffView.tsx:265-325`），同步
-  `scrollTop` 与 `scrollLeft`（`:277-283`）。配对的两格靠内容自然撑高
-  （`.diffCell` 的 `min-height: 18px`，`styles.ts:2409-2418` 的注释写明"两格必须一样高，
+- `.diffText` 是 `white-space: pre`（`styles.ts:2542-2549`），长行不折。
+- 上下对照靠 `.diffLine { min-width: min-content }`（`styles.ts:2489`）+ 容器横向滚动看全。
+- 左右对照是**两个各自滚动的半栏**（`SplitHunks`，`DiffView.tsx:270-477`），同步
+  `scrollTop` 与 `scrollLeft`（`:367-373`；两半的原生滚动条已隐藏，由 grid 里那对共享条驱动）。
+  配对的两格靠内容自然撑高
+  （`.diffCell` 的 `min-height: 18px`，`styles.ts:2491-2500` 的注释写明"两格必须一样高，
   否则读下去两半会错位"）。
-- 布局偏好的持久化范式已存在（`DIFF_LAYOUT_KEY`，`DiffView.tsx:60-97`）。
+- 布局偏好的持久化范式已存在（`DIFF_LAYOUT_KEY`，`DiffView.tsx:62-99`）。
 - 同 profile 的 `dsh-better-sidebar` **没有**这个开关：它的 diff 恒定 `pre-wrap`
   （`src/client/diff/diff.module.css:27`），没有可抄的开关实现。
 
@@ -28,7 +29,7 @@
 > 左右布局那两个滚动容器及其同步逻辑一行都不用改。
 
 1. **状态**：新增 `DIFF_WRAP_KEY = 'dsh-git-panel/diff-wrap'` 与一对带守卫的读写函数，
-   形状照抄 `readDiffLayout` / `writeDiffLayout`（`DiffView.tsx:64-87`）。
+   形状照抄 `readDiffLayout` / `writeDiffLayout`（`DiffView.tsx:62-99`）。
    默认**关闭**。状态放在 `DiffPane`（像 layout 那样），`DiffView` 保持纯渲染。
 2. **只在上下对照生效**：折行的判定是 `layout === 'inline' && wrap`，两者都成立时
    diff 区域才挂 `data-wrap='true'`；该属性下 `.diffText` 换成
@@ -44,8 +45,9 @@
 
 ## 测试
 
-- `test/client-panel.test.ts:902` / `:908` 钉的是 `diffSplit` 的 `display: flex` 与
-  `gap: 16px`——**选 c 后这些断言不用动**（左右布局结构没变），只需新增：
+- `test/client-panel.test.ts:937` / `:938` 钉的是 `.diffHalves` 的 `display: flex` 与
+  `gap: 16px`（共享滚动条那次改动把它们从 `.diffSplit` 挪到了 `.diffHalves` 上）——
+  A-11 **一行都不用动它们**（折行只碰上下对照），只需新增：
   上下对照下打开开关 → `data-wrap='true'` 且 `pre-wrap` 生效；切到左右对照 →
   按钮 `disabled`、不再折行；重开后开关状态还在。
 
