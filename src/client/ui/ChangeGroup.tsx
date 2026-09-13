@@ -660,10 +660,35 @@ export function Group({
         {(batch !== undefined && (entries.length > 0 || emptyNote !== undefined)) ||
         danger !== undefined ? (
           <span className={cls.groupActions}>
+            {danger !== undefined && (
+              // The selection's discard is the one irreversible bulk action, and it
+              // is drawn on the LEFT and in the quiet ghost ink: it used to sit to
+              // the right of the bulk action in the danger colour, and the product
+              // owner reported reaching for it out of habit and discarding work by
+              // mistake — a destructive control must not be the one the eye lands on
+              // first. It still arms rather than fires, and only the armed state (the
+              // second click, §4.3) takes the danger colour and says so in words.
+              <button
+                type="button"
+                className={danger.armed ? cls.danger : cls.ghost}
+                data-armed={String(danger.armed)}
+                disabled={busy}
+                onClick={danger.armed ? danger.onFire : danger.onArm}
+              >
+                {!danger.armed && <DiscardGlyph size={13} />}
+                {danger.armed
+                  ? t('action.discardSelectedArmed', { count: danger.count })
+                  : t('action.discardSelected', { count: danger.count })}
+              </button>
+            )}
             {batch !== undefined && (entries.length > 0 || emptyNote !== undefined) && (
               <button
                 type="button"
                 className={cls.ghost}
+                // The state the eye should land on: with rows checked this button is
+                // the primary action, and the stylesheet fills it with the panel's
+                // own primary button colour (`.groupActions .ghost[data-selected]`).
+                data-selected={String(batch.selection !== undefined)}
                 // A group with no rows has nothing to move, so the bulk action is
                 // unavailable rather than a round trip that comes back as a refused
                 // request. The resident groups are why this matters in practice:
@@ -677,6 +702,9 @@ export function Group({
                 }
                 onClick={batch.selection !== undefined ? batch.selection.run : batch.run}
               >
+                {/* The glyph says which way the rows move before the label is read:
+                    + is stage (and marking a conflict resolved), − is unstage. */}
+                {batch.kind === 'stage' ? <PlusGlyph size={13} /> : <MinusGlyph size={13} />}
                 {batch.selection !== undefined
                   ? batch.kind === 'stage'
                     ? t('action.stageSelected', { count: batch.selection.count })
@@ -684,23 +712,6 @@ export function Group({
                   : batch.kind === 'stage'
                     ? t('action.stageAll')
                     : t('action.unstageAll')}
-              </button>
-            )}
-            {danger !== undefined && (
-              // The selection's discard is the one irreversible bulk action, so it
-              // is a word button in the danger colour and arms instead of firing:
-              // the first click renames it into its own confirmation (§4.3), and
-              // only the second discards anything.
-              <button
-                type="button"
-                className={cls.danger}
-                data-armed={String(danger.armed)}
-                disabled={busy}
-                onClick={danger.armed ? danger.onFire : danger.onArm}
-              >
-                {danger.armed
-                  ? t('action.discardSelectedArmed', { count: danger.count })
-                  : t('action.discardSelected', { count: danger.count })}
               </button>
             )}
           </span>

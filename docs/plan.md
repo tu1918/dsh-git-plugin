@@ -584,6 +584,22 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | `locales.ts` | +9 键（中英）：`action.stageSelected` / `action.unstageSelected` / `action.discardSelected` / `action.discardSelectedArmed` / `select.check` / `select.uncheck` / `select.checkDir` / `select.uncheckDir` / `discard.doneSelected` |
 | 测试 | +10 项（365 总计）：`filesUnder` 3 项（嵌套顺序、compacted 链、多子目录）；客户端 7 项（勾两个行 → 头部「暂存选中 (2)」→ 只发这两个路径；无选中时头部仍是「全部暂存」；已暂存组的取消暂存选中；树模式目录框全选/半选、头部计数、点框不开 diff；丢弃选中先武装后执行且已暂存组无此按钮；行消失后勾选被修剪；冲突组选中即标记解决；切会话清空选择）。既有树测试的两处 `must(..., 'button')` 改为指向 `dirToggle`（目录行第一个按钮现在是复选框），对齐断言从「caret 与分组 caret 同列」更新为「复选框占据前导列」 |
 
+### 验收期改动：批量动作左右换位与配色（2026-09-13，产品方提出）
+
+产品方原话：「丢弃选中在右侧，暂存选中在左侧，且丢弃选中红色高亮，用户容易惯性误操作」，
+要求改成「暂存选中在右侧，蓝色高亮显示，丢弃选中在左侧，保持灰色，并用 icon 提示两个操作」。
+属实，而且踩的正是 §4.3 自己那条规矩的反面：红色在这种布局里不是**警告**而是**最显眼的东西**，
+紧挨着另一枚同形状的文字按钮，养成肌肉记忆后第一击就落在它身上——而它第一击只武装、
+第二击才丢弃，误伤发生在第二击。改法是把「用户想按的那个」做成显眼的，「不可恢复的那个」
+回到安静墨色，并让颜色只在**武装后**出现。
+
+| 落点 | 内容 |
+|---|---|
+| `ui/ChangeGroup.tsx` | 分组头两个动作**换位**：丢弃在前（左）、批量在后（右）。丢弃按钮静止态改用 `cls.ghost` + 既有 `data-armed="false"`，并加 `DiscardGlyph`；**武装后**才换成 `cls.danger`（红框红底）且只留文字——§4.3 的「第二击必须看起来是另一次点击」因此完全落在**状态**上，与位置和颜色无关。批量按钮加 `data-selected`（= 是否有选中）与 `+` / `−` 字形（`+` 也是冲突行「标记已解决」的同一个记号）。两枚按钮的 `title` / 文案 / 点击语义一字未改 |
+| `styles.ts` | `.groupActions > .ghost` 变 `inline-flex`（图标 + 文字一条线、`gap: 4px`）——武装后的丢弃只留文字，刻意**不**进这条规则，它要继续是普通 inline 盒；`.groupActions .ghost[data-selected='true']` 取 `--dsw-alias-button-primary-fill`（**与提交按钮同一个蓝**，不自己发明颜色），hover / disabled 走同族的 `-hover` / `-dimmed`。**全局 `.ghost` / `.danger` 一行未改**：行内武装按钮的省略号（`.rowActions .danger` 的 `text-overflow`）依赖它是普通 inline 盒 |
+| 测试 | 头部两个按钮的寻址从「第一个 button」改成按状态点名（批量 = `[data-selected]`，丢弃 = `[data-armed]`）——两个按钮同处一个 span，位置寻址在换位后本来就会指错；丢弃那条测试补了顺序、静止态墨色与两枚字形断言；样式表 +1 项（批量的蓝取自 `button-primary-fill`、hover 同族、两枚按钮共用一条 `inline-flex` 规则）。合计 568 |
+| 已知边界 | 两侧仍是文字按钮（§4.3 要求不可恢复的动作说人话，D19 要求它常显），加上字形后每枚约宽 17px；**窄侧栏 + 多选**这一态本来就紧，现在更紧——真机观感需要产品方验收（§10.4 的浏览器目视验收仍未做） |
+
 ### 顺序 4 交付：贮藏 stash（2026-09-12，已完成）
 
 FR-6.2 的四个动作（存 / 列表 / 应用 / 删除）加 D20 欠下的那条捷径，一起交付。

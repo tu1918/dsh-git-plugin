@@ -798,6 +798,42 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('fills the group’s batch action once rows are checked, and leaves the discard grey', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // §4.3 colours a destructive control by ARMING it, not by where it sits. The
+    // batch action is the one the eye should land on, and it takes the panel's own
+    // primary-button fill (the blue the commit button wears) only while a selection
+    // makes it the action the user means; the discard beside it keeps the ghost ink
+    // until its second click. jsdom cannot resolve `var()`, so this reads the rule.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.groupActions} \\.${cls.ghost}\\[data-selected='true'\\]\\s*\\{[^}]*--dsw-alias-button-primary-fill`,
+        'u',
+      ),
+    )
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.groupActions} \\.${cls.ghost}\\[data-selected='true'\\]:hover:not\\(:disabled\\)\\s*\\{[^}]*--dsw-alias-button-primary-hover`,
+        'u',
+      ),
+    )
+    // The glyph rides on the ghost button's own flex line, so an icon and its word
+    // cannot drift apart; the armed discard stays a plain inline box.
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.groupActions} > \\.${cls.ghost}\\s*\\{[^}]*display:\\s*inline-flex`, 'u'),
+    )
+    assert.doesNotMatch(
+      sheet,
+      new RegExp(`\\.${cls.groupActions} > \\.${cls.danger}\\s*\\{`, 'u'),
+    )
+  })
+
   it('ellipsizes a file name too long for its tab or its diff header', () => {
     installStyles(document)
     const sheet =
@@ -2131,11 +2167,17 @@ describe('selecting rows for batch actions', () => {
     return must<HTMLButtonElement>(row, `.${cls.selectBox}`)
   }
 
-  /** The group header's bulk button (the first button in the actions span). */
+  /**
+   * The group header's bulk button.
+   *
+   * Addressed by its own `data-selected` state rather than by being the first
+   * button: with rows checked the header holds two buttons, and the discard is
+   * the one drawn first.
+   */
   function bulkButton(container: HTMLElement, area: string): HTMLButtonElement {
     return must<HTMLButtonElement>(
       must(container, `[data-group="${area}"] .${cls.groupActions}`),
-      'button',
+      '[data-selected]',
     )
   }
 
@@ -2299,10 +2341,20 @@ describe('selecting rows for batch actions', () => {
     await click(boxOf(rows[0] as Element))
     await click(boxOf(rows[1] as Element))
 
-    const danger = must<HTMLButtonElement>(
-      must(group, `.${cls.groupActions}`),
-      `.${cls.danger}`,
-    )
+    // The product owner's report (2026-09-13): the red discard sat to the RIGHT
+    // of the bulk action, and it was being hit out of habit. So the destructive
+    // control now comes first, and it wears the quiet ghost ink until it arms —
+    // the loud one is the action the user meant to take.
+    const head = must(group, `.${cls.groupActions}`)
+    const [first, second] = [...head.querySelectorAll('button')]
+    assert.ok(first && second, 'a checked working-tree group offers both actions')
+    assert.equal(first.getAttribute('data-armed'), 'false', 'the discard is drawn first')
+    assert.ok(first.className.includes(cls.ghost), 'and it is grey at rest')
+    assert.ok(first.querySelector('svg') !== null, 'with a glyph to name it')
+    assert.equal(second.getAttribute('data-selected'), 'true', 'the bulk action follows')
+    assert.ok(second.querySelector('svg') !== null, 'and carries its own glyph')
+
+    const danger = must<HTMLButtonElement>(head, `[data-armed]`)
     assert.equal(danger.textContent, 'Discard selected (2)')
     // The first click arms rather than fires (§4.3)...
     await click(danger)

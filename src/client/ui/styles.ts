@@ -1101,6 +1101,39 @@ export const css = `
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The header's actions are a glyph and a word: the pair is told apart by the icon
+   first (+ moves a change into the index, the hooked arrow takes it back out) and
+   by the colours second. The QUIET half of the pair is the ghost button, so this
+   is where the glyph needs a flex line to sit on; the armed discard is words only
+   (a glyph beside a confirmation sentence is noise) and must stay an ordinary
+   inline box — the row's armed discard relies on that for its ellipsis. */
+.${cls.groupActions} > .${cls.ghost} {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The batch action with rows checked: this click is the one the user means to
+   make, so it takes the panel's own primary-button fill — the blue the commit
+   button already wears — while the discard beside it stays grey. The product
+   owner asked for exactly this split (2026-09-13): a red discard on the right was
+   being hit out of habit, and the fix is to make the non-destructive action the
+   loud one and let §4.3's arming be what colours the destructive one. */
+.${cls.groupActions} .${cls.ghost}[data-selected='true'] {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.${cls.groupActions} .${cls.ghost}[data-selected='true']:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.${cls.groupActions} .${cls.ghost}[data-selected='true']:disabled {
+  background: var(--dsw-alias-button-primary-dimmed);
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
 /* The empty state of a resident group. Indented to the rows' text column — 12px
    of row padding, the 14px checkbox, the 8px gap, the 14px file glyph, the 8px
    gap again = 56px — so it reads as "this group has no rows" rather than as a
