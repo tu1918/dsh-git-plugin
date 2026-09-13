@@ -305,10 +305,18 @@ export const css = `
 }
 
 /* Hover and the keyboard's active row are the same state, and they share one
-   rule: two highlights that can disagree would make Enter's target a guess. */
+   rule: two highlights that can disagree would make Enter's target a guess.
+ *
+ * The accent wash, not the plain hover alias. The plain one is #2631480f — 5.9%
+ * over the surface in the light theme, 7.8% in the dark one — and on a raised card
+ * that is a fill nobody notices; reported from the running panel as the entries
+ * having no hover at all. The accent alias is the same hue at 14% / 24%, which is
+ * a highlight you can see while the pointer is still moving. The row's ink does
+ * not change: on a card about to be dismissed by a click, the fill is the whole
+ * signal, and the whole row is the target. */
 .${cls.toolbarItem}:hover:not(:disabled),
 .${cls.toolbarItem}[data-active='true']:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--dsw-alias-interactive-bg-hover-accent);
 }
 
 /* Nothing here is painted as dangerous. §4.3's warning is the two clicks and the

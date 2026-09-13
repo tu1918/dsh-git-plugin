@@ -745,11 +745,13 @@ describe('the panel stylesheet', () => {
         ?.textContent ?? ''
     // Hover and the arrow keys' active row share ONE rule on purpose: a menu whose
     // two highlights could disagree about what Enter will run would be lying about
-    // its own next click.
+    // its own next click. The fill is the accent wash — the plain hover alias is
+    // 5.9% in the light theme, which on a raised card is no hover at all (reported
+    // from the running panel).
     assert.match(
       sheet,
       new RegExp(
-        `\\.${cls.toolbarItem}:hover:not\\(:disabled\\),\\s*\\.${cls.toolbarItem}\\[data-active='true'\\]:not\\(:disabled\\)\\s*\\{[^}]*--dsw-alias-interactive-bg-hover`,
+        `\\.${cls.toolbarItem}:hover:not\\(:disabled\\),\\s*\\.${cls.toolbarItem}\\[data-active='true'\\]:not\\(:disabled\\)\\s*\\{[^}]*--dsw-alias-interactive-bg-hover-accent`,
         'u',
       ),
     )
