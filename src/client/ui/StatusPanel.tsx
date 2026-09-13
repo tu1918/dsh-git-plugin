@@ -24,7 +24,7 @@ import type { ReactNode, Ref } from 'react'
 
 import { commitScopeOf } from '../../core/commit-scope.ts'
 import { lineCount, repoAbsolutePath } from '../../core/format.ts'
-import { statusSignature } from '../../core/status-signature.ts'
+import { readingSignature } from '../../core/status-signature.ts'
 import type { GitChangeKind, GitPanelError, GitRemoteClient, Result } from '../../core/ports.ts'
 import type {
   BranchInfo,
@@ -329,6 +329,15 @@ function useRepoSnapshot(
   const published = useRef<string | null>(null)
   /** Whether any reading has been published yet: the first one is not a change. */
   const shown = useRef(false)
+  /**
+   * The branch listing of the last reading.
+   *
+   * Kept so a read whose branch listing failed reuses it instead of publishing
+   * an empty list — the same "a failed read never replaces a reading that
+   * worked" rule the status half follows above. It also keeps the fingerprint
+   * stable across such a failure, so the picker does not empty and refill.
+   */
+  const lastBranches = useRef<readonly BranchRef[]>([])
   /** The signal every read of this mount shares; the effects own its lifetime. */
   const [controller] = useState(() => new AbortController())
 
@@ -340,6 +349,7 @@ function useRepoSnapshot(
   useEffect(() => {
     published.current = null
     shown.current = false
+    lastBranches.current = []
   }, [sessionId, repoEpoch])
 
   useEffect(() => {
@@ -368,18 +378,22 @@ function useRepoSnapshot(
         if (!shown.current) setSnapshot({ sessionId, kind: 'failed', error: status.error })
         return
       }
-      const fingerprint = statusSignature(status.value)
+      // A branch listing that failed is not worth failing the panel over — the
+      // change lists are the panel's reason to exist — and it must not erase the
+      // listing that worked: the picker would empty out on a transient failure.
+      // The last good one stands in, which also keeps the fingerprint unchanged.
+      const localBranches = branches.ok ? branches.value : lastBranches.current
+      const fingerprint = readingSignature(status.value, localBranches)
       if (fingerprint === published.current) return
       const first = !shown.current
       published.current = fingerprint
       shown.current = true
+      lastBranches.current = localBranches
       setSnapshot({
         sessionId,
         kind: 'ready',
         status: status.value,
-        // A branch listing that failed is not worth failing the panel over; the
-        // change lists are the panel's reason to exist.
-        branches: branches.ok ? branches.value : [],
+        branches: localBranches,
       })
       // The first reading is what the panes mount with. Only a later one is a
       // change somebody has to hear about.

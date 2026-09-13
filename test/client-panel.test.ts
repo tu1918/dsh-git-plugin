@@ -269,7 +269,9 @@ function diffFixture(overrides: Partial<FileDiff> = {}): FileDiff {
  */
 function stubGit(options: {
   status?: Result<RepoStatus>
-  branches?: readonly BranchRef[]
+  /** The local branch listing; a function is for the tests whose list changes
+   *  between reads (an array would be the same reference the snapshot holds). */
+  branches?: readonly BranchRef[] | (() => readonly BranchRef[])
   /** Remote-tracking branches the picker lists for reading; none by default. */
   remoteBranches?: readonly RemoteBranchRef[]
   log?: readonly CommitInfo[]
@@ -330,7 +332,13 @@ function stubGit(options: {
 
   return {
     status: () => Promise.resolve(options.status ?? { ok: true, value: statusFixture() }),
-    branches: () => Promise.resolve({ ok: true, value: options.branches ?? branchesFixture() }),
+    branches: () =>
+      Promise.resolve({
+        ok: true,
+        value:
+          (typeof options.branches === 'function' ? options.branches() : options.branches) ??
+          branchesFixture(),
+      }),
     remoteBranches: () => Promise.resolve({ ok: true, value: options.remoteBranches ?? [] }),
     repos: () =>
       Promise.resolve({
@@ -4265,6 +4273,44 @@ describe('the branch picker (FR-4.1–4.3)', () => {
 
     await click(armed)
     assert.deepEqual(calls.entries, ['deleteBranch:feature/x'])
+  })
+
+  it('drops a deleted branch from the list, even though the status is unchanged', async () => {
+    // `list` is what git would answer on the NEXT read; taking the branch out of
+    // it here stands in for git doing so, and the stub copies it per read so the
+    // snapshot the panel already holds is not mutated behind its back. This is
+    // the case the fingerprint used to swallow: deleting a branch that is not
+    // HEAD leaves `git status` byte-for-byte identical, so the re-read was
+    // discarded as "no change" and the deleted row stayed on screen.
+    const list: BranchRef[] = [...twoBranches()]
+    const calls: ActionLog = { entries: [] }
+    const base = stubGit({ branches: () => [...list], calls })
+    const git: GitRemoteClient = {
+      ...base,
+      deleteBranch: (sessionId, name, force, signal) => {
+        const answer = base.deleteBranch(sessionId, name, force, signal)
+        const at = list.findIndex((branch) => branch.name === name)
+        if (at >= 0) list.splice(at, 1)
+        return answer
+      },
+    }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }),
+    )
+    await settle()
+
+    const picker = await openPicker(container)
+    assert.equal(picker.querySelectorAll(`.${cls.branchRow}`).length, 2)
+
+    const row = [...picker.querySelectorAll(`.${cls.branchRow}`)][1]
+    assert.ok(row)
+    await click(must(row, `.${cls.tool}`))
+    await click(must(row, `.${cls.danger}[data-armed="true"]`))
+
+    assert.deepEqual(calls.entries, ['deleteBranch:feature/x'])
+    const rows = [...container.querySelectorAll(`.${cls.branchRow}`)]
+    assert.equal(rows.length, 1)
+    assert.ok(!(rows[0]?.textContent ?? '').includes('feature/x'))
   })
 
   it('draws the row’s delete as a row control: full size, centered, red under the pointer', async () => {
