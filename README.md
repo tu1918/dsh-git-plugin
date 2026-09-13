@@ -5,15 +5,15 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Built to the requirements document, and currently through **M5b order 7**: the
+Built to the requirements document, and currently through **M5b order 9**: the
 foundation, a read-only panel, the commit loop (stage → commit → push), the diff
 view, branch management with the merge state, an AI-written commit message, a
 commit detail — then M5a's discard / undo / stash and M5b's commit-file
-drill-down, copy entries, and the commit graph, alongside fetch, a read-only
-remote-branch list, HTTPS credentials, and multi-repository workspaces. What
-remains: rewriting a commit (drop / squash / reset) and the v1.0 release pass.
-With those, every item of the requirements document's own M5 list — discard,
-stash, the commit graph, undo, multi-repository — has shipped.
+drill-down, copy entries, the commit graph, multi-repository workspaces, and the
+history row's rewriting operations (revert, cherry-pick, reset, squash, drop).
+What remains: the v1.0 release pass. Every item of the requirements document's
+own M5 list — discard, stash, the commit graph, undo, multi-repository — has
+shipped.
 
 ## Docs
 
@@ -58,7 +58,7 @@ stash, the commit graph, undo, multi-repository — has shipped.
 | Branch picker: switch, create (from HEAD or a chosen branch), delete — with the unmerged case asking for a second, forced click | ✅ |
 | That picker as a real dropdown: it floats over the panel (measured from the rail, capped at the room left) instead of pushing the staged drawer, the commit box and the change list down; an outside press or Escape closes it | ✅ |
 | A blocked switch shows git's own multi-line refusal, verbatim | ✅ |
-| Merge state: a bar with "continue" (git's own `MERGE_MSG`) and "abort" (two clicks), driven by `MERGE_HEAD` rather than by the conflict list | ✅ |
+| An interrupted operation's own bar: a merge, a revert, a cherry-pick or a rewrite that stopped on conflicts (or on a pick that became empty) says which one it is and offers the moves that operation really has — continue, abort, and (for a rebase) skip. The state comes from stat-ing the markers in the git directory (`MERGE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD`, `rebase-merge/`), not from the conflict list: once every conflict is staged the list is empty while the operation is still open, and a stopped rebase may have no conflict at all. Continue and skip wait until no unmerged path is left, abort takes two clicks | ✅ |
 | A conflicted row's `+` is labelled as marking it resolved — the same `git add` it always was | ✅ |
 | Commit message written by the deployment's default model from the staged diff, truncated to a budget and said so, landing in the box as editable text | ✅ |
 | A history row IS one real button — both of its lines, so the clickable area is exactly the hover band — and selecting it splits the pane: the entries stay on the left, that commit's information opens on the right (metadata, then its file list with per-file churn and git's own binary answer) | ✅ |
@@ -71,7 +71,8 @@ stash, the commit graph, undo, multi-repository — has shipped.
 | A switch git refuses because the working tree is in the way (FR-4.4) shows git's multi-line refusal and offers "stash, then switch to …": one click stashes (untracked files included, because those are exactly what git sometimes names) and retries the very switch that was blocked | ✅ |
 | Drill into one file of a commit (FR-7.2): every row in a commit's file list is a button that opens that file as the commit changed it, in the same bottom diff tab a change row uses — `git show <hash> -m --first-parent -- <path>`, read against the revision rather than the working tree, so an uncommitted edit to the same file cannot appear in it. The reading follows moved refs only, and it is not swept away when the file is absent from the change list | ✅ |
 | Commit graph (FR-7.1): every history row carries its own swimlane strip — a first parent continues straight down, an extra parent opens a lane, and a line rejoins when the branches meet. The assignment is one pass over all loaded commits, so loading the next page extends the diagram without redrawing it (pagination cannot break the lines); the strip's width is one number shared by every row, so a merge cannot shift the hashes | ✅ |
-| Rewriting a commit (drop / squash / reset), multi-repository scanning, the v1.0 release pass | ⏳ M5b |
+| Rewriting a commit from its row's menu, every entry armed (two clicks, the second one named): **Revert this commit** (a new commit that reverses it — any commit, and history is never rewritten), **Cherry-pick this commit** (apply it to the current branch as a new commit; a pick whose change is already here is cleaned up and refused rather than left as an operation with nothing to do), **Squash into the previous commit** (folds it into its parent, keeping that commit's message), **Drop this commit** (removes it and replays what followed), and **Reset to this commit…**, which opens into soft / mixed / hard — the hard one says it discards uncommitted work. Squash and drop are `git rebase` under the hood, so the panel refuses the cases where that would change more than asked: a merge commit as the target, a target outside this branch, a merge commit anywhere after it (the panel does not linearise a branch on your behalf), a detached HEAD, or an operation already in progress | ✅ |
+| The v1.0 release pass | ⏳ M5b |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -100,7 +101,7 @@ src/core/      pure TypeScript: types, ports, git parsers, argument validation,
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, git state probe (filesystem events with a
                polling fallback), git directory lookup, repository discovery,
-               askpass helper
+               askpass helper, sequence editor for rewrites
   adapter/     the only place the host names DSH (webServer, sessions, logger,
                the credential seam, and the model services
                `llm` + `agentDefaultModel`)
@@ -129,7 +130,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 520 tests && build
+npm run check      # tsc --noEmit && 557 tests && build
 ```
 
 ## Install
@@ -282,10 +283,20 @@ npm test
   and are deliberately NOT in `inject`: a deployment without a model still mounts
   the panel, and only FR-3.5's button answers `no-llm`. `src/host/adapter/llm.ts` is
   the single file that names them.
-- `RepoStatus.merging` comes from stat-ing `MERGE_HEAD` in the git directory (the
-  same `gitDirOf` the watcher uses), not from the conflict group: once every
-  conflict is staged the group is empty while the merge is still open, and that is
-  exactly when "continue the merge" has to appear.
+- `RepoStatus.operation` comes from stat-ing the markers in the git directory
+  (`MERGE_HEAD`, `REVERT_HEAD`, `CHERRY_PICK_HEAD`, `rebase-merge/` — the same
+  `gitDirOf` the watcher uses), not from the conflict group: once every conflict
+  is staged the group is empty while the operation is still open, and a rebase
+  stopped on an empty pick shows no conflict at all. It is an enum rather than a
+  boolean because continue / skip / abort each need to know WHICH operation is
+  running — `merge --abort` is not the way out of a stopped cherry-pick.
+- **No editor may block a git call.** A commit always carries `-m` and a revert
+  `--no-edit`, but a rewrite drives `git rebase -i`: the host writes a static
+  sequence-editor helper into a private temp directory (as it does for the
+  askpass helper), names it in `GIT_SEQUENCE_EDITOR`, passes the intent through
+  the environment, and sets `GIT_EDITOR=true` for calls that could otherwise open
+  a message editor. The variables are cleared when a call does not ask for them,
+  so a launching shell cannot inject an editor either.
 - Unstaging on an **unborn** branch is a different command: `git restore --staged`
   restores from HEAD, and an unborn repository has none. `unstage` probes with
   `rev-parse --verify --quiet HEAD` and falls back to `git rm --cached`.

@@ -148,7 +148,7 @@ function statusFixture(): RepoStatus {
       ],
     },
     truncated: false,
-    merging: false,
+    operation: null,
     changedCount: 4,
   }
 }
@@ -292,6 +292,10 @@ function stubGit(options: {
   selectRepo?: Result<void>
   /** What `undoCommit` answers; a reset of the newest commit by default. */
   undoCommit?: Result<UndoResult>
+  /** What the rewriting operations answer; a silent success by default. */
+  rewrite?: Result<OperationReport>
+  /** What continue / skip / abort answer; a silent success by default. */
+  operation?: Result<OperationReport>
   /** What the stash listing answers; one entry by default (FR-6.2). */
   stashes?: readonly StashEntry[]
   /** What `stashSave` answers, for the refusal path. */
@@ -396,13 +400,17 @@ function stubGit(options: {
       note(`deleteBranch:${name}${force ? ':force' : ''}`)
       return Promise.resolve(options.deleteBranch ?? report)
     },
-    continueMerge: () => {
-      note('continueMerge')
-      return Promise.resolve(report)
+    continueOperation: (_sessionId, kind) => {
+      note(`continueOperation:${kind}`)
+      return Promise.resolve(options.operation ?? report)
     },
-    abortMerge: () => {
-      note('abortMerge')
-      return Promise.resolve(report)
+    skipOperation: (_sessionId, kind) => {
+      note(`skipOperation:${kind}`)
+      return Promise.resolve(options.operation ?? report)
+    },
+    abortOperation: (_sessionId, kind) => {
+      note(`abortOperation:${kind}`)
+      return Promise.resolve(options.operation ?? report)
     },
     generateCommitMessage: (_sessionId, locale) => {
       note(`generate:${locale}`)
@@ -430,6 +438,22 @@ function stubGit(options: {
           value: { mode: 'reset' as const, shortOid: hash.slice(0, 7), subject: 'a commit subject' },
         },
       )
+    },
+    revertCommit: (_sessionId, hash) => {
+      note(`revertCommit:${hash}`)
+      return Promise.resolve(options.rewrite ?? report)
+    },
+    cherryPick: (_sessionId, hash) => {
+      note(`cherryPick:${hash}`)
+      return Promise.resolve(options.rewrite ?? report)
+    },
+    resetTo: (_sessionId, hash, mode) => {
+      note(`resetTo:${mode}:${hash}`)
+      return Promise.resolve(options.rewrite ?? report)
+    },
+    rewriteCommit: (_sessionId, hash, action) => {
+      note(`rewriteCommit:${action}:${hash}`)
+      return Promise.resolve(options.rewrite ?? report)
     },
     stashes: () => {
       note('stashes')
@@ -4181,29 +4205,42 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     // A menu, named for the commit it belongs to.
     assert.equal(menu.getAttribute('role'), 'menu')
     assert.match(menu.getAttribute('aria-label') ?? '', /bbbbbbb/)
-    // The copies first, then — only because this is the newest row — the armed
-    // undo after a hairline.
+    // The copies first, then the rewrites (order 9), then — only because this is
+    // the newest row — the armed undo, each group after a hairline.
     assert.deepEqual(menuLabels(menu), [
       'Copy short hash',
       'Copy full hash',
       'Copy commit message',
+      'Revert this commit',
+      'Cherry-pick this commit',
+      'Squash into the previous commit',
+      'Drop this commit',
+      'Reset to this commit…',
       'Undo this commit',
     ])
-    assert.equal(menu.querySelectorAll('[role="separator"]').length, 1)
-    const undo = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    assert.equal(menu.querySelectorAll('[role="separator"]').length, 2)
+    // A first commit has nothing to fold into, so that one entry cannot run.
+    assert.equal(must<HTMLButtonElement>(menu, '[data-id="squash"]').disabled, true)
+    const undo = must<HTMLElement>(menu, '[data-id="undo"]')
     assert.equal(undo.textContent, 'Undo this commit')
 
     // The older row still has a menu — the copies are FR-3.8's and order 6's two
-    // different questions — but nothing irreversible in it.
+    // different questions, and the rewrites belong to any commit — but nothing
+    // that undoes the newest.
     await keyDown(menu, { key: 'Escape' })
     const olderMenu = await openHistoryMenu(container, 1)
     assert.deepEqual(menuLabels(olderMenu), [
       'Copy short hash',
       'Copy full hash',
       'Copy commit message',
+      'Revert this commit',
+      'Cherry-pick this commit',
+      'Squash into the previous commit',
+      'Drop this commit',
+      'Reset to this commit…',
     ])
-    assert.equal(olderMenu.querySelectorAll('[role="separator"]').length, 0)
-    assert.equal(olderMenu.querySelector('[data-danger="true"]'), null)
+    assert.equal(olderMenu.querySelectorAll('[role="separator"]').length, 1)
+    assert.equal(olderMenu.querySelector('[data-id="undo"]'), null)
   })
 
   it('copies the row’s hash and message to the clipboard (order 6)', async () => {
@@ -4260,7 +4297,7 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
 
     let menu = await openHistoryMenu(container)
     const layer = must<HTMLElement>(container, '[data-popover="true"]')
-    const undoEntry = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    const undoEntry = must<HTMLElement>(menu, '[data-id="undo"]')
     await click(undoEntry)
 
     // §4.3's first click: armed, and the entry itself says what the second click
@@ -4268,7 +4305,7 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     assert.deepEqual(calls.entries, [])
     menu = must<HTMLElement>(container, '[data-menu="true"]')
     assert.equal(must(container, '[data-popover="true"]'), layer, 'the menu never closed')
-    const armed = must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]')
+    const armed = must<HTMLElement>(menu, '[data-id="undo"]')
     assert.match(armed.textContent ?? '', /changes return to the working tree/)
 
     await click(armed)
@@ -4302,8 +4339,8 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     await settle()
 
     const menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
-    const armed = must<HTMLElement>(container, '[role="menuitem"][data-danger="true"]')
+    await click(must(menu, '[data-id="undo"]'))
+    const armed = must<HTMLElement>(container, '[data-id="undo"]')
     // Published history is not rewritten: the confirmation says a NEW commit
     // undoes the old one.
     assert.match(armed.textContent ?? '', /a revert commit is created/)
@@ -4331,10 +4368,7 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     // The copies come first, so the keyboard walks to the last entry — the armed
     // undo — before Enter means undo.
     await keyDown(menu, { key: 'End' })
-    assert.equal(
-      must<HTMLElement>(menu, '[role="menuitem"][data-danger="true"]').dataset.active,
-      'true',
-    )
+    assert.equal(must<HTMLElement>(menu, '[data-id="undo"]').dataset.active, 'true')
 
     await keyDown(menu, { key: 'Enter' })
     assert.deepEqual(calls.entries, [], 'the first activation only arms')
@@ -4363,8 +4397,8 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     await settle()
 
     const menu = await openHistoryMenu(container)
-    await click(must(menu, '[role="menuitem"][data-danger="true"]'))
-    await click(must(container, '[role="menuitem"][data-danger="true"]'))
+    await click(must(menu, '[data-id="undo"]'))
+    await click(must(container, '[data-id="undo"]'))
 
     // The refusal is a reachable state (the history moved under the row), and
     // its sentence is the answer — shown where the operation was (§4.3), with
@@ -4372,6 +4406,144 @@ describe('a commit row’s menu (§9’s commit menu, orders 3 and 6)', () => {
     const box = must(container, '[data-action-error="undo"]')
     assert.match(box.textContent ?? '', /no longer the newest one/)
     assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 1)
+  })
+})
+
+describe('the history-rewriting entries (§10.2 order 9)', () => {
+  /** A commit with a parent, so the fold entry is enabled. */
+  function childFixture(): CommitInfo {
+    return { ...commitFixture(), parents: ['c'.repeat(40)] }
+  }
+
+  it('arms and then runs each rewriting entry, naming the commit in the notice', async () => {
+    const child = childFixture()
+    const cases: readonly {
+      readonly id: string
+      readonly armed: RegExp
+      readonly call: string
+      readonly done: RegExp
+    }[] = [
+      {
+        id: 'revert',
+        armed: /a new commit that reverses it/,
+        call: `revertCommit:${child.oid}`,
+        done: /Created a revert commit undoing/,
+      },
+      {
+        id: 'cherryPick',
+        armed: /applied to the current branch/,
+        call: `cherryPick:${child.oid}`,
+        done: /Picked/,
+      },
+      {
+        id: 'squash',
+        armed: /fold it into the previous commit/,
+        call: `rewriteCommit:squash:${child.oid}`,
+        done: /Folded/,
+      },
+      {
+        id: 'drop',
+        armed: /drop it and rewrite the commits after it/,
+        call: `rewriteCommit:drop:${child.oid}`,
+        done: /Dropped/,
+      },
+    ]
+
+    for (const entry of cases) {
+      const calls: ActionLog = { entries: [] }
+      const container = await render(
+        h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, log: [child] }), t, locale: 'en' }),
+      )
+      await settle()
+
+      let menu = await openHistoryMenu(container)
+      await click(must<HTMLElement>(menu, `[data-id="${entry.id}"]`))
+      assert.deepEqual(calls.entries, [], `${entry.id} must not run on the first click`)
+
+      // §4.3's first click only arms: the menu stays up and the entry becomes
+      // the confirmation.
+      menu = must<HTMLElement>(container, '[data-menu="true"]')
+      const armed = must<HTMLElement>(menu, `[data-id="${entry.id}"]`)
+      assert.match(armed.textContent ?? '', entry.armed)
+      await click(armed)
+
+      assert.deepEqual(calls.entries, [entry.call])
+      assert.equal(container.querySelector('[data-menu="true"]'), null)
+      assert.match(
+        must(container, `[data-action-done="${entry.id}"]`).textContent ?? '',
+        entry.done,
+      )
+      // The commit's own subject is what the notice names, because the row it
+      // came from may be gone from the history.
+      assert.match(must(container, '[data-action-done]').textContent ?? '', /a commit subject/)
+    }
+  })
+
+  it('opens the reset entry into its three modes, and back again', async () => {
+    const child = childFixture()
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls, log: [child] }), t, locale: 'en' }),
+    )
+    await settle()
+
+    let menu = await openHistoryMenu(container)
+    await click(must(menu, '[data-id="resetHere"]'))
+    menu = must<HTMLElement>(container, '[data-menu="true"]')
+    assert.deepEqual(menuLabels(menu), [
+      'Soft reset (changes stay staged)',
+      'Mixed reset (changes return to the working tree)',
+      'Hard reset (discards uncommitted changes)',
+      'Back',
+    ])
+    assert.deepEqual(calls.entries, [], 'opening the modes is not an operation')
+
+    // Back restores the row's own menu.
+    await click(must(menu, '[data-id="resetBack"]'))
+    menu = must<HTMLElement>(container, '[data-menu="true"]')
+    assert.ok(menu.querySelector('[data-id="revert"]'), 'the row menu is back')
+    assert.equal(menu.querySelector('[data-id="resetBack"]'), null)
+
+    // A mode arms like every other irreversible entry, and the hard one says
+    // what it discards before it runs.
+    await click(must(menu, '[data-id="resetHere"]'))
+    menu = must<HTMLElement>(container, '[data-menu="true"]')
+    await click(must(menu, '[data-id="resetHard"]'))
+    assert.deepEqual(calls.entries, [])
+    const armed = must<HTMLElement>(container, '[data-id="resetHard"]')
+    assert.match(armed.textContent ?? '', /cannot be undone/)
+    await click(armed)
+    assert.deepEqual(calls.entries, [`resetTo:hard:${child.oid}`])
+    assert.match(must(container, '[data-action-done="reset"]').textContent ?? '', /Hard-reset to/)
+  })
+
+  it('lands a rewriting refusal beside the list, with the host’s own sentence', async () => {
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          log: [childFixture()],
+          rewrite: {
+            ok: false,
+            error: {
+              code: 'bad-request',
+              message: 'there are merge commits after it, and rewriting them would flatten the branch',
+            },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    let menu = await openHistoryMenu(container)
+    await click(must(menu, '[data-id="drop"]'))
+    await click(must(container, '[data-id="drop"]'))
+
+    const box = must(container, '[data-action-error="drop"]')
+    assert.match(box.textContent ?? '', /would flatten the branch/)
+    assert.equal(container.querySelectorAll(`.${cls.commitRow}`).length, 1, 'the list survives')
   })
 })
 
@@ -4829,19 +5001,19 @@ describe('the conflict row and the merge bar (FR-9.2–9.3)', () => {
     assert.deepEqual(calls.entries, ['stage:both.txt'])
   })
 
-  it('offers the merge bar only while a merge is open, and holds continue until it can work', async () => {
+  it('offers the operation bar only while one is open, and holds continue until it can work', async () => {
     const calls: ActionLog = { entries: [] }
     const container = await render(
       h(StatusPanel, {
         sessionId: 's1',
-        git: stubGit({ status: { ok: true, value: { ...statusFixture(), merging: true } }, calls }),
+        git: stubGit({ status: { ok: true, value: { ...statusFixture(), operation: 'merge' } }, calls }),
         t,
         locale: 'en',
       }),
     )
     await settle()
 
-    const bar = must(container, '[data-merge="true"]')
+    const bar = must(container, '[data-operation="merge"]')
     const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button')]
     const [cont, abort] = buttons
     assert.ok(cont && abort)
@@ -4855,12 +5027,12 @@ describe('the conflict row and the merge bar (FR-9.2–9.3)', () => {
     assert.match(armed.textContent ?? '', /Click again to abandon/)
     assert.deepEqual(calls.entries, [])
     await click(armed)
-    assert.deepEqual(calls.entries, ['abortMerge'])
+    assert.deepEqual(calls.entries, ['abortOperation:merge'])
   })
 
-  it('continues the merge once every conflict is resolved', async () => {
+  it('continues the operation once every conflict is resolved', async () => {
     const calls: ActionLog = { entries: [] }
-    const resolved = { ...withoutConflicts(), merging: true }
+    const resolved = { ...withoutConflicts(), operation: 'merge' as const }
     const container = await render(
       h(StatusPanel, {
         sessionId: 's1',
@@ -4871,11 +5043,69 @@ describe('the conflict row and the merge bar (FR-9.2–9.3)', () => {
     )
     await settle()
 
-    const bar = must(container, '[data-merge="true"]')
+    const bar = must(container, '[data-operation="merge"]')
     const cont = must<HTMLButtonElement>(bar, 'button')
     assert.equal(cont.disabled, false)
     await click(cont)
-    assert.deepEqual(calls.entries, ['continueMerge'])
+    assert.deepEqual(calls.entries, ['continueOperation:merge'])
+  })
+
+  it('names the operation it is really in, and offers skip only for a rebase', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: { ...withoutConflicts(), operation: 'rebase' } },
+          calls,
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+
+    const bar = must(container, '[data-operation="rebase"]')
+    assert.match(bar.textContent ?? '', /rebase in progress/)
+    const labels = [...bar.querySelectorAll('button')].map((button) => button.textContent ?? '')
+    assert.deepEqual(labels, ['Continue the rebase', 'Skip this commit', 'Abort the rebase'])
+
+    const [, skip] = [...bar.querySelectorAll<HTMLButtonElement>('button')]
+    assert.ok(skip)
+    await click(skip)
+    assert.deepEqual(calls.entries, ['skipOperation:rebase'])
+  })
+
+  it('re-says the operation bar after a language switch', async () => {
+    const status = {
+      ok: true as const,
+      value: { ...withoutConflicts(), operation: 'cherry-pick' as const },
+    }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ status }), t, locale: 'en' }),
+    )
+    await settle()
+    const english = must(container, '[data-operation="cherry-pick"]')
+    assert.match(english.textContent ?? '', /cherry-pick in progress/)
+
+    // The bar is drawn from the snapshot each render, so the translated kind is
+    // recomputed rather than frozen like a notice's Sentence would be.
+    const zhTranslator = (key: string, vars?: Record<string, string | number>): string => {
+      const dictionary = zh as Record<string, string>
+      const template = dictionary[key] ?? key
+      return template.replace(/\{(\w+)\}/gu, (_, name: string) => String(vars?.[name] ?? ''))
+    }
+    const chinese = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({ status }),
+        t: zhTranslator as typeof t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    const bar = must(chinese, '[data-operation="cherry-pick"]')
+    assert.match(bar.textContent ?? '', /捡取进行中/)
   })
 })
 

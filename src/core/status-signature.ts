@@ -9,11 +9,11 @@
  * and scroll position, and would wake the diff and the history for nothing.
  *
  * So a reading is compared before it is applied. The comparison is a string over
- * exactly what the panel draws — the branch's identity and counts, the merge
- * flag, and every row's two status letters and path — which is deliberate:
- * two readings with the same fingerprint produce the same pixels, and `git
- * status` has no third state to miss. It is not a deep-equality helper; it is
- * "is this the same screen?".
+ * exactly what the panel draws — the branch's identity and counts, the
+ * operation in progress, and every row's two status letters and path — which is
+ * deliberate: two readings with the same fingerprint produce the same pixels,
+ * and `git status` has no third state to miss. It is not a deep-equality helper;
+ * it is "is this the same screen?".
  *
  * @module dsh-git-panel/core/status-signature
  */
@@ -40,7 +40,7 @@ export function statusSignature(status: RepoStatus): string {
     status.branch.upstream ?? '',
     String(status.branch.ahead),
     String(status.branch.behind),
-    String(status.merging),
+    String(status.operation),
     String(status.truncated),
     String(status.changedCount),
     [staged, unstaged, untracked, conflicted]

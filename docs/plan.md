@@ -11,8 +11,8 @@
 下一步做什么」；两者冲突时以需求文档为准，并把差异登记到下面的
 「与需求文档的偏差」。
 
-- 代码：`src/`（56 个源文件）、`test/`（20 个测试文件）
-- 校验：`npm run check` → `tsc --noEmit` + 520 项测试 + 两个打包产物
+- 代码：`src/`（63 个源文件）、`test/`（24 个测试文件）
+- 校验：`npm run check` → `tsc --noEmit` + 557 项测试 + 两个打包产物
 
 ---
 
@@ -26,7 +26,7 @@
 | **M3** | diff 视图 + 逐词高亮 + 布局切换 | 点文件可见 VS Code 级 diff | ✅ 完成（`npm run check` 全绿：192 项测试——15 项 diff 解析/逐词、8 项 host diff 服务 + 路由、15 项 DiffView/BottomPane/分组操作交互；两个产物重建。**重启后的运行实例已端到端核对**：用真实 session 打 `/git-panel/diff`，worktree / index / 未跟踪 / 二进制逐条验过，证据见 §8 末。**浏览器里的观感仍待人工看一眼**——本会话的 `browser_*` 工具一律返回 “no usable browser provider is registered”，交互行为由 jsdom 测试覆盖） |
 | **M4** | 分支新建/删除/切换、冲突态 UI、AI 提交信息（+ 提交详情初步） | 分支管理与同步全在面板内闭环 | ✅ 完成（`npm run check` 全绿：268 项测试；三项收窄 D20–D22。分支/合并/详情在**真实仓库**上跑通，AI 生成用**桩模型**验证了提示词与清洗，唯一没验的是浏览器里的观感——本会话 `browser_*` 工具仍返回 “no usable browser provider is registered”） |
 | **M5a** | 行级菜单机制、discard、撤销最近提交、stash（贮藏） | 破坏性写操作全部经「点击武装」确认 + 审计（文档 §7 的 M5 按 D24 拆分） | 🚧 **四个顺序全部交付、待产品方验收**：顺序 1 行级菜单机制、2 discard、3 undoCommit、4 stash（§10.1）；D20 有意留下的「贮藏后切换」随顺序 4 补回 FR-4.4 的受阻路径。`npm run check` 全绿（419 项测试）。**GUI 观感待人工确认**：宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效 |
-| **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | 🚧 **进行中**：顺序 5（提交详情下钻单文件 diff）、顺序 6（复制类条目）与顺序 7（提交图）已交付，见 §10.2；**顺序 8 多仓库已交付**（D46：先推迟、同日改判）；顺序 9 提交改写、10 发布收尾未开始。按文档 §7 的 M5 清单（discard / stash / 提交图 / 撤销 / 多仓库），**五件事至此全部交付**——顺序 9 的提交改写不在文档清单内。**GUI 观感待人工确认**（宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效） |
+| **M5b** | 提交图、提交详情下钻单文件 diff、多仓库、提交改写 | 发布 v1.0（文档 §7 原文） | 🚧 **进行中**：顺序 5（提交详情下钻单文件 diff）、顺序 6（复制类条目）、顺序 7（提交图）、顺序 8 多仓库、顺序 9（还原 / 捡取 / 重置 / 压缩 / 丢弃，见 §10.2）已全部交付；只剩顺序 10 发布收尾。按文档 §7 的 M5 清单（discard / stash / 提交图 / 撤销 / 多仓库），**五件事早已全部交付**——顺序 9 的提交改写不在文档清单内。`npm run check` 全绿（557 项测试）。**GUI 观感待人工确认**（宿主进程加载的是启动时的构建，本次构建要重启 `dsh web` 才会生效） |
 
 ---
 
@@ -146,6 +146,13 @@ discard 与 undoCommit 在 M5a。
 | **D42** | FR-5.1 的同步动作只有三个（拉取 / 推送 / 同步），文档没有 fetch | 新增第四个动作**获取所有远程**：`git fetch --all`，挂在分支行、紧挨「拉取」左边，字形是**虚线 ↓**；`POST /git-panel/fetch`；仓库没有远程时以 `bad-request` 说明而不是静默成功。**不做 `--prune`** | 产品方要求在面板里能 fetch，并指定「第四个小按钮、虚线 ↓」「fetch 所有远程」——参考 IDEA 的 Fetch All Remotes。三处决定：① **`--all` 而不是默认远程**：分支行只描述一条分支，但 ↑↓ 计数、○/● 标记与 `upstreamGone` 都读 `refs/remotes`，而一个仓库可以配多个远程；② **不 prune**：prune 会删掉远端已不存在的远程跟踪 ref，那不是「按一下获取」隐含同意的动作——留一条过期的 `origin/xxx` 比删一个 ref 意外更小，真要清理是另一条命令；③ **无远程先问一次 `git remote`**：`git fetch --all` 在没有远程时**退出 0 且一个字节都不打印**（实测），不问就会宣布一次没发生的获取。**代价**：远程分支的名字仍然不进分支选择器（FR-4.1 只要求本地分支）——fetch 看得见的效果是 ↑↓ 计数、○/● 标记与 `upstreamGone`；要「取回一个远程分支」得像 git 一样先 `checkout -b`（本插件今天没有这条路径，见 §12）。**⚠ 2026-09-13 兑现一处代价**：远端删掉一条被跟踪的分支后，过期的 `origin/<x>` 让 `upstreamGone` 保持为假，`pull` 要按下去才报错（D45 只把那次失败说清楚了）；要提前发现，需要一次 `--prune` 或 `git remote prune --dry-run` 的**报告** |
 | **D41** | FR-7.1「历史列表旁内嵌 SVG 泳道图（分叉开新道、合并收道），分页不断线」 | 泳道分配是 core 的纯函数 `core/commit-graph.ts`（`buildGraph`：一行给出 `lane`/`from`/`to`/`edges`/`lanes`），渲染是每行一个内联 SVG（`ui/History.tsx` 的 `GraphCell`），**没有新增 host 路由**——`CommitInfo.parents` 从 M1 起就在 `LOG_FORMAT` 里，本项是纯客户端 + core。三处决定：① **每行一个 SVG、y 用百分比**（`0%`→`50%`→`100%`）、不设 viewBox：行高由文字决定，百分比让线段在不知道高度的情况下连到相邻行，`align-self: stretch` + `display: block` 保证不留缝；② **分页不断线是「对全部已加载提交跑一次」的结果**，不是补丁——分配是从新到旧的一趟、每行只依赖它上面的行，所以第 2 页只是把图**延长**，第 1 页逐字节不变（测试钉住）；③ **条带宽度 = 所有行的最大泳道数**（上限 8），每行共用同一个数——否则某一行开了新道就会把自己那行的 hash 推右，整列 hash 对不齐 | 文档只要求「分叉开新道、合并收道、分页不断线」，没规定颜色、也没规定图在行内还是行外。**颜色的代价**：DSH 的 token 集里**没有图表调色板**，泳道只能借语义色（brand / business / success / warn / gray 按车道取模循环，刻意避开 error 红——一条红线会读成对提交的警告）；车道号只要线还在就不变，所以一条线的颜色跨行稳定，被回收的车道可能与前一条同色。**另外两条实现选择**：① 颜色按**目标**车道取——合并的斜线用它汇入/开出的那道色，与下方竖线一致；② 上限 8 是防「多父 octopus 合并」把提交信息挤出面板，超出部分被裁掉（真实历史远在 8 以下） |
 | **D40** | §4.3「操作级错误**就地**显示、不清空列表、保留 git 多行输出」；M2 起实现为列内的两条带——成功一行、失败一块，都占列表上方的整行 | 成功与失败的反馈都改成**悬浮通知**（`ui/notice.tsx`），挂在状态栏之下、盖在列表之上，不再占列内的行。「不清空列表」与「保留多行输出」照旧；**成功 4s 自动关闭（`NOTICE_DURATION_MS`），失败一直等到按 ×** | 产品方要求「把通知作为悬浮的一层，过指定时间自动关闭」，并确认成功与失败都浮起。**三条理由**：① 每一条反馈原本都把变更列表、提交框、dock 往下推，而列表才是面板的主语——一次操作的报告不该移动用户正要点的东西；② 两种生命周期的差别是硬的：成功是一句可以错过的话，失败是「这一击为什么没生效」的解释，还带着 git 的多行原文与（切换受阻时）一个「贮藏后切换到 X」按钮，按时间抹掉它比不显示更糟，所以 `durationMs` 是调用方给的值；③ 它是**层**不是模态：不拦点击、点别处也不消失（`popover` 的 outside-press 契约对通知是错的），只有 ×（或成功的时钟）能关掉它。**代价**：反馈不再把内容顶开，于是会暂时盖住列表最上面几行与合并状态栏；`z-index: 4` 让它压在行菜单（3）之上。**时长可配**：目前是组件的一个 prop、面板传 4s；「在设置里自定义」需要 DSH 的插件配置面（`settings.section` 槽 + host settings 命名空间与读写路由，像 better-sidebar 的「Side card」），已登记到 §10.3，等真有功能需要设置时一起做 |
+| **D48** | 顺序 9 只说「提交改写 drop/squash/reset」，没定义 squash 的语义 | 「压缩到上一个提交」实现为 git 的 **fixup**：把目标提交的改动并进**父提交**，**保留父提交的信息**，不合并两条信息 | 本插件没有 reword（改提交信息）能力，而 git 默认的 squash 会把两条信息用它的模板拼起来（`# This is a combination of 2 commits…`，靠 `GIT_EDITOR=true` 才能不弹编辑器）——拼出来的正文既不可预期、面板也没地方让用户改。fixup 的承诺是一句话能说清的（「并入上一个提交，保留上一个提交的信息」），确认文案就写这一句。**代价**：想留下目标提交的说明只能先在提交框里改写父提交的信息，或到终端做交互式 rebase |
+| **D49** | 顺序 9 要求「drop/squash/reset」，文档没有规定用什么机制 | 改写**交给 git 自己的 rebase**：`drop` 用 `rebase --onto <目标>^ <目标>`，`squash` 用 `rebase --interactive` 并注入一个**临时 sequence editor**（照 `host/askpass.ts` 的先例：静态 helper 文件 + 环境变量传参，退出即清理），它把 todo 里目标那一行改成 `fixup`，并在**前一行不是目标父提交**时退出非零（git 随即中止，仓库原样）。拒绝条件（宁可拒绝也不改错）：目标是合并提交、目标不是 HEAD 的祖先、`目标..HEAD` 里有合并提交、游离 HEAD / 未出生分支、已有操作在途；`squash` 另要求目标有父提交 | **三处有意选择**：① **不自己重造历史**——`rebase --onto` 与 `rebase -i` 是 git 对这两件事的标准答案，冲突、sequencer、`--abort` 全由它管；② **不替用户线性化**——普通 `rebase` 会把范围内的合并压平，所以「`目标..HEAD` 里有合并提交」一律拒绝并说明，而不是默默改变分支形状；③ **固定住用户配置**——`--no-autosquash`（避免 todo 被重排）、`--no-rebase-merges`（避免 todo 长出 label/merge 行）、`--no-autostash`（有未提交改动就该被拒，而不是被悄悄收起来）。**顺带**：`FAILURE_PATTERNS` 的 `dirty-worktree` 放宽到 `would be overwritten by (checkout\|merge\|cherry-pick\|revert)` 与 rebase 自己的 `cannot rebase: You have unstaged changes`——名字不同，面板要的是同一个码。**代价**：改写要多花一次 60s 预算的进程（`REWRITE_TIMEOUT_MS`），且 sequence editor 的 helper 路径要经 git 拼进 shell（含空格的仓库路径有专门测试钉住） |
+| **D50** | FR-9.3 只把「合并进行中」当作一个布尔（`RepoStatus.merging`，见 §6 第 7 条） | 推广成**在途操作枚举** `RepoStatus.operation: 'merge' \| 'revert' \| 'cherry-pick' \| 'rebase' \| null`；`continueMerge`/`abortMerge` 换成 `continueOperation` / `skipOperation` / `abortOperation(sessionId, kind)`，host **现读自己的状态并要求 kind 相符**才执行 | 还原 / 捡取 / 改写都可能把仓库停在半路（`REVERT_HEAD`、`CHERRY_PICK_HEAD`、`rebase-merge/`），而它们各自的 `--continue` / `--skip` / `--abort` 不通用：对停住的 cherry-pick 跑 `merge --abort` 不是逃生口。一个布尔答不了「是哪一个」，而让浏览器说跑哪条命令等于把「点错就毁掉一次改写」交给过期读数——所以 kind 是请求里的一句话，host 的重核是它的证据。**skip 只对 rebase 有效**（`--continue` 在空 pick 上会失败，`--abort` 会丢掉整次改写）。合并的 continue 仍是 `commit --no-edit`（保持既有行为），其余三种用各自的 `--continue`（带 `editor: {}` 防编辑器）。**代价**：`RepoStatus` 是 wire 契约，客户端 fixture 与若干既有测试随之改写 |
+| **D51** | FR 清单里没有 reset（顺序 9 的「reset」是计划自己列的） | 「重置到此提交…」在菜单里**展开成三档**（软 / 混合 / 硬），每档**各自武装**，硬重置的确认文案点名「未提交的改动会被丢弃（不可恢复）」 | 平面菜单没有子菜单，三档常显又会把上面的条目埋掉，所以入口那一击**替换菜单内容**为三档 + 「返回」。三档都武装：它们都在改写分支指针，而硬重置还会丢工作区。**代价**：多一层状态（`CommitRowMenu.resetOpen`）与一个「返回」条目 |
+| **D52** | §9② 的「还原此提交 / 捡取此提交」没有规定边界 | 两条都**拒绝合并提交**（需要 `-m` 选主线，是终端的事，与 `undoCommit` 同一条理由）；`cherry-pick` 撞上「改动本来就在」时（git 的 "cherry-pick is now empty"）由 host **自己 `cherry-pick --abort` 清掉**在途态，再回 `bad-request` | 还原/捡取造的是**新提交**（不改写已发布历史），所以任何提交行都能用；但合并提交没有唯一答案。空捡取留下的 sequencer 是「一个没有事可做的操作」——面板会显示一条继续/中止的栏，而两边的按钮都无事可做；把它当作一次 refusal 说清楚比留着一个假状态好 |
+| **D53** | `Sentence` 的占位值只能是字符串或数字（`ui/translate.ts`） | 占位值可以**再是一个 Sentence**，`sentence()` 递归求值 | D50 之后面板要说「继续{变基}」「中止{还原}」这类**由两个词拼出来**的话。若在调用时先把 kind 译成字符串塞进 `vars`，语言一切换那句话就冻在旧语言里——正是 `translate.ts` 存在要防的那类 bug。递归让「语言切换后整句重说」这条性质对组合句也成立。**代价**：`Sentence` 的类型与渲染各多一个分支 |
+
 
 
 ---
@@ -188,9 +195,12 @@ discard 与 undoCommit 在 M5a。
    写进去会让插件在没有模型的 composition 里直接不挂载——而面板 99% 的功能
    与模型无关。`generateText` 在缺服务时返回 `no-llm`，是一个普通失败。
 
-7. **`RepoStatus.merging` 来自 `MERGE_HEAD` 的 `stat`，不是来自冲突分组。**
-   冲突全部 staged 之后分组就空了，而合并还在——那正是「继续合并」按钮该出现的
-   状态。改这块时不要把它换成「`groups.conflicted.length > 0`」。
+7. **在途操作来自状态文件的 `stat`，不是来自冲突分组（D50）。**
+   `RepoStatus.operation` 依次 stat `MERGE_HEAD` / `REVERT_HEAD` / `CHERRY_PICK_HEAD`
+   与 `rebase-merge` / `rebase-apply` 目录——冲突全部 staged 之后分组就空了，而操作
+   还在，那正是「继续 / 跳过 / 中止」该出现的状态；而一次停在空 pick 上的 rebase
+   连一个冲突都没有。改这块时不要把它换成「`groups.conflicted.length > 0`」，也不要
+   退回一个布尔：要继续 / 跳过 / 中止，得先知道是四个里的**哪一个**（三条命令各不通用）。
 
 8. **`execFile` 的退出码在 `error.code`，不在 `error.status`。**
    实测（Node 24）：`git diff --no-index` 退出 1 时 `error.code === 1`、`error.status
@@ -256,6 +266,17 @@ discard 与 undoCommit 在 M5a。
   已配置 remote 的；值由 DSH 的凭据缝保管，**审计日志只记 origin**，值绝不进日志；注入时
   只进 git 子进程的环境（helper 文件里没有秘密），`GIT_TERMINAL_PROMPT=0` 不变。没有 provider
   的部署里保存会被明确拒绝。
+- **提交改写类写操作**（顺序 9）：`revertCommit` / `cherryPick` / `reset` / `rewrite` /
+  `continueOperation` / `skipOperation` / `abortOperation` 全部走既有的同一条网关
+  （POST + 同源 + loopback + 1 MiB body）。参数是两个**固定词表**（重置模式、改写动作）
+  与四种在途操作，host 先 `validate*` 再进 git——它们会变成 git 的 flag 或子命令，
+  所以只能是面板自己给过的取值；`continue/skip/abort` 还会**现读在途状态并要求和传入的
+  kind 相符**，不让过期的浏览器读数决定跑哪条 `--abort`。**sequence editor** 是 host
+  写进私有临时目录的静态 helper（不含任何用户数据，退出即删），只按环境里的
+  `{目标, 父提交, 动作}` 改 git 自己生成的 todo；它不认路径、也不执行用户输入——目标
+  提交 id 先过 `validateHash`。审计：还原/捡取记短 id、仓库与 subject，重置记目标与模式，
+  压缩/丢弃记目标 id、父 id 与 subject（改写后那一行可能换身份，日志是唯一记录），
+  继续/跳过/中止记 kind 与仓库。
 - **审计日志**：每个写操作记一行（`stage`/`unstage` 记路径数，`commit` 记
   short oid 与 subject，`push`/`pull` 记分支与仓库根，`stash push`/`apply`/`pop`/`drop`
   记选择器、id 与仓库根——drop 还记 subject，因为条目随后就从列表里消失了）。
@@ -396,7 +417,7 @@ browser provider is registered”，所以这部分只有 jsdom 的行为测试�
 | FR-4.3 删除分支 + 保护提示 | `git-service.deleteBranch`（`-d`／`-D`）；当前分支由 host 直接以 `bad-request` 拒绝，未合并由 git 拒绝并被分类为新错误码 **`not-merged`**——面板据此把同一行**武装成强制删除**（`ui/armed.ts` 的 `useArmedKey`，§4.3 的「点击武装 → 3s 内再点」首次落地） |
 | FR-4.4 切换受阻展示 git 多行输出 | 复用 M2 的 `error.detail` 通道；测试驱动真实「local changes would be overwritten」拒绝，断言完整输出到达。**「贮藏后切换」按 D20 不做** |
 | FR-9.1 冲突独立分组 | M1 起就有；M4 只把行内 `+` 的文案改成「标记已解决」（命令不变：`git add` 就是标记已解决） |
-| FR-9.3 继续合并 / 中止合并 | `RepoStatus.merging`（`host/git-dir.ts` 的 `gitDirOf` + `stat MERGE_HEAD`，**不额外 spawn**；`git status --porcelain=v2` 不报告这件事，而冲突全部解决后分组会空掉）→ `git-service.continueMerge`（`commit --no-edit`，用 git 自己的 `MERGE_MSG`）／`abortMerge`（`merge --abort`，二次确认）；面板在合并期间顶部出一条状态栏 |
+| FR-9.3 继续合并 / 中止合并 | `RepoStatus.merging`（`host/git-dir.ts` 的 `gitDirOf` + `stat MERGE_HEAD`，**不额外 spawn**；`git status --porcelain=v2` 不报告这件事，而冲突全部解决后分组会空掉）→ `git-service.continueMerge`（`commit --no-edit`，用 git 自己的 `MERGE_MSG`）／`abortMerge`（`merge --abort`，二次确认）；面板在合并期间顶部出一条状态栏。**⚠ 2026-09-13 由 D50 推广**：`merging: boolean` → `operation`（四种在途操作），`continueMerge`/`abortMerge` → `continueOperation` / `abortOperation(sessionId, kind)` 加 `skipOperation`，见「顺序 9 交付」 |
 | FR-3.5 AI 提交信息 | 纯函数 `core/commit-message.ts`（截断、提示词、清洗答案）+ `HostPorts.generateText` ← 新适配器 `host/adapter/llm.ts`（`ctx.llm.stream` 流式 + `BlockAssembler`，路由取自 `ctx.agentDefaultModel.currentSelection()`），服务端 `generateCommitMessage`，客户端提交框内的 ✨ | 
 | FR-3.6 提交详情（初步） | `parseNumstat`（两句 rename 写法都归到当前路径、二进制报 `null` 计数）→ `git-service.showCommit`（合并提交按 `-m --first-parent` 取，否则 `git show` 对合并什么都不打印）→ `GET /git-panel/showCommit` → 历史行内展开（元信息 + 文件清单 + `+n −m`） |
 
@@ -587,7 +608,7 @@ FR-6.2 的四个动作（存 / 列表 / 应用 / 删除）加 D20 欠下的那�
 | 6 | **复制类条目** | §9 已登记②③的一部分 | 短 hash / 完整 hash / 提交信息 / 相对路径 / 绝对路径——纯客户端 clipboard，成本最小、感知最直接，可穿插在 5 与 7 之间（「复制绝对路径」要仓库根前缀，`RepoStatus.root` 已在客户端） | **✅ 已交付（2026-09-12）**：见下方「顺序 6 交付」 |
 | 7 | **提交图 SVG 泳道** | FR-7.1 | 分叉开道、合并收道、分页不断线。刻意排在 M5b 内靠后：同 profile 的 `dsh-client-ui-git-graph` 已提供 `/git/graph`（见 §12），它是本批次里**唯一「别处已经能用」的能力**——不是不做，而是边际价值最低 | **✅ 已交付（2026-09-12）**：见下方「顺序 7 交付」 |
 | 8 | **多仓库** | FR-8.1 / 8.2（文档自己标 P2） | 工作区根非仓库时扫一层子目录（跳过 node_modules/dist/build/点开头）、仓库选择器、默认取 `.git` 最近活动的仓库、选择按容器记忆 | **✅ 已交付（2026-09-13，D46）**：见下方「顺序 8 交付」 |
-| 9 | **提交改写与还原 / 捡取** | §9 已登记② + D22 | drop/squash/reset，以及提交行的「还原此提交 / 捡取此提交」，全属**改写历史**，需新路由 + 武装确认（§4.3）；M4 时已由产品方确认往后排 | M–L |
+| 9 | **提交改写与还原 / 捡取** | §9 已登记② + D22 | drop/squash/reset，以及提交行的「还原此提交 / 捡取此提交」，全属**改写历史**，需新路由 + 武装确认（§4.3）；M4 时已由产品方确认往后排 | **✅ 已交付（2026-09-13，D48–D53）**：见下方「顺序 9 交付」 |
 | 10 | **v1.0 发布收尾** | §7 的验收标准 | 版本号 0.1.0 → 1.0.0、README 与本文件的已交付范围对齐（顺带修口径：本文件此前写 280 项测试、README 写 282，实际是 282）、安装路径核对（目前只验过 `link:` 装法） | S |
 
 **开工说明**：M5b 原定「M5a 验收之后」，本次顺序 5 是产品方在 M5a 验收仍开着的时候直接下令开工的
@@ -735,6 +756,34 @@ disabled`。`GIT_TERMINAL_PROMPT=0` 是防挂死的硬要求，但这样一来 g
 **限制**：只扫一层；只认 `readdir` 报出的目录，**符号链接目录不跟进**（与它一致）；
 仓库藏在被跳过的目录下则找不到。
 
+### 顺序 9 交付：提交改写与还原 / 捡取（2026-09-13，已完成）
+
+产品方 2026-09-13 选定**最大范围**：还原 / 捡取 / 重置三档 / 丢弃 / 压缩全做，重置三档
+各自武装。计划 §9② 登记的两条（还原、捡取）在这批里兑现，另外三条（重置 / 压缩 / 丢弃）
+是文档之外的新增。顺带修好这批操作隐含的前置缺口：**在途操作状态**（D50）——没有它，
+一次冲突的 revert/cherry-pick 会留下一堆没人管、也没法中止的冲突文件。
+
+| 落点 | 内容 |
+|---|---|
+| `core/types.ts` | `ResetMode` / `RewriteAction` / `InProgressOperation`；`RepoStatus.merging: boolean` → `operation: InProgressOperation \| null`（D50） |
+| `core/validate.ts` | 三个固定词表校验 `validateResetMode` / `validateRewriteAction` / `validateOperationKind`，共用一个 `oneOf`；非法取值一律 `bad-request`，**绝不把浏览器的话当 git flag** |
+| `core/ports.ts` | 服务端与客户端各加 `revertCommit` / `cherryPick` / `resetTo` / `rewriteCommit` / `continueOperation` / `skipOperation` / `abortOperation`，删掉 `continueMerge` / `abortMerge`；`GitRunOptions.editor?: GitEditorControl`（出现即「不允许编辑器阻塞这次调用」，`sequence` 再驱动 todo 改写） |
+| `host/sequence-editor.ts`（新） | 改写用的 sequence editor：静态 helper（POSIX 带 shebang / Windows `.cmd` 包装，照 `askpass.ts`）+ 环境里的 `{target, previous, action}`。它把 todo 里目标那一行改成 `fixup`/`drop`；**前一行不是 `previous` 就退出非零**（git 随即中止、仓库原样），因为它只认识「这一行」而不认识仓库 |
+| `host/git-exec.ts` | 环境策略多了编辑器一条：`editor` 出现时置 `GIT_EDITOR=true`（并按需置 `GIT_SEQUENCE_EDITOR` / `GIT_PANEL_SEQUENCE`），**缺席时删除这三个变量**——与 askpass 同一条「不让启动 shell 掺进来」的规矩 |
+| `host/git-service.ts` | `mergeInProgress` → `operationInProgress`（stat `MERGE_HEAD` / `REVERT_HEAD` / `CHERRY_PICK_HEAD` / `rebase-merge` / `rebase-apply`）；`readCommit` 抽出来给 `showCommit` 与新操作共用；`revertCommit`（`revert --no-edit`，拒绝合并提交）、`cherryPick`（拒绝合并提交；空捡取自己 `--abort` 清干净再回 `bad-request`）、`resetTo`（`--soft/--mixed/--hard`）、`rewriteCommit`（drop=`rebase --onto`，squash=`rebase -i` + sequence editor，拒绝合并提交 / 非祖先 / 范围内有合并 / 游离 HEAD / 在途操作；`squash` 的父提交是根时走 `--root`）；`continueOperation` / `skipOperation`（只认 rebase）/ `abortOperation` 都**现读在途状态并要求 kind 相符**；`options`/`run` 的第 4 个位置参数收成 `RunExtras`，改写用 `REWRITE_TIMEOUT_MS = 60s`；`dirty-worktree` 的匹配放宽到 cherry-pick / revert / rebase 的说法（D49） |
+| `host/adapter/routes.ts` + `client/adapter/git-client.ts` | 七个新写路由（GET 405、跨源 403、同源与 body 上限照旧）；`reset` 与 `rewrite` 的 mode/action、`continue/skip/abort` 的 kind 在路由层就过 `core/validate` 的词表 |
+| `ui/StatusPanel.tsx` | 提交行菜单从 2 组变 3 组：复制 → 还原 / 捡取 / 压缩（目标无父提交时禁用）/ 丢弃 / **重置入口** → 撤销（仍只在最新一行）。每条改写条目 `danger` + `stayOpen` + **自有武装键**，第二击才执行；重置入口把菜单内容换成软 / 混合 / 硬三档 + 「返回」（D51）。状态栏从「合并进行中」推广成通用在途操作条：按 kind 说「{kind}进行中 / 继续{kind} / 中止{kind}」，**跳过只在 rebase 时出现**，继续与跳过在还有冲突文件时禁用，中止要两击（D50） |
+| `ui/translate.ts` | `Sentence` 的占位值可以再是一个 Sentence，`sentence()` 递归求值——「继续{变基}」这类组合句因此也和别的字一样跟着语言切换（D53） |
+| `ui/menu.tsx` | 每个条目渲染 `data-id`：一个菜单里现在有五个危险条目，测试与将来的程序化调用要能点名其中一条，而不是数「第几个 danger」 |
+| `locales.ts` + `ui/error-copy.ts` | +31 键（中英）：五条改写的名称与武装文案、七条成功通知、`operation.*` 一族（四个名词 + 进行中/继续/跳过/中止/中止确认）；`merge.*` 那五条删除；`error.conflict` 不再假定是合并，并指向状态栏的继续 / 跳过 / 中止 |
+| 测试 | +32 项（557 总计）：core 4（三个词表的接受与拒绝）；真仓库 24——还原（新提交、原提交仍在、根提交、合并拒绝、坏 hash、审计）、捡取（跨分支应用、空捡取被清理、冲突态 + 中止、合并拒绝）、重置（三档各自的索引/工作区后果、非法模式与未知提交、审计）、改写（折进父提交并保留父信息、第二个提交折进根、丢弃后回放、**路径含空格的仓库**、合并与范围含合并的拒绝、非祖先拒绝、首提交与游离 HEAD 拒绝、**在途时拒绝**、冲突态下 continue 完成、abort 全部还原、审计）；路由 1 项（七个新写路由 POST 走通 + GET 405 + 词表拒绝 + 无在途时的三种拒绝）；客户端 4 项（四条改写条目各自「先武装后执行」并点名 subject、重置入口展开三档与「返回」、硬重置武装文案、拒绝落在列表旁）+ 1 项（在途状态条四种、跳过只对 rebase、语言切换后整句重说）。既有的 `merging` / `continueMerge` / `abortMerge` 夹具与断言全部改成新契约 |
+
+**与 better-sidebar / git-graph 的差别**：两者都没有提交改写这一组（§12 的「两边都没有」
+那一栏继 discard / stash / 撤销之后又多了五条）。
+
+**已知边界**（有意不做）：squash 不合并两条提交信息（D48）；不线性化范围内含合并提交的
+历史（D49）；没有 reword；不连续捡取多个提交；改写受 60s 截止约束。
+
 ### 验收期改动：操作反馈改成悬浮通知（2026-09-12，产品方提出）
 
 产品方要求：「把通知作为悬浮的一层，过指定时间自动关闭」，并确认**成功与失败都浮起**（失败要手动关）。
@@ -758,6 +807,7 @@ disabled`。`GIT_TERMINAL_PROMPT=0` 是防挂死的硬要求，但这样一来 g
 | **diff 虚拟滚动**（§6 性能 P1） | 现靠 FR-2.6 的 >5000 行折叠门兜底；千文件仓库 `status < 500ms` 与 monorepo 也仍未压测 |
 | **gpg 签名卡死的专门文案** | `commit.gpgsign=true` 的仓库里提交会卡到 15s deadline，`GIT_TERMINAL_PROMPT=0` 管不到 gpg（§11 新增行） |
 | **凭据缺失的专门文案** | push/pull 目前只报 git 原文，没有分类（§11 新增行） |
+| **在右侧栏的新标签页里打开 diff**（产品方 2026-09-13 提出，已确认是右侧栏、与 Git 面板并列的那种标签页） | 现在 diff 开在 Git 面板底部的 dock 里（一条文件一个标签，见「验收期改动：底部 pane 的 diff 标签」），拿到的是面板减掉提交框与列表之后的那半屏。要求是把它开成**右侧栏自己的标签页**，让 diff 拿到整栏高度。**路已通**：本插件已注入 `@deepseek-ai/dsh-client-ui-sidebar-right`，它支持同一 pane 内多条标签，且 `ISidebarRight.openTab(kind, options)` 带 `paneId` / `revealIfOpened` / `replaceTab`；做法是像 `gitPanelDefinition` 那样再注册一个**类型**（`client/adapter/sidebar-tab.tsx` + `client/index.tsx` 的两段注册），参数经 `SidebarRightTabParamsMap` 声明，打开动作从 tab body 的 `useTabInfo().tab.actions.openTab` 发起。**排期前要定三件事**：① 一个文件一条标签，还是所有 diff 共用一条——**page 类型按 kind 记在一个地址上、同 pane 内恒去重**（`revealIfOpened` 只管 resource 类型），所以「一个文件一条」要么走 resource 类型（地址即路径，天然按文件分开），要么共用一个标签、靠 `params` + `navigation.revision` 换内容；② 标签条的开关与面板内 `openFiles` / `tab` 这套状态谁说了算（dock 今天是受控组件，标签页版的标签条归 sidebar-right）；③ 底部 dock 是留还是撤。**未排期** |
 
 ### 10.4 不排期（等条件，不是代码工作量）
 
@@ -789,11 +839,13 @@ disabled`。`GIT_TERMINAL_PROMPT=0` 是防挂死的硬要求，但这样一来 g
 | 新增 | **`push`/`pull` 会走真实网络**，测试里只覆盖了 file transport 与裸仓库；https/ssh 未实机验证 |
 | 新增 | **插件首次有运行时依赖**（`vscode-diff`，MIT、零依赖，见 D12）。host bundle 仍 `packages: 'external'`，运行时由 profile 的 node_modules 解析；client bundle 不引用它（构建的产物纯度检查会挡住意外引入）。换实现或升级只影响 `core/diff-engine/marks.ts` |
 | 新增 | **`llm`/`agentDefaultModel` 故意不在 `inject` 里**：面板在没有模型的 composition 里照样挂载，只有 FR-3.5 那个按钮返回 `no-llm`。代价是这条路径的类型安全靠 `ctx.get()` 的松弛签名兜底，而不是靠 cordis 的依赖声明 |
-| 新增 | **合并态靠 `stat MERGE_HEAD` 判断**（与 watcher 同一套 `gitDirOf` 假设）。如果某个 git 把合并态放在别处（rebase 用 `rebase-merge/`），当前的 `merging` 就只是「合并」这一种；rebase/cherry-pick 的状态栏不在 M4 |
+| 新增 | **在途操作靠 `stat` 状态文件判断**（与 watcher 同一套 `gitDirOf` 假设）：`MERGE_HEAD` / `REVERT_HEAD` / `CHERRY_PICK_HEAD` / `rebase-merge` / `rebase-apply` 五个标记覆盖顺序 9 会制造的四种在途态（merge / revert / cherry-pick / rebase）。**仍未覆盖**：`am`、`cherry-pick` 的**多提交序列器**（面板只捡取单个提交）、以及 `git rebase --edit-todo` 之类手工中途改 todo 的情形——那些在标记上仍会显示成 `rebase`，但 continue/skip 的语义由 git 自己决定 |
 | 新增 | **`--numstat` 的 rename 归并是启发式**：`a => b` 与 `src/{a => b}.ts` 两种写法都覆盖了（有真实字节 fixture），但文件名里本身就含 ` => ` 的极端情况会归错。代价可接受：它只影响详情列表显示的名字 |
 | 新增 | **M4 的新写操作都经过与 M2 相同的网关**：POST + 同源 + 1 MiB body 上限 + loopback，破坏性的两个（删分支、中止合并）额外要两次点击。`generateCommitMessage` 也走 POST，因为它花的是模型预算 |
 | 新增 | **分支名/基点/哈希的校验在 core**（`validateBranchName`/`validateBranchBase`/`validateHash`）。基点**只**接受本地分支名或 4–40 位小写 hex，因此 `HEAD~1`、`origin/main^{commit}` 这类表达式一律拒绝——面板不替 git 解释语法 |
 | 新增 | **diff 没有虚拟滚动**（§6 性能 P1）：>5000 行默认折叠（FR-2.6），展开后整块渲染。千行量级在 jsdom 与手工构造的输入上没发现问题，**未在真实大文件上压过** |
+| 新增 | **改写提交会把目标之后的提交整段重放**（顺序 9）：因此可能冲突（面板给继续/跳过/中止），也可能因为范围内有合并提交而被拒绝（D49，宁可不做也不线性化）。真仓库测试覆盖了两提交到四提交的分支，**未在几百提交的分支或 monorepo 上压过**；改写受 `REWRITE_TIMEOUT_MS = 60s` 约束，超时后 rebase 可能停在半路——那正是状态栏接手的地方 |
+| 新增 | **sequence editor 的路径要经 git 拼进 shell**：含空格的**仓库**路径已有真实测试钉住；helper 自身位于 `os.tmpdir()` 下的私有目录，**Windows 上用户名含空格**（tmp 路径含空格）这一情形未实测——git 会引用它传给 sequence editor 的参数，但这一条只有推断没有证据 |
 
 ---
 

@@ -36,10 +36,14 @@ import type {
   CommitInfo,
   DiffTarget,
   FileChange,
+  InProgressOperation,
   OperationReport,
   RepoStatus,
+  ResetMode,
+  RewriteAction,
   StashEntry,
 } from '../../core/types.ts'
+import type { GitPanelKey } from '../locales.ts'
 import { Group, ToolButton } from './ChangeGroup.tsx'
 import { BranchPicker, type BranchRefusal } from './BranchPicker.tsx'
 import { StashPicker } from './StashPicker.tsx'
@@ -138,10 +142,16 @@ type ActionOp =
   | 'checkout'
   | 'createBranch'
   | 'deleteBranch'
-  | 'mergeContinue'
-  | 'mergeAbort'
+  | 'operationContinue'
+  | 'operationSkip'
+  | 'operationAbort'
   | 'generate'
   | 'undo'
+  | 'revert'
+  | 'cherryPick'
+  | 'squash'
+  | 'drop'
+  | 'reset'
   | 'stash'
   | 'copy'
 
@@ -213,6 +223,14 @@ interface CommitRowMenu {
   readonly commit: CommitInfo
   /** Whether this row is the newest one, and so the one FR-3.8 may undo. */
   readonly canUndo: boolean
+  /**
+   * Whether the reset entry has been opened into its three modes.
+   *
+   * A flat menu cannot nest, and three always-visible reset entries would bury
+   * the entries above them, so the reset entry replaces the menu's contents with
+   * soft / mixed / hard (and a way back) on its first click.
+   */
+  readonly resetOpen: boolean
 }
 
 /** One open row menu, of either kind the panel has. */
@@ -1471,16 +1489,127 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
       return reportOf(result)
     })
   }
-  const continueMerge = (): void => {
-    void perform('mergeContinue', say('merge.continue'), async () =>
-      reportOf(await git.continueMerge(sessionId, signal)),
+  /** The dictionary's name for the operation git is part-way through. */
+  const operationName = (kind: InProgressOperation): Sentence =>
+    kind === 'merge'
+      ? say('operation.merge')
+      : kind === 'revert'
+        ? say('operation.revert')
+        : kind === 'cherry-pick'
+          ? say('operation.cherryPick')
+          : say('operation.rebase')
+
+  /**
+   * Conclude the operation git is part-way through.
+   *
+   * The kind comes from the snapshot the bar was drawn from, and the host
+   * re-checks it against its own state before running anything — so a click that
+   * raced a finished operation is refused rather than run against the wrong one.
+   */
+  const continueOperation = (): void => {
+    const kind = status.operation
+    if (kind === null) return
+    void perform(
+      'operationContinue',
+      say('operation.continue', { kind: operationName(kind) }),
+      async () => reportOf(await git.continueOperation(sessionId, kind, signal)),
     )
   }
-  const abortMerge = (): void => {
-    disarm()
-    void perform('mergeAbort', say('merge.abort'), async () =>
-      reportOf(await git.abortMerge(sessionId, signal)),
+
+  /** Abandon the commit blocking a rebase, and let the replay carry on. */
+  const skipOperation = (): void => {
+    const kind = status.operation
+    if (kind !== 'rebase') return
+    void perform('operationSkip', say('operation.skip'), async () =>
+      reportOf(await git.skipOperation(sessionId, kind, signal)),
     )
+  }
+
+  /** Abandon the whole operation and return to the state before it began. */
+  const abortOperation = (): void => {
+    const kind = status.operation
+    if (kind === null) return
+    disarm()
+    void perform(
+      'operationAbort',
+      say('operation.abort', { kind: operationName(kind) }),
+      async () => reportOf(await git.abortOperation(sessionId, kind, signal)),
+    )
+  }
+
+  /**
+   * Create a new commit reversing one row's commit ("还原此提交").
+   * @param commit - The row the menu acted on.
+   */
+  const revertCommit = (commit: CommitInfo): void => {
+    disarm()
+    void perform('revert', say('action.revertCommit'), async () => {
+      const result = await git.revertCommit(sessionId, commit.oid, signal)
+      if (!result.ok) return result
+      return { ok: true, value: say('rewrite.revertDone', { subject: commit.subject }) }
+    })
+  }
+
+  /**
+   * Apply one row's commit to the current branch ("捡取此提交").
+   * @param commit - The row the menu acted on.
+   */
+  const cherryPick = (commit: CommitInfo): void => {
+    disarm()
+    void perform('cherryPick', say('action.cherryPick'), async () => {
+      const result = await git.cherryPick(sessionId, commit.oid, signal)
+      if (!result.ok) return result
+      return { ok: true, value: say('rewrite.cherryPickDone', { subject: commit.subject }) }
+    })
+  }
+
+  /**
+   * Fold one row's commit into its parent, or drop it.
+   * @param commit - The row the menu acted on.
+   * @param action - Which of the two rewrites to run.
+   */
+  const rewriteCommit = (commit: CommitInfo, action: RewriteAction): void => {
+    disarm()
+    void perform(
+      action,
+      action === 'squash' ? say('action.squashCommit') : say('action.dropCommit'),
+      async () => {
+        const result = await git.rewriteCommit(sessionId, commit.oid, action, signal)
+        if (!result.ok) return result
+        return {
+          ok: true,
+          value: say(action === 'squash' ? 'rewrite.squashDone' : 'rewrite.dropDone', {
+            subject: commit.subject,
+          }),
+        }
+      },
+    )
+  }
+
+  /**
+   * Move the branch to one row's commit ("重置到此提交").
+   * @param commit - The row the menu acted on.
+   * @param mode - How much of the current state to keep.
+   */
+  const resetTo = (commit: CommitInfo, mode: ResetMode): void => {
+    disarm()
+    const label =
+      mode === 'soft'
+        ? say('action.resetSoft')
+        : mode === 'mixed'
+          ? say('action.resetMixed')
+          : say('action.resetHard')
+    const done =
+      mode === 'soft'
+        ? 'rewrite.resetSoftDone'
+        : mode === 'mixed'
+          ? 'rewrite.resetMixedDone'
+          : 'rewrite.resetHardDone'
+    void perform('reset', label, async () => {
+      const result = await git.resetTo(sessionId, commit.oid, mode, signal)
+      if (!result.ok) return result
+      return { ok: true, value: say(done, { subject: commit.subject }) }
+    })
   }
   /**
    * Ask the model for a commit message (FR-3.5).
@@ -1619,7 +1748,7 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
     // Same one-layer rule as the file menu: Shift+F10 arrives without a press.
     setPickerOpen(false)
     setStashOpen(false)
-    setMenu({ kind: 'commit', anchor, commit, canUndo })
+    setMenu({ kind: 'commit', anchor, commit, canUndo, resetOpen: false })
   }
 
   /**
@@ -1733,15 +1862,19 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
   /**
    * The entries of one commit row's menu (§9's commit menu).
    *
-   * The three copying entries are on every row — a hash or a message is worth
-   * taking from any commit. Undo is not: it is FR-3.8's "only the newest", so it
-   * appears only when the row says it is that one, last and after a hairline, in
-   * §4.3's irreversible class. It arms rather than fires (the entry itself becomes
-   * the confirmation between the two clicks), and which sentence it arms with
-   * follows the row's own pushed marker — the client's last reading, and the same
-   * upstream basis the host re-asks at execution time, so the two cannot disagree
-   * about which undo is coming. Revert/cherry-pick for other rows arrive with
-   * §10.2 order 9.
+   * Three groups, each after a hairline. The copying entries are on every row —
+   * a hash or a message is worth taking from any commit. The rewriting entries
+   * are next: revert and cherry-pick produce a NEW commit ("还原 / 捡取"), squash
+   * and drop rewrite the branch, and the reset entry opens a second layer with
+   * its three modes. Undo is last and only on the newest row, because FR-3.8
+   * undoes exactly one commit.
+   *
+   * Every rewriting entry arms rather than fires: §4.3's two clicks, with the
+   * entry itself becoming the confirmation. Which sentence it arms with is a
+   * claim the host re-checks at execution time (the pushed marker for undo, the
+   * parents and ancestry for the rest), so the two cannot disagree about what is
+   * coming. Revert and cherry-pick refuse a merge commit, squash refuses the
+   * first commit — all of them with the host's own sentence beside the list.
    */
   const commitMenuEntries = (row: CommitRowMenu): readonly MenuEntry[] => {
     const copies: readonly MenuEntry[] = [
@@ -1766,11 +1899,137 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         onSelect: () => void copyToClipboard(say('copy.message'), row.commit.subject),
       },
     ]
-    if (!row.canUndo) return copies
+
+    /**
+     * One entry that arms on the first click and acts on the second (§4.3).
+     * @param id - Stable id, for tests and for the entry's own identity.
+     * @param armingKey - The panel-wide armed-state key for this entry.
+     * @param idle - Label before it is armed.
+     * @param confirmation - Label once armed; it says what the second click does.
+     * @param run - What the second click runs.
+     * @param disabled - Whether the entry cannot do anything at all.
+     */
+    const armable = (
+      id: string,
+      armingKey: string,
+      idle: GitPanelKey,
+      confirmation: GitPanelKey,
+      run: () => void,
+      disabled = false,
+    ): MenuEntry => {
+      const armedHere = armedKey === armingKey
+      return {
+        kind: 'item',
+        id,
+        label: armedHere ? t(confirmation) : t(idle),
+        danger: true,
+        stayOpen: true,
+        disabled: pending || disabled,
+        onSelect: () => {
+          if (!armedHere) {
+            armKey(armingKey)
+            return
+          }
+          setMenu(null)
+          run()
+        },
+      }
+    }
+
+    // The reset entry's second layer: the three modes and a way back. Everything
+    // else is out of the way while it is open, so the mode list cannot be
+    // mistaken for the row's ordinary menu.
+    if (row.resetOpen) {
+      const modes: readonly {
+        readonly mode: ResetMode
+        readonly id: string
+        readonly label: GitPanelKey
+        readonly confirmation: GitPanelKey
+      }[] = [
+        { mode: 'soft', id: 'resetSoft', label: 'action.resetSoft', confirmation: 'action.resetSoftArmed' },
+        { mode: 'mixed', id: 'resetMixed', label: 'action.resetMixed', confirmation: 'action.resetMixedArmed' },
+        { mode: 'hard', id: 'resetHard', label: 'action.resetHard', confirmation: 'action.resetHardArmed' },
+      ]
+      return [
+        ...modes.map((entry) =>
+          armable(
+            entry.id,
+            `reset:${row.commit.oid}:${entry.mode}`,
+            entry.label,
+            entry.confirmation,
+            () => resetTo(row.commit, entry.mode),
+          ),
+        ),
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          id: 'resetBack',
+          label: t('action.resetBack'),
+          onSelect: () => setMenu({ ...row, resetOpen: false }),
+        },
+      ]
+    }
+
+    const rewrites: readonly MenuEntry[] = [
+      armable(
+        'revert',
+        `revert:${row.commit.oid}`,
+        'action.revertCommit',
+        'action.revertCommitArmed',
+        () => revertCommit(row.commit),
+      ),
+      armable(
+        'cherryPick',
+        `cherryPick:${row.commit.oid}`,
+        'action.cherryPick',
+        'action.cherryPickArmed',
+        () => cherryPick(row.commit),
+      ),
+      armable(
+        'squash',
+        `squash:${row.commit.oid}`,
+        'action.squashCommit',
+        'action.squashCommitArmed',
+        () => rewriteCommit(row.commit, 'squash'),
+        // A first commit has nothing to fold into; the host says so too, but a
+        // disabled entry is the cheaper answer.
+        row.commit.parents.length === 0,
+      ),
+      armable(
+        'drop',
+        `drop:${row.commit.oid}`,
+        'action.dropCommit',
+        'action.dropCommitArmed',
+        () => rewriteCommit(row.commit, 'drop'),
+      ),
+    ]
+
+    const resetEntry: MenuEntry = {
+      kind: 'item',
+      id: 'resetHere',
+      label: t('action.resetHere'),
+      stayOpen: true,
+      disabled: pending,
+      onSelect: () => {
+        // Opening a layer is not an armed action; drop whatever was armed so the
+        // modes cannot inherit an arming from a previous click.
+        disarm()
+        setMenu({ ...row, resetOpen: true })
+      },
+    }
+
+    const entries: MenuEntry[] = [
+      ...copies,
+      { kind: 'separator' },
+      ...rewrites,
+      resetEntry,
+    ]
+    if (!row.canUndo) return entries
+
     const key = `undo:${row.commit.oid}`
     const armedHere = armedKey === key
     return [
-      ...copies,
+      ...entries,
       { kind: 'separator' },
       {
         kind: 'item',
@@ -1804,6 +2063,11 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
         : t('menu.commitRow', { hash: menu.commit.shortOid })
   const menuEntries: readonly MenuEntry[] =
     menu === null ? [] : menu.kind === 'file' ? fileMenuEntries(menu) : commitMenuEntries(menu)
+
+  // The operation bar's own words, resolved at render time so a language switch
+  // re-says them like every other label on screen.
+  const operationKind = status.operation
+  const operationLabel = operationKind === null ? '' : sentence(t, operationName(operationKind))
 
   return (
     // The provider renders nothing; it is how a pane below hears that the
@@ -1902,37 +2166,61 @@ export function StatusPanel({ sessionId, git, t, locale, signal }: StatusPanelPr
             />
           </Popover>
         )}
-        {/* FR-9.3's two ways out of a merge. The bar exists because the state is
-            otherwise invisible: with every conflict resolved, this panel looks
-            exactly like an ordinary staged change set. */}
-        {status.merging && (
-          <div className={cls.mergeBox} data-merge="true">
-            <span className={cls.mergeLabel}>{t('merge.inProgress')}</span>
+        {/* The ways out of an interrupted operation — FR-9.3's merge included.
+            The bar exists because the state is otherwise invisible: with every
+            conflict resolved this panel looks exactly like an ordinary staged
+            change set, and a rewrite stopped on an empty pick shows no conflict
+            at all. */}
+        {operationKind !== null && (
+          <div className={cls.mergeBox} data-operation={operationKind}>
+            <span className={cls.mergeLabel}>
+              {t('operation.inProgress', { kind: operationLabel })}
+            </span>
             <button
               type="button"
               className={cls.ghost}
               disabled={pending || conflicted.length > 0}
               title={
                 conflicted.length > 0
-                  ? t('merge.continueBlocked', { count: conflicted.length })
-                  : t('merge.continue')
+                  ? t('operation.continueBlocked', { count: conflicted.length })
+                  : t('operation.continue', { kind: operationLabel })
               }
-              onClick={continueMerge}
+              onClick={continueOperation}
             >
-              {t('merge.continue')}
+              {t('operation.continue', { kind: operationLabel })}
             </button>
+            {/* Only a rebase has a commit to skip: the pick that would conflict or
+                was already applied can be abandoned without throwing the whole
+                rewrite away. */}
+            {operationKind === 'rebase' && (
+              <button
+                type="button"
+                className={cls.ghost}
+                disabled={pending || conflicted.length > 0}
+                title={t('operation.skipHint')}
+                onClick={skipOperation}
+              >
+                {t('operation.skip')}
+              </button>
+            )}
             <button
               type="button"
-              className={armedKey === 'merge' ? cls.danger : cls.ghost}
-              data-armed={String(armedKey === 'merge')}
+              className={armedKey === 'operation' ? cls.danger : cls.ghost}
+              data-armed={String(armedKey === 'operation')}
               disabled={pending}
-              title={armedKey === 'merge' ? t('merge.abortConfirm') : t('merge.abort')}
+              title={
+                armedKey === 'operation'
+                  ? t('operation.abortConfirm', { kind: operationLabel })
+                  : t('operation.abort', { kind: operationLabel })
+              }
               onClick={() => {
-                if (armedKey === 'merge') abortMerge()
-                else armKey('merge')
+                if (armedKey === 'operation') abortOperation()
+                else armKey('operation')
               }}
             >
-              {armedKey === 'merge' ? t('merge.abortArmed') : t('merge.abort')}
+              {armedKey === 'operation'
+                ? t('operation.abortArmed', { kind: operationLabel })
+                : t('operation.abort', { kind: operationLabel })}
             </button>
           </div>
         )}

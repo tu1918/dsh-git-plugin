@@ -215,6 +215,10 @@ export function Menu({ entries, label, onClose }: MenuProps): ReactNode {
             // Focus stays on the container; an entry is a target, not a stop.
             tabIndex={-1}
             disabled={entry.disabled === true}
+            // The entry's own id, which is what lets a test (and a future
+            // programmatic caller) name the one entry it means rather than
+            // counting danger-styled buttons.
+            data-id={entry.id}
             data-active={String(index === active)}
             data-danger={String(entry.danger === true)}
             // The pointer and the arrow keys move the same highlight, so a menu

@@ -18,12 +18,15 @@ import type {
   FileChange,
   FileDiff,
   GeneratedMessage,
+  InProgressOperation,
   LogLevel,
   LogPage,
   OperationReport,
   RemoteBranchRef,
   RepoListing,
   RepoStatus,
+  ResetMode,
+  RewriteAction,
   StashEntry,
   UndoResult,
 } from './types.ts'
@@ -160,6 +163,26 @@ export interface GitAskPass {
   readonly map: string
 }
 
+/**
+ * How a git call should be kept away from an editor.
+ *
+ * Present means "no editor may block this call": the child gets `GIT_EDITOR=true`,
+ * so a `rebase --continue` that would otherwise open a message editor keeps the
+ * prepared message instead of waiting for a terminal that does not exist.
+ *
+ * `sequence` additionally names a program git should run as its sequence editor,
+ * which is how a rewrite changes an interactive rebase's todo list without a
+ * human (see `host/sequence-editor.ts`); `spec` is the JSON payload that helper
+ * reads from the environment. The helper holds no state of its own — the same
+ * discipline the askpass helper follows.
+ */
+export interface GitEditorControl {
+  /** Absolute path of the program to use as `GIT_SEQUENCE_EDITOR`. */
+  readonly sequence?: string
+  /** JSON the sequence helper reads from `GIT_PANEL_SEQUENCE`. */
+  readonly spec?: string
+}
+
 /** Options for one `git` invocation. */
 export interface GitRunOptions {
   /** Absolute directory to run in. */
@@ -171,6 +194,14 @@ export interface GitRunOptions {
    * addition — so a repository with no stored credential is unaffected.
    */
   readonly askpass?: GitAskPass
+  /**
+   * Editor suppression, and the sequence editor a rewrite drives, when any.
+   *
+   * Absent means git runs with no editor of this plugin's making; the runner
+   * also clears the sequence-editor variables it owns, so a launching shell
+   * cannot inject one into a rewrite the panel did not ask for.
+   */
+  readonly editor?: GitEditorControl
   /** Deadline in milliseconds; the process is killed past it. */
   readonly timeoutMs?: number
   /** Cap on captured stdout bytes. */
@@ -517,23 +548,123 @@ export interface WorkspaceGitService {
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>
   /**
-   * Finish an in-progress merge whose conflicts are all resolved (FR-9.3).
+   * Conclude an in-progress operation whose conflicts are all resolved.
    *
-   * Uses git's own `MERGE_MSG`, so the panel does not have to invent a message
-   * for a merge the user started outside it.
+   * The kind is the one the panel read from {@link RepoStatus.operation}, and
+   * the host re-reads its own state and refuses a mismatch before running
+   * anything: `merge --abort` is not the escape hatch for a stopped
+   * cherry-pick, so the browser does not get to choose which command runs.
+   *
+   * A merge concludes with git's own `MERGE_MSG` (the existing behaviour); the
+   * other three use git's `--continue`, with the editor suppressed so a message
+   * editor cannot wait for a terminal nobody can see.
    * @param sessionId - Opaque session identity from the browser.
+   * @param kind - Which operation the panel believes is in progress.
    * @param signal - Cancels the request when the tab goes away.
    */
-  continueMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  continueOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
   /**
-   * Abandon an in-progress merge (FR-9.3).
+   * Skip the commit that is blocking an in-progress rebase.
    *
-   * Destructive — the worktree returns to the pre-merge state — so the panel
-   * arms it behind the §4.3 two-click confirmation.
+   * Only a rebase has this move: a pick that became empty (or that the user
+   * decides not to resolve) is abandoned and the replay continues. For any other
+   * kind the host refuses rather than guessing.
    * @param sessionId - Opaque session identity from the browser.
+   * @param kind - Which operation the panel believes is in progress.
    * @param signal - Cancels the request when the tab goes away.
    */
-  abortMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  skipOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Abandon an in-progress operation (FR-9.3 and the rewriting operations).
+   *
+   * Destructive — the worktree returns to the state before the operation began —
+   * so the panel arms it behind the §4.3 two-click confirmation.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param kind - Which operation the panel believes is in progress.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  abortOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Create a new commit that reverses one existing commit — "还原此提交".
+   *
+   * Unlike {@link undoCommit} this acts on any commit, and unlike it the result
+   * is never a rewritten history: the reversed changes land in a NEW commit, so
+   * a published branch is safe. A merge commit is refused (reversing one needs a
+   * mainline choice, which is a terminal's business).
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - The commit to reverse, validated before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  revertCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Apply one commit's changes to the current branch — "捡取此提交".
+   *
+   * A merge commit is refused for the same reason as {@link revertCommit}. A
+   * commit whose changes are already present leaves git with an empty pick; the
+   * host abandons that half-started state and answers `bad-request` rather than
+   * leaving the panel showing an operation with nothing to do.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - The commit to pick, validated before any git call.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  cherryPick(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Move the current branch to a commit — "重置到此提交" (FR beyond the doc's list).
+   *
+   * `soft` keeps index and worktree, `mixed` keeps the worktree and empties the
+   * index, `hard` discards both. All three rewrite where the branch points, so
+   * the panel arms each entry and the host audits it.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - Where the branch should point.
+   * @param mode - How much of the current state to keep.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  resetTo(
+    sessionId: string,
+    hash: string,
+    mode: ResetMode,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Rewrite one commit away — fold it into its parent, or drop it.
+   *
+   * Both are `git rebase` under the hood and both rewrite everything after the
+   * target, so the host refuses the cases where that would change more than the
+   * user asked for: a merge commit as the target, a target that is not an
+   * ancestor of HEAD, a merge commit anywhere in `target..HEAD` (the panel does
+   * not linearise a branch on the user's behalf), a detached HEAD, and any
+   * operation already in progress.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param hash - The commit to rewrite away, validated before any git call.
+   * @param action - Whether to fold it into its parent or drop it.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  rewriteCommit(
+    sessionId: string,
+    hash: string,
+    action: RewriteAction,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
   /**
    * Write a commit message for what is staged, with the language model (FR-3.5).
    *
@@ -832,17 +963,86 @@ export interface GitRemoteClient {
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>
   /**
-   * Commit a merge whose conflicts are all resolved (FR-9.3).
+   * Conclude an in-progress operation whose conflicts are all resolved.
    * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param kind - Which operation the panel believes is in progress.
    * @param signal - Cancels the request when the tab goes away.
    */
-  continueMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  continueOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
   /**
-   * Abandon an in-progress merge (FR-9.3).
+   * Skip the commit blocking an in-progress rebase.
    * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param kind - Which operation the panel believes is in progress.
    * @param signal - Cancels the request when the tab goes away.
    */
-  abortMerge(sessionId: string, signal?: AbortSignal): Promise<Result<OperationReport>>
+  skipOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Abandon an in-progress operation (FR-9.3 and the rewriting operations).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param kind - Which operation the panel believes is in progress.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  abortOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Create a new commit reversing one existing commit ("还原此提交").
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - The commit to reverse.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  revertCommit(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Apply one commit's changes to the current branch ("捡取此提交").
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - The commit to pick.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  cherryPick(
+    sessionId: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Move the current branch to a commit ("重置到此提交").
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - Where the branch should point.
+   * @param mode - How much of the current state to keep.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  resetTo(
+    sessionId: string,
+    hash: string,
+    mode: ResetMode,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Fold one commit into its parent, or drop it ("压缩 / 丢弃此提交").
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param hash - The commit to rewrite away.
+   * @param action - Whether to fold it into its parent or drop it.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  rewriteCommit(
+    sessionId: string,
+    hash: string,
+    action: RewriteAction,
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
   /**
    * Write a commit message for the staged diff (FR-3.5).
    * @param sessionId - Opaque session identity, supplied by the slot.

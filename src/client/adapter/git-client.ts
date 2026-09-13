@@ -31,11 +31,14 @@ import type {
   CommitDetail,
   CommitInfo,
   GeneratedMessage,
+  InProgressOperation,
   LogPage,
   RemoteBranchRef,
   RepoListing,
   OperationReport,
   RepoStatus,
+  ResetMode,
+  RewriteAction,
   FileDiff,
   StashEntry,
   UndoResult,
@@ -198,10 +201,12 @@ export function createGitRemoteClient(): GitRemoteClient {
       mutate<OperationReport>('/createBranch', { session: sessionId, name, base }, signal),
     deleteBranch: (sessionId, name, force, signal) =>
       mutate<OperationReport>('/deleteBranch', { session: sessionId, name, force }, signal),
-    continueMerge: (sessionId, signal) =>
-      mutate<OperationReport>('/continueMerge', { session: sessionId }, signal),
-    abortMerge: (sessionId, signal) =>
-      mutate<OperationReport>('/abortMerge', { session: sessionId }, signal),
+    continueOperation: (sessionId, kind: InProgressOperation, signal) =>
+      mutate<OperationReport>('/continueOperation', { session: sessionId, kind }, signal),
+    skipOperation: (sessionId, kind: InProgressOperation, signal) =>
+      mutate<OperationReport>('/skipOperation', { session: sessionId, kind }, signal),
+    abortOperation: (sessionId, kind: InProgressOperation, signal) =>
+      mutate<OperationReport>('/abortOperation', { session: sessionId, kind }, signal),
     generateCommitMessage: (sessionId, locale, signal) =>
       mutate<GeneratedMessage>(
         '/generateCommitMessage',
@@ -212,6 +217,14 @@ export function createGitRemoteClient(): GitRemoteClient {
       request<CommitDetail>('/showCommit', { session: sessionId, hash }, signal),
     undoCommit: (sessionId, hash, signal) =>
       mutate<UndoResult>('/undoCommit', { session: sessionId, hash }, signal),
+    revertCommit: (sessionId, hash, signal) =>
+      mutate<OperationReport>('/revertCommit', { session: sessionId, hash }, signal),
+    cherryPick: (sessionId, hash, signal) =>
+      mutate<OperationReport>('/cherryPick', { session: sessionId, hash }, signal),
+    resetTo: (sessionId, hash, mode: ResetMode, signal) =>
+      mutate<OperationReport>('/reset', { session: sessionId, hash, mode }, signal),
+    rewriteCommit: (sessionId, hash, action: RewriteAction, signal) =>
+      mutate<OperationReport>('/rewrite', { session: sessionId, hash, action }, signal),
 
     stashes: (sessionId, signal) =>
       request<readonly StashEntry[]>('/stashes', { session: sessionId }, signal),

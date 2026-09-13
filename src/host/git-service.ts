@@ -17,6 +17,7 @@ import { parseUnifiedDiff } from '../core/diff-parse.ts'
 import { originOf } from '../core/remote-origin.ts'
 import { buildAskpass } from './askpass.ts'
 import { discoverRepos, type RunCapture } from './repo-discovery.ts'
+import { buildSequenceEditor } from './sequence-editor.ts'
 import {
   changedPathCount,
   groupsOf,
@@ -34,6 +35,7 @@ import {
 import type {
   GitAskPass,
   GitCredential,
+  GitEditorControl,
   GitPanelError,
   GitRunResult,
   GitRunner,
@@ -51,11 +53,14 @@ import type {
   FileChange,
   FileDiff,
   GeneratedMessage,
+  InProgressOperation,
   LogPage,
   OperationReport,
   RemoteBranchRef,
   RepoListing,
   RepoStatus,
+  ResetMode,
+  RewriteAction,
   StashEntry,
   UndoResult,
 } from '../core/types.ts'
@@ -65,7 +70,10 @@ import {
   validateCredential,
   validateHash,
   validateMessage,
+  validateOperationKind,
   validatePaths,
+  validateResetMode,
+  validateRewriteAction,
   validateStashMessage,
 } from '../core/validate.ts'
 import { gitDirOf } from './git-dir.ts'
@@ -173,6 +181,34 @@ function auditPaths(paths: readonly string[]): string {
     : `${shown} … (+${paths.length - MAX_AUDIT_PATHS} more)`
 }
 
+/**
+ * Deadline for one history-rewriting call.
+ *
+ * A rewrite replays every commit after its target through a fresh rebase — many
+ * git operations inside one process — so the ordinary 15s deadline, sized for a
+ * single read, would cut a legitimate rewrite off. It is still a bound: a rebase
+ * that has not finished in a minute is reported as a timeout rather than pinning
+ * the request open, and a rebase left mid-flight by that is exactly what the
+ * panel's operation bar offers to continue or abandon.
+ */
+const REWRITE_TIMEOUT_MS = 60_000
+
+/**
+ * Extra options one {@link run} call may carry.
+ *
+ * A struct rather than more positional parameters: `run` already takes the
+ * argument list, the directory and the lock flag, and two more booleans-in-
+ * disguise at the call site would be unreadable.
+ */
+interface RunExtras {
+  /** Credentials to answer this call's HTTPS prompts with. */
+  readonly askpass?: GitAskPass
+  /** Editor suppression for a call that would otherwise open one. */
+  readonly editor?: GitEditorControl
+  /** Deadline for this call, when it needs more than the host's default. */
+  readonly timeoutMs?: number
+}
+
 /** A failure the panel recognises, and the code it earns. */
 interface FailurePattern {
   /** Tested against both streams' text. */
@@ -228,10 +264,13 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     // FR-4.4's state, given a code of its own: git refuses a branch switch (and a
     // stash apply) rather than overwriting local work, and the panel offers the
     // "stash, then switch" shortcut exactly here — which it can only do if this
-    // refusal is distinguishable from every other one git prints. Both of git's
-    // spellings are covered: "would be overwritten by checkout" for a switch,
-    // "…by merge" for a stash apply.
-    pattern: /would be overwritten by (checkout|merge)/iu,
+    // refusal is distinguishable from every other one git prints. Four spellings
+    // are covered: git names the operation it would have overwritten with
+    // ("…by checkout/merge/cherry-pick/revert"), and a rebase refuses in its own
+    // words instead ("cannot rebase: You have unstaged changes"). All four are
+    // the same answer to the user: commit or stash first.
+    pattern:
+      /would be overwritten by (checkout|merge|cherry-pick|revert)|cannot rebase: (You have unstaged changes|Your index contains uncommitted changes)/iu,
     code: 'dirty-worktree',
     message: 'local changes would be overwritten, so the operation was refused',
   },
@@ -366,14 +405,18 @@ export function createGitService(
    * @param cwd - Directory to run in.
    * @param optionalLocks - Whether this call may take git's optional locks.
    */
-  const options = (cwd: string, optionalLocks: boolean, askpass?: GitAskPass) => ({
+  const options = (cwd: string, optionalLocks: boolean, extras: RunExtras = {}) => ({
     cwd,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    // A call that needs a longer deadline than the host's default says so itself
+    // (rewrites do, see REWRITE_TIMEOUT_MS); the spread order lets it win.
+    ...(extras.timeoutMs === undefined ? {} : { timeoutMs: extras.timeoutMs }),
     ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
     // See GitRunOptions.optionalLocks: a read must not rewrite the index the
     // probe watches, and a write must be able to take its lock.
     optionalLocks,
-    ...(askpass === undefined ? {} : { askpass }),
+    ...(extras.askpass === undefined ? {} : { askpass: extras.askpass }),
+    ...(extras.editor === undefined ? {} : { editor: extras.editor }),
   })
 
   /**
@@ -398,16 +441,17 @@ export function createGitService(
    * @param cwd - Directory to run in.
    * @param optionalLocks - Whether this call may take git's optional locks;
    *   every mutation passes `true`, every read leaves it `false`.
-   * @param askpass - Credentials to answer this call's HTTPS prompts with.
+   * @param extras - Credentials, editor suppression, and a longer deadline when
+   *   the call needs one.
    * @returns The run, or the panel-level failure it mapped to.
    */
   async function run(
     args: readonly string[],
     cwd: string,
     optionalLocks = false,
-    askpass?: GitAskPass,
+    extras: RunExtras = {},
   ): Promise<Result<GitRunResult>> {
-    const outcome = await runner.run(args, options(cwd, optionalLocks, askpass))
+    const outcome = await runner.run(args, options(cwd, optionalLocks, extras))
 
     if (outcome.spawnFailed) {
       return fail('git-missing', 'git is not installed, or not on this process’ PATH')
@@ -536,7 +580,7 @@ export function createGitService(
         root: root.value,
         branch: parsed.branch,
         groups: groupsOf(parsed.entries),
-        merging: await mergeInProgress(root.value),
+        operation: await operationInProgress(root.value),
         // §8.4: a listing cut at the cap is reported as incomplete rather than
         // quietly presented as the whole truth.
         truncated: outcome.value.truncated,
@@ -862,7 +906,7 @@ export function createGitService(
       if (!remote.ok) return remote
       args.push('--set-upstream', remote.value, info.name)
     }
-    const outcome = await run(args, root.value, true, await askpassFor(root.value))
+    const outcome = await run(args, root.value, true, { askpass: await askpassFor(root.value) })
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: pushed ${info.name} in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
@@ -893,7 +937,7 @@ export function createGitService(
       ['pull', '--no-rebase', '--no-edit'],
       root.value,
       true,
-      await askpassFor(root.value),
+      { askpass: await askpassFor(root.value) },
     )
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: pulled ${info.name} in ${root.value}`)
@@ -924,7 +968,9 @@ export function createGitService(
     if (remotes.value.stdout.trim() === '') {
       return fail('bad-request', 'this repository has no remote to fetch from')
     }
-    const outcome = await run(['fetch', '--all'], root.value, true, await askpassFor(root.value))
+    const outcome = await run(['fetch', '--all'], root.value, true, {
+      askpass: await askpassFor(root.value),
+    })
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: fetched every remote in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
@@ -1103,24 +1149,35 @@ export function createGitService(
   }
 
   /**
-   * Whether a merge is waiting to be concluded (FR-9.3).
+   * Which operation git is part-way through, if any.
    *
-   * `MERGE_HEAD` is the whole answer, and it is the one thing `git status
-   * --porcelain=v2` does not print: once every conflicted path has been staged,
-   * the unmerged list is empty while the merge is still open — which is exactly
-   * the state "continue / abort the merge" belongs to. The file is stat-ed rather
-   * than asked about, the same way the git state probe already treats it.
+   * Each is a marker file (or directory) in the git directory, and none of them
+   * is something `git status --porcelain=v2` prints: once every conflicted path
+   * has been staged the unmerged list is empty while the operation is still open
+   * — which is exactly the state "continue / skip / abort" belongs to. The
+   * markers are stat-ed rather than asked about, the same way the git state probe
+   * already treats them, and the order below is the order the panel names them.
    * @param root - Repository root.
-   * @returns Whether a merge is in progress.
+   * @returns The operation, or `null` when the repository is not part-way through one.
    */
-  async function mergeInProgress(root: string): Promise<boolean> {
-    try {
-      const dir = await gitDirOf(root)
-      await stat(join(dir, 'MERGE_HEAD'))
-      return true
-    } catch {
-      return false
+  async function operationInProgress(root: string): Promise<InProgressOperation | null> {
+    const dir = await gitDirOf(root)
+    const has = async (name: string): Promise<boolean> => {
+      try {
+        await stat(join(dir, name))
+        return true
+      } catch {
+        return false
+      }
     }
+    if (await has('MERGE_HEAD')) return 'merge'
+    if (await has('REVERT_HEAD')) return 'revert'
+    if (await has('CHERRY_PICK_HEAD')) return 'cherry-pick'
+    // A rewrite in flight: `rebase-merge` is the interactive backend (what a
+    // squash or drop uses), `rebase-apply` the `am` one. Either way it is the
+    // rebase the panel must offer to continue, skip or abandon.
+    if ((await has('rebase-merge')) || (await has('rebase-apply'))) return 'rebase'
+    return null
   }
 
   /**
@@ -1235,36 +1292,110 @@ export function createGitService(
   }
 
   /**
-   * Conclude a merge whose conflicts are all resolved (FR-9.3).
-   * @param sessionId - Session whose repository to act on.
+   * Resolve the operation a continue / skip / abort is meant for.
+   *
+   * The kind the browser sent is a claim about what it last saw, and the host
+   * re-reads its own state and requires the two to agree: running the wrong
+   * `--abort` — a `merge --abort` for a stopped cherry-pick, say — is not a
+   * refusal the user could recover from, so it must not be reachable.
+   * @param root - Repository root.
+   * @param kind - The operation the panel believes is in progress.
+   * @returns The confirmed kind, or the refusal.
    */
-  async function continueMerge(sessionId: string): Promise<Result<OperationReport>> {
+  async function requireOperation(
+    root: string,
+    kind: InProgressOperation,
+  ): Promise<Result<InProgressOperation>> {
+    const actual = await operationInProgress(root)
+    if (actual === null) {
+      return fail('bad-request', 'no operation is in progress')
+    }
+    if (actual !== kind) {
+      return fail('bad-request', `a ${actual} is in progress, not a ${kind}`)
+    }
+    return { ok: true, value: actual }
+  }
+
+  /**
+   * Conclude an in-progress operation whose conflicts are all resolved.
+   *
+   * A merge is concluded with git's own `MERGE_MSG` (`commit --no-edit`), which
+   * is what the panel has always done. The other three have a `--continue` of
+   * their own — the one that knows how to advance a sequencer — and it may open
+   * a message editor, which `editor: {}` is there to keep from waiting for a
+   * terminal.
+   * @param sessionId - Session whose repository to act on.
+   * @param kind - Which operation the panel believes is in progress.
+   */
+  async function continueOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateOperationKind(kind)
+    if (!valid.ok) return valid
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
-    if (!(await mergeInProgress(root.value))) {
-      return fail('bad-request', 'no merge is in progress')
-    }
-    // `--no-edit` takes git's own MERGE_MSG: there is no editor here, and the
-    // merge's message was written when the merge started.
-    const outcome = await run(['commit', '--no-edit'], root.value, true)
+    const current = await requireOperation(root.value, valid.value)
+    if (!current.ok) return current
+    const outcome =
+      valid.value === 'merge'
+        ? await run(['commit', '--no-edit'], root.value, true)
+        : await run([valid.value, '--continue'], root.value, true, { editor: {} })
     if (!outcome.ok) return outcome
-    ports.log('info', `git-panel: concluded the merge in ${root.value}`)
+    ports.log('info', `git-panel: continued the ${valid.value} in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
   }
 
   /**
-   * Abandon an in-progress merge (FR-9.3).
+   * Skip the commit blocking an in-progress rebase.
+   *
+   * Only a rebase has this move, and it is the one that gets a user out of a
+   * pick which became empty — `--continue` would fail on it and `--abort` would
+   * throw the whole rewrite away.
    * @param sessionId - Session whose repository to act on.
+   * @param kind - Which operation the panel believes is in progress.
    */
-  async function abortMerge(sessionId: string): Promise<Result<OperationReport>> {
+  async function skipOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateOperationKind(kind)
+    if (!valid.ok) return valid
+    if (valid.value !== 'rebase') {
+      return fail('bad-request', `only a rebase has a commit to skip, not a ${valid.value}`)
+    }
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
-    if (!(await mergeInProgress(root.value))) {
-      return fail('bad-request', 'no merge is in progress')
-    }
-    const outcome = await run(['merge', '--abort'], root.value, true)
+    const current = await requireOperation(root.value, valid.value)
+    if (!current.ok) return current
+    const outcome = await run(['rebase', '--skip'], root.value, true, { editor: {} })
     if (!outcome.ok) return outcome
-    ports.log('info', `git-panel: aborted the merge in ${root.value}`)
+    ports.log('info', `git-panel: skipped a commit in the rebase in ${root.value}`)
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Abandon an in-progress operation (FR-9.3 and the rewriting operations).
+   *
+   * Each kind answers to its own `--abort`, and the git subcommand has the same
+   * name as the kind here — that is exactly why the kind is re-checked before it
+   * is used as one.
+   * @param sessionId - Session whose repository to act on.
+   * @param kind - Which operation the panel believes is in progress.
+   */
+  async function abortOperation(
+    sessionId: string,
+    kind: InProgressOperation,
+  ): Promise<Result<OperationReport>> {
+    const valid = validateOperationKind(kind)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const current = await requireOperation(root.value, valid.value)
+    if (!current.ok) return current
+    const outcome = await run([valid.value, '--abort'], root.value, true)
+    if (!outcome.ok) return outcome
+    ports.log('info', `git-panel: aborted the ${valid.value} in ${root.value}`)
     return { ok: true, value: reportOf(outcome.value) }
   }
 
@@ -1307,6 +1438,30 @@ export function createGitService(
   }
 
   /**
+   * Read one commit's metadata by hash.
+   *
+   * One `log -1` in the same format the history list uses, so a row and the
+   * operations acting on it can never describe different commits. An unknown
+   * hash is a refusal with a sentence rather than git's exit code, because every
+   * rewriting operation starts here and "no such commit" is the user's to fix.
+   * @param root - Repository root.
+   * @param hash - Already-validated commit hash.
+   * @returns The commit, or the refusal.
+   */
+  async function readCommit(root: string, hash: string): Promise<Result<CommitInfo>> {
+    const meta = await run(
+      ['log', '-1', '--date=iso-strict', `--format=${LOG_FORMAT}`, hash],
+      root,
+    )
+    if (!meta.ok) return meta
+    const commit = parseLog(meta.value.stdout).commits[0]
+    if (commit === undefined) {
+      return fail('bad-request', `no commit matches ${hash}`)
+    }
+    return { ok: true, value: commit }
+  }
+
+  /**
    * Read one commit's metadata and its file list (FR-3.6).
    *
    * The metadata comes from the same `LOG_FORMAT` the list is parsed with, so a
@@ -1321,27 +1476,20 @@ export function createGitService(
     const root = await repoRoot(sessionId)
     if (!root.ok) return root
 
-    const meta = await run(
-      ['log', '-1', '--date=iso-strict', `--format=${LOG_FORMAT}`, valid.value],
-      root.value,
-    )
-    if (!meta.ok) return meta
-    const commit = parseLog(meta.value.stdout).commits[0]
-    if (commit === undefined) {
-      return fail('bad-request', `no commit matches ${valid.value}`)
-    }
+    const commit = await readCommit(root.value, valid.value)
+    if (!commit.ok) return commit
 
     // A merge has two diffs and `git show` prints neither by default; against
     // the first parent is the one every forge shows, so that is the one the
     // detail lists. A normal commit needs no flag at all.
     const stats = await run(
-      commit.parents.length > 1
+      commit.value.parents.length > 1
         ? ['show', '--numstat', '--format=', '-m', '--first-parent', valid.value]
         : ['show', '--numstat', '--format=', valid.value],
       root.value,
     )
     if (!stats.ok) return stats
-    return { ok: true, value: { commit, files: parseNumstat(stats.value.stdout) } }
+    return { ok: true, value: { commit: commit.value, files: parseNumstat(stats.value.stdout) } }
   }
 
   /**
@@ -1444,6 +1592,254 @@ export function createGitService(
     if (!outcome.ok) return outcome
     ports.log('info', `git-panel: undid ${commit.shortOid} in ${root.value} via revert: ${commit.subject}`)
     return { ok: true, value: { mode: 'revert', shortOid: commit.shortOid, subject: commit.subject } }
+  }
+
+  /**
+   * Create a NEW commit that reverses one existing commit — "还原此提交".
+   *
+   * Acts on any commit, and never rewrites history: the reversal is a commit of
+   * its own, so this is safe on a published branch. A merge commit is refused
+   * for the reason {@link undoCommit} refuses one — reversing it needs `-m` and
+   * a mainline choice.
+   * @param sessionId - Session whose repository to act on.
+   * @param hash - The commit to reverse.
+   */
+  async function revertCommit(sessionId: string, hash: string): Promise<Result<OperationReport>> {
+    const valid = validateHash(hash)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const commit = await readCommit(root.value, valid.value)
+    if (!commit.ok) return commit
+    if (commit.value.parents.length > 1) {
+      return fail(
+        'bad-request',
+        'that is a merge commit; reversing one needs a mainline choice (git revert -m), which is a terminal’s business',
+      )
+    }
+    const outcome = await run(['revert', '--no-edit', valid.value], root.value, true)
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: which commit, where, and that it was a reversal.
+    ports.log(
+      'info',
+      `git-panel: reverted ${commit.value.shortOid} in ${root.value}: ${commit.value.subject}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Apply one commit's changes to the current branch — "捡取此提交".
+   *
+   * A merge commit is refused for the same reason as {@link revertCommit}. When
+   * git finds nothing to apply it stops with its sequencer still open — but
+   * nothing was applied, so the half-started state is abandoned here rather than
+   * handed to the panel as an operation with nothing to do.
+   * @param sessionId - Session whose repository to act on.
+   * @param hash - The commit to pick.
+   */
+  async function cherryPick(sessionId: string, hash: string): Promise<Result<OperationReport>> {
+    const valid = validateHash(hash)
+    if (!valid.ok) return valid
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const commit = await readCommit(root.value, valid.value)
+    if (!commit.ok) return commit
+    if (commit.value.parents.length > 1) {
+      return fail(
+        'bad-request',
+        'that is a merge commit; picking one needs a mainline choice (git cherry-pick -m), which is a terminal’s business',
+      )
+    }
+    const outcome = await run(['cherry-pick', valid.value], root.value, true)
+    if (!outcome.ok) {
+      // git's own words for "the change is already here" — the only failure that
+      // leaves a sequencer with nothing in it.
+      if (/cherry-pick is now empty/iu.test(outcome.error.detail ?? '')) {
+        await run(['cherry-pick', '--abort'], root.value, true)
+        return fail(
+          'bad-request',
+          'that commit’s changes are already present here, so there was nothing to pick',
+        )
+      }
+      return outcome
+    }
+    ports.log(
+      'info',
+      `git-panel: picked ${commit.value.shortOid} in ${root.value}: ${commit.value.subject}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Move the current branch to a commit — "重置到此提交".
+   *
+   * git decides what survives: `soft` keeps the index and the working tree,
+   * `mixed` keeps the working tree, `hard` keeps neither. The mode is re-checked
+   * here rather than trusted (it becomes a flag), and the target is read first so
+   * an unknown hash is a sentence instead of a process.
+   * @param sessionId - Session whose repository to act on.
+   * @param hash - Where the branch should point.
+   * @param mode - How much of the current state to keep.
+   */
+  async function resetTo(
+    sessionId: string,
+    hash: string,
+    mode: ResetMode,
+  ): Promise<Result<OperationReport>> {
+    const validHash = validateHash(hash)
+    if (!validHash.ok) return validHash
+    const validMode = validateResetMode(mode)
+    if (!validMode.ok) return validMode
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    const commit = await readCommit(root.value, validHash.value)
+    if (!commit.ok) return commit
+    const outcome = await run(
+      ['reset', `--${validMode.value}`, validHash.value],
+      root.value,
+      true,
+    )
+    if (!outcome.ok) return outcome
+    // §5.5's audit trail: where the branch moved to, and how much was kept.
+    ports.log(
+      'info',
+      `git-panel: reset to ${commit.value.shortOid} (--${validMode.value}) in ${root.value}: ${commit.value.subject}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
+  }
+
+  /**
+   * Rewrite one commit away — fold it into its parent, or drop it.
+   *
+   * Both are a rebase of the current branch, and every refusal below exists
+   * because a rebase would otherwise succeed at something the user did not ask
+   * for:
+   *
+   * - a **merge commit** as the target has no single parent to fold into or
+   *   rebase onto;
+   * - a target that is **not an ancestor of HEAD** is not part of this branch,
+   *   so "rewriting" it would mean something else entirely;
+   * - a **merge commit after the target** would be flattened, because a plain
+   *   `rebase` linearises — the panel does not do that on the user's behalf;
+   * - a **detached HEAD** has no branch to move, and an **operation already in
+   *   progress** owns the worktree.
+   *
+   * A fold keeps the PARENT's message: the panel cannot edit messages, and a
+   * predictable result beats git's concatenation template (see the plan's D48).
+   * @param sessionId - Session whose repository to act on.
+   * @param hash - The commit to rewrite away.
+   * @param action - Whether to fold it into its parent or drop it.
+   */
+  async function rewriteCommit(
+    sessionId: string,
+    hash: string,
+    action: RewriteAction,
+  ): Promise<Result<OperationReport>> {
+    const validHash = validateHash(hash)
+    if (!validHash.ok) return validHash
+    const validAction = validateRewriteAction(action)
+    if (!validAction.ok) return validAction
+
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+    // Checked before the branch shape: a rebase leaves HEAD detached, so a
+    // rewrite attempted during one would otherwise be refused for the wrong
+    // reason ("no branch to rewrite") instead of the true one.
+    const active = await operationInProgress(root.value)
+    if (active !== null) {
+      return fail('bad-request', `a ${active} is in progress; finish or abandon it first`)
+    }
+    const branch = await currentBranch(root.value)
+    if (!branch.ok) return branch
+    if (branch.value.head === 'unborn') {
+      return fail('bad-request', 'this branch has no commits to rewrite yet')
+    }
+    if (branch.value.head !== 'branch') {
+      return fail('bad-request', 'HEAD is detached, so there is no branch to rewrite')
+    }
+
+    const target = await readCommit(root.value, validHash.value)
+    if (!target.ok) return target
+    if (target.value.parents.length > 1) {
+      return fail('bad-request', 'that is a merge commit; the panel does not rewrite a merge')
+    }
+    const ancestor = await runner.run(
+      ['merge-base', '--is-ancestor', validHash.value, 'HEAD'],
+      options(root.value, false),
+    )
+    if (ancestor.code !== 0) {
+      return fail('bad-request', 'that commit is not in this branch’s history')
+    }
+    const merges = await run(['rev-list', '--merges', `${validHash.value}..HEAD`], root.value)
+    if (!merges.ok) return merges
+    if (merges.value.stdout.trim() !== '') {
+      return fail(
+        'bad-request',
+        'there are merge commits after it, and rewriting them would flatten the branch',
+      )
+    }
+
+    const parent = target.value.parents[0]
+    if (parent === undefined) {
+      return fail(
+        'bad-request',
+        validAction.value === 'drop'
+          ? 'that is the first commit; there is no parent to rebase it away onto'
+          : 'that is the first commit; there is no parent to fold it into',
+      )
+    }
+
+    if (validAction.value === 'drop') {
+      // Replay everything after the target onto its parent: the target itself is
+      // the excluded end of the range, so it simply never comes back.
+      const outcome = await run(
+        ['rebase', '--onto', parent, validHash.value],
+        root.value,
+        true,
+        { timeoutMs: REWRITE_TIMEOUT_MS },
+      )
+      if (!outcome.ok) return outcome
+      ports.log(
+        'info',
+        `git-panel: dropped ${target.value.shortOid} in ${root.value}: ${target.value.subject}`,
+      )
+      return { ok: true, value: reportOf(outcome.value) }
+    }
+
+    // A fold is `git rebase -i` with the target's line changed to `fixup`. The
+    // base is the parent's parent, because a todo's first line has nothing to
+    // fold into; when the parent IS the root there is no such base and git's
+    // `--root` lists the root commit as the first line instead. The flags pin
+    // down everything a user's config could otherwise change: auto-squash could
+    // reorder the todo, rebase-merges would add lines the rewrite does not
+    // reason about, and auto-stash would quietly accept a dirty worktree.
+    const parentCommit = await readCommit(root.value, parent)
+    if (!parentCommit.ok) return parentCommit
+    const grandparent = parentCommit.value.parents[0]
+    const editor = await buildSequenceEditor({
+      target: validHash.value,
+      previous: parent,
+      action: 'fixup',
+    })
+    const outcome = await run(
+      [
+        'rebase',
+        '--interactive',
+        '--no-autosquash',
+        '--no-rebase-merges',
+        '--no-autostash',
+        ...(grandparent === undefined ? ['--root'] : [grandparent]),
+      ],
+      root.value,
+      true,
+      { timeoutMs: REWRITE_TIMEOUT_MS, editor },
+    )
+    if (!outcome.ok) return outcome
+    ports.log(
+      'info',
+      `git-panel: squashed ${target.value.shortOid} into ${parentCommit.value.shortOid} in ${root.value}: ${target.value.subject}`,
+    )
+    return { ok: true, value: reportOf(outcome.value) }
   }
 
   /**
@@ -1623,11 +2019,16 @@ export function createGitService(
     checkout,
     createBranch,
     deleteBranch,
-    continueMerge,
-    abortMerge,
+    continueOperation,
+    skipOperation,
+    abortOperation,
     generateCommitMessage,
     showCommit,
     undoCommit,
+    revertCommit,
+    cherryPick,
+    resetTo,
+    rewriteCommit,
     stashes: async (sessionId: string): Promise<Result<readonly StashEntry[]>> => {
       const root = await repoRoot(sessionId)
       if (!root.ok) return root

@@ -80,6 +80,32 @@ function repoWithRemote(prefix: string): { repo: string; remote: string; branch:
   return { repo, remote, branch }
 }
 
+/**
+ * A repository whose tip is a merge commit, with `side` merged into `trunk`.
+ *
+ * The rewriting operations refuse this shape (a merge has no single parent to
+ * fold into or rebase onto) and a range containing one (rewriting would flatten
+ * it), so several tests need a real merge to point at.
+ */
+function repoWithMerge(prefix: string): { repo: string; merge: string; trunk: string; side: string } {
+  const repo = makeRepo(prefix)
+  write(repo, 'a.txt', 'base\n')
+  stageAll(repo)
+  commit(repo, 'base')
+  const trunk = currentBranch(repo)
+  git(repo, ['checkout', '-q', '-b', 'side'])
+  write(repo, 's.txt', 'side\n')
+  stageAll(repo)
+  commit(repo, 'side work')
+  const side = git(repo, ['rev-parse', 'HEAD']).trim()
+  git(repo, ['checkout', '-q', trunk])
+  write(repo, 't.txt', 'trunk\n')
+  stageAll(repo)
+  commit(repo, 'trunk work')
+  git(repo, ['merge', '-q', '--no-edit', '--no-gpg-sign', 'side'])
+  return { repo, merge: git(repo, ['rev-parse', 'HEAD']).trim(), trunk, side }
+}
+
 describe('staging and unstaging', () => {
   it('stages exactly the paths it was given, and leaves the worktree alone', async () => {
     const repo = makeRepo('mut-stage')
@@ -723,6 +749,13 @@ describe('the full M2 flow', () => {
       service.repos('missing'),
       service.selectRepo('missing', '/tmp'),
       service.undoCommit('missing', 'a'.repeat(40)),
+      service.revertCommit('missing', 'a'.repeat(40)),
+      service.cherryPick('missing', 'a'.repeat(40)),
+      service.resetTo('missing', 'a'.repeat(40), 'mixed'),
+      service.rewriteCommit('missing', 'a'.repeat(40), 'drop'),
+      service.continueOperation('missing', 'merge'),
+      service.skipOperation('missing', 'rebase'),
+      service.abortOperation('missing', 'merge'),
     ])
     for (const result of results) {
       assert.equal(result.ok, false)
@@ -740,6 +773,13 @@ describe('the full M2 flow', () => {
       service.fetch('s1'),
       service.saveCredential('s1', 'https://host', 'user', 'password'),
       service.undoCommit('s1', 'a'.repeat(40)),
+      service.revertCommit('s1', 'a'.repeat(40)),
+      service.cherryPick('s1', 'a'.repeat(40)),
+      service.resetTo('s1', 'a'.repeat(40), 'mixed'),
+      service.rewriteCommit('s1', 'a'.repeat(40), 'drop'),
+      service.continueOperation('s1', 'merge'),
+      service.skipOperation('s1', 'rebase'),
+      service.abortOperation('s1', 'merge'),
     ])
     for (const result of results) {
       assert.equal(result.ok, false)
@@ -927,6 +967,469 @@ describe('undoing the newest commit (FR-3.8)', () => {
     const audit = lines.find((line) => line.includes('undid'))
     assert.ok(audit, 'an undo must be audited — the commit is gone afterwards')
     assert.match(audit ?? '', /via reset/u)
+    assert.match(audit ?? '', /second/u)
+    assert.match(audit ?? '', new RegExp(second.slice(0, 7), 'u'))
+  })
+})
+
+describe('reverting a commit ("还原此提交")', () => {
+  /** Two commits, the second rewriting `a.txt` from "one" to "two". */
+  function repoWithTwo(prefix: string): { repo: string; first: string; second: string } {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    return { repo, first, second: git(repo, ['rev-parse', 'HEAD']).trim() }
+  }
+
+  it('adds a reversing commit and leaves the target in the history', async () => {
+    const { repo, first, second } = repoWithTwo('revert-ok')
+    const result = await serviceFor({ s1: repo }).revertCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // A NEW commit, not a rewritten history: the target is still reachable.
+    assert.equal(git(repo, ['log', '--format=%s']).trim().split('\n')[0], 'Revert "second"')
+    assert.equal(git(repo, ['merge-base', '--is-ancestor', second, 'HEAD']).trim(), '')
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\n')
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.operation, null)
+    assert.notEqual(first, '')
+  })
+
+  it('reverses the root commit, which nothing else can undo', async () => {
+    // The root adds a file the later commit never touches, so reversing it is a
+    // clean deletion rather than a modify/delete conflict.
+    const repo = makeRepo('revert-root')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'b.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const before = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const result = await serviceFor({ s1: repo }).revertCommit('s1', first)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(existsSync(join(repo, 'a.txt')), false, 'reversing the root removes its files')
+    assert.equal(readFileSync(join(repo, 'b.txt'), 'utf8'), 'two\n')
+    assert.notEqual(git(repo, ['rev-parse', 'HEAD']).trim(), before)
+  })
+
+  it('refuses a merge commit rather than guessing a mainline', async () => {
+    const { repo, merge } = repoWithMerge('revert-merge')
+    const result = await serviceFor({ s1: repo }).revertCommit('s1', merge)
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.match(result.ok ? '' : result.error.message, /mainline/u)
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), merge)
+  })
+
+  it('refuses a malformed hash without touching the branch, and reports an unknown one', async () => {
+    const { repo, second } = repoWithTwo('revert-bad')
+    const service = serviceFor({ s1: repo })
+    for (const hash of ['HEAD~1', 'ZZZZ', 'abc', 'a'.repeat(41)]) {
+      const result = await service.revertCommit('s1', hash)
+      assert.equal(result.ok, false, `expected ${hash} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+    // A well-formed hash git cannot resolve is git's own answer, not a shape the
+    // panel can judge — the same rule `showCommit` follows.
+    const unknown = await service.revertCommit('s1', 'f'.repeat(40))
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.ok ? '' : unknown.error.code, 'git-failed')
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), second)
+  })
+
+  it('audits the commit and the repository (§5.5)', async () => {
+    const { repo, second } = repoWithTwo('revert-audit')
+    const lines: string[] = []
+    const service = createGitService(createGitRunner(), resolverFor({ s1: repo }), {
+      log: (_level, message) => lines.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    })
+    const result = await service.revertCommit('s1', second)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    const audit = lines.find((line) => line.includes('reverted'))
+    assert.match(audit ?? '', /second/u)
+    assert.match(audit ?? '', new RegExp(second.slice(0, 7), 'u'))
+  })
+})
+
+describe('cherry-picking a commit ("捡取此提交")', () => {
+  /** A repository on `trunk` with an unmerged `feature` branch holding one commit. */
+  function repoWithFeature(prefix: string): { repo: string; tip: string; trunk: string } {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const trunk = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'feature'])
+    write(repo, 'f.txt', 'feature\n')
+    stageAll(repo)
+    commit(repo, 'feature work')
+    const tip = git(repo, ['rev-parse', 'HEAD']).trim()
+    git(repo, ['checkout', '-q', trunk])
+    return { repo, tip, trunk }
+  }
+
+  it('applies the other branch’s commit onto this one, as a new commit', async () => {
+    const { repo, tip } = repoWithFeature('pick-ok')
+    const result = await serviceFor({ s1: repo }).cherryPick('s1', tip)
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(readFileSync(join(repo, 'f.txt'), 'utf8'), 'feature\n')
+    assert.equal(git(repo, ['log', '-1', '--format=%s']).trim(), 'feature work')
+    assert.notEqual(git(repo, ['rev-parse', 'HEAD']).trim(), tip, 'a new commit, not the same one')
+  })
+
+  it('abandons an empty pick instead of leaving an operation with nothing to do', async () => {
+    const { repo, tip } = repoWithFeature('pick-empty')
+    const service = serviceFor({ s1: repo })
+    assert.ok((await service.cherryPick('s1', tip)).ok)
+    const head = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const again = await service.cherryPick('s1', tip)
+    assert.equal(again.ok, false)
+    assert.equal(again.ok ? '' : again.error.code, 'bad-request')
+    assert.match(again.ok ? '' : again.error.message, /already present/u)
+    const status = await service.status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.operation, null, 'the half-started pick was cleaned up')
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), head)
+  })
+
+  it('leaves a conflicting pick as a cherry-pick the panel can continue or abort', async () => {
+    const repo = makeRepo('pick-conflict')
+    write(repo, 'a.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const trunk = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'feature'])
+    write(repo, 'a.txt', 'feature\n')
+    stageAll(repo)
+    commit(repo, 'feature edit')
+    const tip = git(repo, ['rev-parse', 'HEAD']).trim()
+    git(repo, ['checkout', '-q', trunk])
+    write(repo, 'a.txt', 'trunk\n')
+    stageAll(repo)
+    commit(repo, 'trunk edit')
+
+    const service = serviceFor({ s1: repo })
+    const conflicted = await service.cherryPick('s1', tip)
+    assert.equal(conflicted.ok, false)
+    assert.equal(conflicted.ok ? '' : conflicted.error.code, 'conflict')
+    const status = await service.status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.operation, 'cherry-pick')
+    assert.deepEqual(status.value.groups.conflicted.map((e) => e.path), ['a.txt'])
+
+    // Abandoning it puts the worktree back exactly where it was.
+    const aborted = await service.abortOperation('s1', 'cherry-pick')
+    assert.ok(aborted.ok, aborted.ok ? '' : JSON.stringify(aborted.error))
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.operation, null)
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'trunk\n')
+  })
+
+  it('refuses a merge commit rather than guessing a mainline', async () => {
+    const { repo, merge } = repoWithMerge('pick-merge')
+    const result = await serviceFor({ s1: repo }).cherryPick('s1', merge)
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    assert.match(result.ok ? '' : result.error.message, /mainline/u)
+  })
+})
+
+describe('resetting to a commit ("重置到此提交")', () => {
+  /** Two commits, the second rewriting `a.txt` to "two", plus a worktree edit. */
+  function repoWithEdit(prefix: string): { repo: string; first: string; second: string } {
+    const repo = makeRepo(prefix)
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'uncommitted\n')
+    return { repo, first, second }
+  }
+
+  it('soft keeps both the index and the worktree', async () => {
+    const { repo, first } = repoWithEdit('reset-soft')
+    const result = await serviceFor({ s1: repo }).resetTo('s1', first, 'soft')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+    // The second commit's content is still staged, and the uncommitted edit is
+    // still in the worktree.
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'uncommitted\n')
+    assert.deepEqual(
+      git(repo, ['diff', '--cached', '--name-only']).trim().split('\n').filter((line) => line !== ''),
+      ['a.txt'],
+    )
+  })
+
+  it('mixed keeps the worktree and empties the index', async () => {
+    const { repo, first } = repoWithEdit('reset-mixed')
+    const result = await serviceFor({ s1: repo }).resetTo('s1', first, 'mixed')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'uncommitted\n')
+    assert.equal(git(repo, ['diff', '--cached', '--name-only']).trim(), '')
+  })
+
+  it('hard discards what was uncommitted — which is why it arms in the panel', async () => {
+    const { repo, first } = repoWithEdit('reset-hard')
+    const result = await serviceFor({ s1: repo }).resetTo('s1', first, 'hard')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\n')
+    assert.equal(git(repo, ['status', '--porcelain']).trim(), '')
+  })
+
+  it('refuses a mode outside the three, and reports an unknown commit', async () => {
+    const { repo, second } = repoWithEdit('reset-bad')
+    const service = serviceFor({ s1: repo })
+    const badMode = await service.resetTo('s1', second, 'explode' as never)
+    assert.equal(badMode.ok, false)
+    assert.equal(badMode.ok ? '' : badMode.error.code, 'bad-request')
+    const unknown = await service.resetTo('s1', 'f'.repeat(40), 'mixed')
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.ok ? '' : unknown.error.code, 'git-failed')
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), second)
+  })
+
+  it('audits the target and the mode (§5.5)', async () => {
+    const { repo, first } = repoWithEdit('reset-audit')
+    const lines: string[] = []
+    const service = createGitService(createGitRunner(), resolverFor({ s1: repo }), {
+      log: (_level, message) => lines.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    })
+    const result = await service.resetTo('s1', first, 'mixed')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    const audit = lines.find((line) => line.includes('reset to'))
+    assert.match(audit ?? '', /--mixed/u)
+    assert.match(audit ?? '', /first/u)
+  })
+})
+
+describe('rewriting a commit ("压缩 / 丢弃此提交")', () => {
+  /** A linear history whose commits touch separate files, so any replay applies cleanly. */
+  function repoWithFiles(prefix: string, subjects: readonly string[]): string {
+    const repo = makeRepo(prefix)
+    subjects.forEach((subject, index) => {
+      write(repo, `f${index}.txt`, `${index + 1}\n`)
+      stageAll(repo)
+      commit(repo, subject)
+    })
+    return repo
+  }
+
+  /** A linear history whose commits edit the SAME file, so a replay can conflict. */
+  function repoWithChain(prefix: string): string {
+    const repo = makeRepo(prefix)
+    for (const [index, subject] of ['first', 'second', 'third'].entries()) {
+      write(repo, 'a.txt', `${index + 1}\n`)
+      stageAll(repo)
+      commit(repo, subject)
+    }
+    return repo
+  }
+
+  it('folds a commit into its parent, keeping the parent’s message', async () => {
+    const repo = repoWithFiles('rewrite-squash', ['first', 'second', 'third'])
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const result = await serviceFor({ s1: repo }).rewriteCommit('s1', second, 'squash')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    assert.deepEqual(git(repo, ['log', '--format=%s', '--reverse']).trim().split('\n'), [
+      'first',
+      'third',
+    ])
+    // The fold carries both files — the old second commit's tree — under the
+    // parent's message. Those are the two halves of "squash, keeping the parent's
+    // message".
+    assert.equal(git(repo, ['log', '-1', '--format=%s', 'HEAD~1']).trim(), 'first')
+    assert.deepEqual(git(repo, ['ls-tree', '-r', '--name-only', 'HEAD~1']).trim().split('\n'), [
+      'f0.txt',
+      'f1.txt',
+    ])
+  })
+
+  it('folds the second commit into the root, which has no grandparent', async () => {
+    const repo = repoWithFiles('rewrite-root', ['first', 'second'])
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await serviceFor({ s1: repo }).rewriteCommit('s1', second, 'squash')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(git(repo, ['rev-list', '--count', 'HEAD']).trim(), '1')
+    assert.equal(git(repo, ['log', '-1', '--format=%s']).trim(), 'first')
+    assert.deepEqual(git(repo, ['ls-tree', '-r', '--name-only', 'HEAD']).trim().split('\n'), [
+      'f0.txt',
+      'f1.txt',
+    ])
+  })
+
+  it('drops a commit and replays the ones after it', async () => {
+    const repo = repoWithFiles('rewrite-drop', ['first', 'second', 'third'])
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const third = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await serviceFor({ s1: repo }).rewriteCommit('s1', second, 'drop')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    assert.deepEqual(git(repo, ['log', '--format=%s', '--reverse']).trim().split('\n'), [
+      'first',
+      'third',
+    ])
+    // The dropped commit is no longer reachable from HEAD...
+    assert.notEqual(gitTry(repo, ['merge-base', '--is-ancestor', second, 'HEAD']).code, 0)
+    // ...and the replayed commit is a new object, not the one it came from.
+    assert.notEqual(git(repo, ['rev-parse', 'HEAD']).trim(), third)
+    assert.equal(existsSync(join(repo, 'f1.txt')), false, 'the dropped commit’s file is gone')
+  })
+
+  it('works in a repository whose path contains a space', async () => {
+    // The rebase hands git a todo path, and that path reaches a shell; a space
+    // anywhere in it is exactly where a quoting bug would show up.
+    const repo = repoWithFiles('rewrite with space', ['first', 'second', 'third'])
+    assert.ok(repo.includes(' '), 'the fixture must really contain a space')
+    const third = git(repo, ['rev-parse', 'HEAD']).trim()
+    const result = await serviceFor({ s1: repo }).rewriteCommit('s1', third, 'squash')
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.deepEqual(git(repo, ['log', '--format=%s', '--reverse']).trim().split('\n'), [
+      'first',
+      'second',
+    ])
+  })
+
+  it('refuses a merge commit, a target outside the branch, and a range with a merge', async () => {
+    const { repo, merge } = repoWithMerge('rewrite-merges')
+    const service = serviceFor({ s1: repo })
+
+    const mergeTarget = await service.rewriteCommit('s1', merge, 'drop')
+    assert.equal(mergeTarget.ok, false)
+    assert.match(mergeTarget.ok ? '' : mergeTarget.error.message, /merge commit/u)
+
+    // The root commit's range contains the merge, so flattening it is refused
+    // rather than done quietly.
+    const root = git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim()
+    const acrossMerge = await service.rewriteCommit('s1', root, 'squash')
+    assert.equal(acrossMerge.ok, false)
+    assert.equal(acrossMerge.ok ? '' : acrossMerge.error.code, 'bad-request')
+    assert.match(acrossMerge.ok ? '' : acrossMerge.error.message, /flatten/u)
+  })
+
+  it('refuses a target that is not an ancestor of HEAD', async () => {
+    const repo = makeRepo('rewrite-not-ancestor')
+    write(repo, 'a.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const trunk = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'feature'])
+    write(repo, 'f.txt', 'feature\n')
+    stageAll(repo)
+    commit(repo, 'feature work')
+    const tip = git(repo, ['rev-parse', 'HEAD']).trim()
+    git(repo, ['checkout', '-q', trunk])
+
+    const result = await serviceFor({ s1: repo }).rewriteCommit('s1', tip, 'drop')
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.error.message, /not in this branch’s history/u)
+  })
+
+  it('refuses the first commit, and a detached HEAD', async () => {
+    const repo = repoWithFiles('rewrite-refusals', ['first', 'second'])
+    const service = serviceFor({ s1: repo })
+    const trunk = currentBranch(repo)
+    const root = git(repo, ['rev-list', '--max-parents=0', 'HEAD']).trim()
+    const first = await service.rewriteCommit('s1', root, 'drop')
+    assert.equal(first.ok, false)
+    assert.match(first.ok ? '' : first.error.message, /first commit/u)
+
+    git(repo, ['checkout', '-q', '--detach'])
+    const head = git(repo, ['rev-parse', 'HEAD']).trim()
+    const detached = await service.rewriteCommit('s1', head, 'drop')
+    assert.equal(detached.ok, false)
+    assert.match(detached.ok ? '' : detached.error.message, /detached/u)
+    git(repo, ['checkout', '-q', trunk])
+  })
+
+  it('refuses while another operation owns the worktree', async () => {
+    // A conflicting pick is left in progress on purpose; rewriting on top of it
+    // must be refused rather than fought over.
+    const repo = repoWithChain('rewrite-in-progress')
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const service = serviceFor({ s1: repo })
+    assert.equal((await service.rewriteCommit('s1', second, 'drop')).ok, false)
+
+    const status = await service.status('s1')
+    assert.ok(status.ok)
+    assert.equal(status.value.operation, 'rebase')
+    const again = await service.rewriteCommit('s1', second, 'squash')
+    assert.equal(again.ok, false)
+    assert.match(again.ok ? '' : again.error.message, /rebase is in progress/u)
+  })
+
+  it('leaves a conflicting replay as a rebase that continue can finish', async () => {
+    const repo = repoWithChain('rewrite-conflict')
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const service = serviceFor({ s1: repo })
+    const conflicted = await service.rewriteCommit('s1', second, 'drop')
+    assert.equal(conflicted.ok, false)
+    assert.equal(conflicted.ok ? '' : conflicted.error.code, 'conflict')
+
+    const during = await service.status('s1')
+    assert.ok(during.ok)
+    assert.equal(during.value.operation, 'rebase')
+    assert.deepEqual(during.value.groups.conflicted.map((e) => e.path), ['a.txt'])
+
+    // Resolve by taking the later commit's content, mark it, and continue.
+    write(repo, 'a.txt', '3\n')
+    git(repo, ['add', 'a.txt'])
+    const continued = await service.continueOperation('s1', 'rebase')
+    assert.ok(continued.ok, continued.ok ? '' : JSON.stringify(continued.error))
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.operation, null)
+    assert.deepEqual(git(repo, ['log', '--format=%s', '--reverse']).trim().split('\n'), [
+      'first',
+      'third',
+    ])
+  })
+
+  it('lets abort undo the whole rewrite', async () => {
+    const repo = repoWithChain('rewrite-abort')
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const before = git(repo, ['rev-parse', 'HEAD']).trim()
+    const service = serviceFor({ s1: repo })
+    assert.equal((await service.rewriteCommit('s1', second, 'drop')).ok, false)
+
+    const aborted = await service.abortOperation('s1', 'rebase')
+    assert.ok(aborted.ok, aborted.ok ? '' : JSON.stringify(aborted.error))
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.operation, null)
+    assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), before)
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), '3\n')
+  })
+
+  it('audits which commit was rewritten and how (§5.5)', async () => {
+    const repo = repoWithFiles('rewrite-audit', ['first', 'second', 'third'])
+    const second = git(repo, ['rev-parse', 'HEAD~1']).trim()
+    const lines: string[] = []
+    const service = createGitService(createGitRunner(), resolverFor({ s1: repo }), {
+      log: (_level, message) => lines.push(message),
+      generateText: () => Promise.reject(new Error('no model in this test')),
+    })
+    assert.ok((await service.rewriteCommit('s1', second, 'drop')).ok)
+    const audit = lines.find((line) => line.includes('dropped'))
     assert.match(audit ?? '', /second/u)
     assert.match(audit ?? '', new RegExp(second.slice(0, 7), 'u'))
   })

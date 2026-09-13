@@ -18,12 +18,16 @@
  * commit hash for `showCommit`; M5a's `undoCommit` reuses that hash validator,
  * and M5a's stash reuses it again (an entry is addressed by its commit id) while
  * adding {@link validateStashMessage}, whose "no message" case is a legal answer
- * rather than a rejection.
+ * rather than a rejection. The history row's rewriting operations add three
+ * fixed vocabularies — {@link validateResetMode}, {@link validateRewriteAction}
+ * and {@link validateOperationKind} — because each reaches git as a flag or a
+ * subcommand and must not be able to be anything else.
  *
  * @module dsh-git-panel/core/validate
  */
 
 import type { Result } from './ports.ts'
+import type { InProgressOperation, ResetMode, RewriteAction } from './types.ts'
 import { originOf } from './remote-origin.ts'
 
 /** Longest commit message accepted, in UTF-16 code units. */
@@ -155,6 +159,78 @@ export function validateHash(hash: unknown): Result<string> {
     return reject(`a commit hash must be 4 to 40 lowercase hex characters: ${hash}`)
   }
   return { ok: true, value: hash }
+}
+
+/**
+ * Accept one value out of a fixed vocabulary.
+ *
+ * The three validators below are the same rule applied to three lists: a
+ * browser-sent word that becomes a git flag or subcommand has to be one the
+ * panel itself offered, and a list is the only shape that cannot drift from the
+ * call sites — a new mode is a compile error in the union it belongs to.
+ * @param value - Whatever the request carried.
+ * @param allowed - The vocabulary, in the order the message lists it.
+ * @param label - What the value is, for the rejection sentence.
+ * @returns The accepted value, or the reason to refuse it.
+ */
+function oneOf<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  label: string,
+): Result<T> {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
+    return reject(`a ${label} must be one of ${allowed.join(', ')}`)
+  }
+  return { ok: true, value: value as T }
+}
+
+/** The reset modes the panel offers. */
+const RESET_MODES: readonly ResetMode[] = ['soft', 'mixed', 'hard']
+
+/** The two ways a commit may be rewritten away. */
+const REWRITE_ACTIONS: readonly RewriteAction[] = ['squash', 'drop']
+
+/** The four operations git can be part-way through. */
+const OPERATION_KINDS: readonly InProgressOperation[] = [
+  'merge',
+  'revert',
+  'cherry-pick',
+  'rebase',
+]
+
+/**
+ * Validate how far back a reset should reach (§5.5).
+ *
+ * Unlike a hash this is not a shape but a choice, and it decides whether the
+ * user's uncommitted work survives — so it is checked against the exact list the
+ * panel's menu offered rather than passed through as a flag-shaped string.
+ * @param mode - Whatever the request carried for `mode`.
+ * @returns The accepted mode, or the reason to refuse it.
+ */
+export function validateResetMode(mode: unknown): Result<ResetMode> {
+  return oneOf(mode, RESET_MODES, 'reset mode')
+}
+
+/**
+ * Validate how a commit should be rewritten away (§5.5).
+ * @param action - Whatever the request carried for `action`.
+ * @returns The accepted action, or the reason to refuse it.
+ */
+export function validateRewriteAction(action: unknown): Result<RewriteAction> {
+  return oneOf(action, REWRITE_ACTIONS, 'rewrite action')
+}
+
+/**
+ * Validate which in-progress operation a continue / skip / abort is for (§5.5).
+ *
+ * The host re-reads the operation it actually finds and refuses a mismatch, so
+ * this is the outer half of that check: the word has to be one of the four, and
+ * then it has to agree with the repository.
+ * @param kind - Whatever the request carried for `kind`.
+ * @returns The accepted kind, or the reason to refuse it.
+ */
+export function validateOperationKind(kind: unknown): Result<InProgressOperation> {
+  return oneOf(kind, OPERATION_KINDS, 'operation kind')
 }
 
 /**

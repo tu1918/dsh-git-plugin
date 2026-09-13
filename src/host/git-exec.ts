@@ -18,14 +18,22 @@
  *
  * `GIT_TERMINAL_PROMPT=0` means a missing credential is a fast failure rather
  * than a hang; a credential the user stored in the panel reaches git through
- * `GIT_ASKPASS` instead (see {@link GitAskPass} and `host/askpass.ts`).
+ * `GIT_ASKPASS` instead (see {@link GitAskPass} and `host/askpass.ts`). An editor
+ * is the other way a call could wait forever for a terminal, so this runner
+ * never lets one open either (see {@link GitEditorControl}).
  *
  * @module dsh-git-panel/host/git-exec
  */
 
 import { execFile } from 'node:child_process'
 import type { ExecFileException } from 'node:child_process'
-import type { GitAskPass, GitRunOptions, GitRunResult, GitRunner } from '../core/ports.ts'
+import type {
+  GitAskPass,
+  GitEditorControl,
+  GitRunOptions,
+  GitRunResult,
+  GitRunner,
+} from '../core/ports.ts'
 
 /** Default deadline: long enough for a cold `status` on a large monorepo. */
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -45,7 +53,11 @@ const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024
  * the user's locale — and a translated string would silently parse as zero
  * ahead and zero behind, which is worse than a visible failure.
  */
-function gitEnvironment(optionalLocks: boolean, askpass?: GitAskPass): NodeJS.ProcessEnv {
+function gitEnvironment(
+  optionalLocks: boolean,
+  askpass?: GitAskPass,
+  editor?: GitEditorControl,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_TERMINAL_PROMPT: '0',
@@ -76,6 +88,24 @@ function gitEnvironment(optionalLocks: boolean, askpass?: GitAskPass): NodeJS.Pr
     // Ask the helper wherever git would otherwise have prompted on a terminal
     // that does not exist, so behaviour does not depend on how the host started.
     env.GIT_ASKPASS_REQUIRE = 'force'
+  }
+
+  // Editors are the other way a git call can wait for a terminal that is not
+  // there. The plugin never needs one: a commit always carries `-m`, a revert
+  // `--no-edit`. `editor` present means this call may reach a point where git
+  // would open one anyway (`rebase --continue`), so `GIT_EDITOR=true` keeps the
+  // prepared message and returns; `sequence` names the helper that rewrites a
+  // rebase's todo list. Both are cleared when absent, for the same reason the
+  // askpass variables are: a launching shell must not inject one.
+  delete env.GIT_SEQUENCE_EDITOR
+  delete env.GIT_PANEL_SEQUENCE
+  delete env.GIT_EDITOR
+  if (editor !== undefined) {
+    env.GIT_EDITOR = 'true'
+    if (editor.sequence !== undefined) {
+      env.GIT_SEQUENCE_EDITOR = editor.sequence
+      env.GIT_PANEL_SEQUENCE = editor.spec ?? '{}'
+    }
   }
   return env
 }
@@ -136,7 +166,7 @@ export function createGitRunner(): GitRunner {
     run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
       const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
       const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES
-      const env = gitEnvironment(options.optionalLocks ?? false, options.askpass)
+      const env = gitEnvironment(options.optionalLocks ?? false, options.askpass, options.editor)
 
       // The task holds the directory's queue slot for the whole process life,
       // which is what makes the lock guarantee real.

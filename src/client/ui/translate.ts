@@ -18,6 +18,17 @@ export type Translate = (
 ) => string
 
 /**
+ * One value a sentence can carry, which may itself be a sentence.
+ *
+ * The nesting is what keeps a composed phrase translatable: "Continue the
+ * {kind}" with the kind substituted as TEXT would freeze it in whichever
+ * language was active when the notice was created, which is the bug this file
+ * exists to prevent. `say('operation.continue', { kind: say('operation.rebase') })`
+ * renders in the language that is active when it is drawn, like everything else.
+ */
+export type SentenceVar = string | number | Sentence
+
+/**
  * One sentence the panel has decided to say, before it is drawn.
  *
  * The action feedback keeps SENTENCES rather than translated strings, and that is
@@ -34,18 +45,19 @@ export type Sentence =
   | {
       readonly kind: 'key'
       readonly key: GitPanelKey
-      readonly vars?: Readonly<Record<string, string | number>>
+      readonly vars?: Readonly<Record<string, SentenceVar>>
     }
   | { readonly kind: 'raw'; readonly text: string }
 
 /**
  * A sentence this panel wrote, to be translated when it is drawn.
  * @param key - The dictionary key.
- * @param vars - Values for the key's `{name}` placeholders.
+ * @param vars - Values for the key's `{name}` placeholders; a value may itself be
+ *   a sentence, so a phrase built out of two keys stays translatable.
  */
 export function say(
   key: GitPanelKey,
-  vars?: Readonly<Record<string, string | number>>,
+  vars?: Readonly<Record<string, SentenceVar>>,
 ): Sentence {
   return { kind: 'key', key, vars }
 }
@@ -64,5 +76,11 @@ export function verbatim(text: string): Sentence {
  * @param value - The sentence to render.
  */
 export function sentence(t: Translate, value: Sentence): string {
-  return value.kind === 'raw' ? value.text : t(value.key, value.vars)
+  if (value.kind === 'raw') return value.text
+  if (value.vars === undefined) return t(value.key)
+  const vars: Record<string, string | number> = {}
+  for (const [name, entry] of Object.entries(value.vars)) {
+    vars[name] = typeof entry === 'object' ? sentence(t, entry) : entry
+  }
+  return t(value.key, vars)
 }

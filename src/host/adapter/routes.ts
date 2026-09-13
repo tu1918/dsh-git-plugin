@@ -45,6 +45,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { GitPanelError, HostPorts, WorkspaceGitService } from '../../core/ports.ts'
+import {
+  validateOperationKind,
+  validateResetMode,
+  validateRewriteAction,
+} from '../../core/validate.ts'
 import type { FileIconRegistry } from '../file-icons.ts'
 import type { GitProbe } from '../git-probe.ts'
 
@@ -95,10 +100,15 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
   'checkout',
   'createBranch',
   'deleteBranch',
-  'continueMerge',
-  'abortMerge',
+  'continueOperation',
+  'skipOperation',
+  'abortOperation',
   'generateCommitMessage',
   'undoCommit',
+  'revertCommit',
+  'cherryPick',
+  'reset',
+  'rewrite',
   'stashSave',
   'stashApply',
   'stashDrop',
@@ -488,10 +498,46 @@ export function registerGitPanelRoutes(
         if (!password.ok) return password
         return await service.saveCredential(sessionId, remote.value, username.value, password.value)
       }
-      case 'continueMerge':
-        return await service.continueMerge(sessionId)
-      case 'abortMerge':
-        return await service.abortMerge(sessionId)
+      case 'continueOperation':
+      case 'skipOperation':
+      case 'abortOperation': {
+        // The kind is required and must be one of the four: it becomes a git
+        // subcommand, and the service re-checks it against the operation it
+        // actually finds before running anything.
+        const kind = validateOperationKind(body['kind'])
+        if (!kind.ok) return kind
+        if (operation === 'continueOperation') {
+          return await service.continueOperation(sessionId, kind.value)
+        }
+        if (operation === 'skipOperation') {
+          return await service.skipOperation(sessionId, kind.value)
+        }
+        return await service.abortOperation(sessionId, kind.value)
+      }
+      case 'revertCommit': {
+        const hash = stringOf(body, 'hash')
+        if (!hash.ok) return hash
+        return await service.revertCommit(sessionId, hash.value)
+      }
+      case 'cherryPick': {
+        const hash = stringOf(body, 'hash')
+        if (!hash.ok) return hash
+        return await service.cherryPick(sessionId, hash.value)
+      }
+      case 'reset': {
+        const hash = stringOf(body, 'hash')
+        if (!hash.ok) return hash
+        const mode = validateResetMode(body['mode'])
+        if (!mode.ok) return mode
+        return await service.resetTo(sessionId, hash.value, mode.value)
+      }
+      case 'rewrite': {
+        const hash = stringOf(body, 'hash')
+        if (!hash.ok) return hash
+        const action = validateRewriteAction(body['action'])
+        if (!action.ok) return action
+        return await service.rewriteCommit(sessionId, hash.value, action.value)
+      }
       case 'generateCommitMessage': {
         // The locale decides the message's language; an absent one falls back to
         // the panel's own default instead of being an error, since it only

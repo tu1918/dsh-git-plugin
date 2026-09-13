@@ -18,7 +18,10 @@ import {
   validateCredential,
   validateHash,
   validateMessage,
+  validateOperationKind,
   validatePaths,
+  validateResetMode,
+  validateRewriteAction,
   validateStashMessage,
 } from '../src/core/validate.ts'
 
@@ -276,5 +279,40 @@ describe('credential validation (HTTPS remotes)', () => {
     assert.equal(validateCredential('https://host', 'a\u0000b', 'token').ok, false)
     assert.equal(validateCredential('https://host', 'ada', 'x'.repeat(4097)).ok, false)
     assert.equal(validateCredential('https://host', 7, 'token').ok, false)
+  })
+})
+
+describe('operation vocabulary validation (§5.5, order 9)', () => {
+  it('accepts exactly the reset modes the panel offers', () => {
+    assert.deepEqual(validateResetMode('soft'), { ok: true, value: 'soft' })
+    assert.deepEqual(validateResetMode('mixed'), { ok: true, value: 'mixed' })
+    assert.deepEqual(validateResetMode('hard'), { ok: true, value: 'hard' })
+  })
+
+  it('refuses anything else that would become a git flag', () => {
+    for (const mode of ['merge', 'HARD', '--hard', '', 7, null, undefined]) {
+      const result = validateResetMode(mode)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(mode)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+  })
+
+  it('accepts exactly the two rewrites', () => {
+    assert.deepEqual(validateRewriteAction('squash'), { ok: true, value: 'squash' })
+    assert.deepEqual(validateRewriteAction('drop'), { ok: true, value: 'drop' })
+    for (const action of ['fixup', 'reword', '--onto', 7, null]) {
+      assert.equal(validateRewriteAction(action).ok, false)
+    }
+  })
+
+  it('accepts exactly the four operations git can be part-way through', () => {
+    for (const kind of ['merge', 'revert', 'cherry-pick', 'rebase'] as const) {
+      assert.deepEqual(validateOperationKind(kind), { ok: true, value: kind })
+    }
+    // `cherry-pick` is the only hyphenated one, and its exact spelling matters:
+    // it becomes the git subcommand `git cherry-pick --abort`.
+    for (const kind of ['cherrypick', 'cherry_pick', 'am', '', 7, null]) {
+      assert.equal(validateOperationKind(kind).ok, false)
+    }
   })
 })

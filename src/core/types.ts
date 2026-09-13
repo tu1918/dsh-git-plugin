@@ -99,6 +99,25 @@ export interface BranchInfo {
   readonly head: HeadState
 }
 
+/**
+ * The operation git is part-way through, if any.
+ *
+ * Each one leaves its own marker in the git directory (`MERGE_HEAD`,
+ * `REVERT_HEAD`, `CHERRY_PICK_HEAD`, `rebase-merge/`), and each answers to its
+ * own `--continue` / `--skip` / `--abort`. The panel needs to know WHICH one,
+ * not merely that one is running: `merge --abort` on a stopped cherry-pick is
+ * not the same escape hatch.
+ */
+export type InProgressOperation =
+  /** A merge waiting to be concluded (FR-9.3). */
+  | 'merge'
+  /** The history row's "还原此提交" stopped on conflicts. */
+  | 'revert'
+  /** The "捡取此提交" counterpart, same story. */
+  | 'cherry-pick'
+  /** A rewrite (squash / drop) replaying commits, or stopped on conflicts. */
+  | 'rebase'
+
 /** One whole-repository status reading: the panel's primary payload. */
 export interface RepoStatus {
   /** Absolute repo root, resolved by `git rev-parse --show-toplevel`. */
@@ -108,13 +127,16 @@ export interface RepoStatus {
   /** The four change lists. */
   readonly groups: StatusGroups
   /**
-   * True while a merge is in progress — `MERGE_HEAD` exists.
+   * The operation waiting to be continued, or `null` when none is.
    *
    * Not derivable from {@link groups}: once every conflicted path has been
-   * marked resolved the conflict list is empty while the merge is still open, and
-   * that is exactly the state FR-9.3's "continue / abort the merge" speaks to.
+   * marked resolved the conflict list is empty while the operation is still
+   * open, and that is exactly the state "continue / skip / abort" speaks to.
+   * Any of the four can also be stopped with NO conflicts left (a rewrite whose
+   * remaining pick became empty, say), which is why this cannot be inferred from
+   * the change lists either.
    */
-  readonly merging: boolean
+  readonly operation: InProgressOperation | null
   /** True when the listing hit the host's entry cap and is incomplete. */
   readonly truncated: boolean
   /** Changed paths counted once each, including untracked and conflicted ones. */
@@ -345,6 +367,27 @@ export interface UndoResult {
   /** First line of the undone commit's message. */
   readonly subject: string
 }
+
+/**
+ * How far back `git reset` should reach when moving the branch to a commit.
+ *
+ * The three are git's own, and they differ in what they leave behind: `soft`
+ * keeps both the index and the working tree, `mixed` keeps the working tree but
+ * empties the index, and `hard` throws both away. The panel offers all three and
+ * names the difference in each entry's confirmation, because a user who picks
+ * the wrong one loses work with no undo of the loss itself.
+ */
+export type ResetMode = 'soft' | 'mixed' | 'hard'
+
+/**
+ * How one commit should be rewritten away.
+ *
+ * `squash` folds the commit into its parent, keeping the parent's message (the
+ * panel cannot edit messages, and a predictable result beats git's concatenation
+ * template — see the plan's D48). `drop` removes the commit and replays the
+ * commits that followed it.
+ */
+export type RewriteAction = 'squash' | 'drop'
 
 /**
  * One stash entry, as `git stash list` reports it (FR-6.2).

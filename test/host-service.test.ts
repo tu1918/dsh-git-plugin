@@ -1101,6 +1101,99 @@ describe('the mutation routes', () => {
     }
   })
 
+  it('runs the history-rewriting operations over POST, and refuses them over GET', async () => {
+    const repo = makeRepo('routes-rewrite')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const first = git(repo, ['rev-parse', 'HEAD']).trim()
+    write(repo, 'a.txt', 'two\n')
+    stageAll(repo)
+    commit(repo, 'second')
+    const second = git(repo, ['rev-parse', 'HEAD']).trim()
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      // 还原: a NEW commit reversing the target, so the target itself survives.
+      const reverted = await post(harness, '/git-panel/revertCommit', {
+        session: 's1',
+        hash: second,
+      })
+      assert.equal(reverted.status, 200)
+      assert.equal(((await reverted.json()) as { ok: boolean }).ok, true)
+      assert.match(git(repo, ['log', '-1', '--format=%s']).trim(), /^Revert "second"/u)
+      assert.equal(git(repo, ['rev-list', '--count', 'HEAD']).trim(), '3')
+
+      // 重置: the branch really moves, and the mode is honoured.
+      const reset = await post(harness, '/git-panel/reset', {
+        session: 's1',
+        hash: first,
+        mode: 'hard',
+      })
+      assert.equal(reset.status, 200)
+      assert.equal(((await reset.json()) as { ok: boolean }).ok, true)
+      assert.equal(git(repo, ['rev-parse', 'HEAD']).trim(), first)
+
+      // 捡取: the dropped commit comes back as a new one.
+      const picked = await post(harness, '/git-panel/cherryPick', { session: 's1', hash: second })
+      assert.equal(picked.status, 200)
+      assert.equal(((await picked.json()) as { ok: boolean }).ok, true)
+      assert.equal(git(repo, ['show', 'HEAD:a.txt']), 'two\n')
+
+      // 压缩: the picked commit folds into its parent (the root commit here).
+      const rebased = await post(harness, '/git-panel/rewrite', {
+        session: 's1',
+        hash: git(repo, ['rev-parse', 'HEAD']).trim(),
+        action: 'squash',
+      })
+      assert.equal(rebased.status, 200)
+      assert.equal(((await rebased.json()) as { ok: boolean }).ok, true)
+      assert.equal(git(repo, ['rev-list', '--count', 'HEAD']).trim(), '1')
+
+      // The two vocabularies are validated, not passed through as git flags.
+      for (const body of [
+        { session: 's1', hash: first, mode: 'explode' },
+        { session: 's1', hash: first, action: 'explode' },
+      ]) {
+        const path = body.mode === undefined ? '/git-panel/rewrite' : '/git-panel/reset'
+        const refused = await post(harness, path, body)
+        assert.equal(refused.status, 200)
+        const envelope = (await refused.json()) as { ok: boolean; error: { code: string } }
+        assert.equal(envelope.ok, false)
+        assert.equal(envelope.error.code, 'bad-request')
+      }
+
+      // With nothing in progress, all three answers are refusals in the envelope.
+      for (const [path, kind] of [
+        ['/git-panel/continueOperation', 'merge'],
+        ['/git-panel/skipOperation', 'rebase'],
+        ['/git-panel/abortOperation', 'merge'],
+      ] as const) {
+        const nothing = await post(harness, path, { session: 's1', kind })
+        assert.equal(nothing.status, 200)
+        const envelope = (await nothing.json()) as { ok: boolean; error: { code: string } }
+        assert.equal(envelope.ok, false)
+        assert.equal(envelope.error.code, 'bad-request')
+      }
+
+      // A mutation reachable by GET would be reachable by an <img> tag.
+      for (const path of [
+        '/git-panel/revertCommit',
+        '/git-panel/cherryPick',
+        '/git-panel/reset',
+        '/git-panel/rewrite',
+        '/git-panel/continueOperation',
+        '/git-panel/skipOperation',
+        '/git-panel/abortOperation',
+      ]) {
+        const viaGet = await fetch(`${harness.origin}${path}?session=s1`)
+        assert.equal(viaGet.status, 405, `${path} must not answer GET`)
+      }
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('fetches over POST, and refuses the same operation over GET', async () => {
     const repo = makeRepo('routes-fetch')
     write(repo, 'a.txt', 'one\n')
@@ -1676,15 +1769,15 @@ describe('branch management (FR-4)', () => {
     const { repo } = repoInConflict('svc-status-merging')
     const result = await serviceFor({ s1: repo }).status('s1')
     assert.ok(result.ok)
-    assert.equal(result.value.merging, true)
+    assert.equal(result.value.operation, 'merge')
     assert.deepEqual(result.value.groups.conflicted.map((e) => e.path), ['a.txt'])
   })
 
-  it('reports merging = false on an ordinary repository', async () => {
+  it('reports operation = null on an ordinary repository', async () => {
     const { repo } = repoWithBranch('svc-status-not-merging')
     const result = await serviceFor({ s1: repo }).status('s1')
     assert.ok(result.ok)
-    assert.equal(result.value.merging, false)
+    assert.equal(result.value.operation, null)
   })
 })
 
@@ -1695,16 +1788,16 @@ describe('the merge state (FR-9.3)', () => {
 
     // git refuses to commit while unmerged paths remain, and the panel's button
     // is disabled in that state; the service says so rather than lying.
-    const tooEarly = await service.continueMerge('s1')
+    const tooEarly = await service.continueOperation('s1', 'merge')
     assert.equal(tooEarly.ok, false)
 
     assert.ok((await service.stage('s1', ['a.txt'])).ok)
-    const concluded = await service.continueMerge('s1')
+    const concluded = await service.continueOperation('s1', 'merge')
     assert.ok(concluded.ok, concluded.ok ? '' : JSON.stringify(concluded.error))
 
     const after = await service.status('s1')
     assert.ok(after.ok)
-    assert.equal(after.value.merging, false)
+    assert.equal(after.value.operation, null)
     // git's own MERGE_MSG is what the commit carries; the panel invented nothing.
     assert.match(git(repo, ['log', '-1', '--format=%s']).trim(), /^Merge/u)
   })
@@ -1713,22 +1806,45 @@ describe('the merge state (FR-9.3)', () => {
     const { repo } = repoInConflict('svc-merge-abort')
     const service = serviceFor({ s1: repo })
 
-    const aborted = await service.abortMerge('s1')
+    const aborted = await service.abortOperation('s1', 'merge')
     assert.ok(aborted.ok, aborted.ok ? '' : JSON.stringify(aborted.error))
     const after = await service.status('s1')
     assert.ok(after.ok)
-    assert.equal(after.value.merging, false)
+    assert.equal(after.value.operation, null)
     assert.deepEqual(after.value.groups.conflicted, [])
     assert.equal(git(repo, ['show', 'HEAD:a.txt']), 'base\n')
   })
 
-  it('refuses both actions when no merge is in progress', async () => {
+  it('refuses continue and abort when no operation is in progress', async () => {
     const { repo } = repoWithBranch('svc-merge-none')
     const service = serviceFor({ s1: repo })
-    for (const result of [await service.continueMerge('s1'), await service.abortMerge('s1')]) {
+    for (const result of [
+      await service.continueOperation('s1', 'merge'),
+      await service.abortOperation('s1', 'merge'),
+    ]) {
       assert.equal(result.ok, false)
       assert.equal(result.ok ? '' : result.error.code, 'bad-request')
     }
+  })
+
+  it('refuses a kind that disagrees with the repository', async () => {
+    const { repo } = repoInConflict('svc-merge-kind')
+    const service = serviceFor({ s1: repo })
+    // A merge is what is really there; asking to abort a cherry-pick must not run
+    // `cherry-pick --abort` against it.
+    const mismatched = await service.abortOperation('s1', 'cherry-pick')
+    assert.equal(mismatched.ok, false)
+    assert.equal(mismatched.ok ? '' : mismatched.error.code, 'bad-request')
+    const after = await service.status('s1')
+    assert.ok(after.ok)
+    assert.equal(after.value.operation, 'merge')
+  })
+
+  it('refuses to skip anything but a rebase', async () => {
+    const { repo } = repoInConflict('svc-skip-merge')
+    const result = await serviceFor({ s1: repo }).skipOperation('s1', 'merge')
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
   })
 })
 
@@ -1766,7 +1882,7 @@ describe('git service showCommit (FR-3.6)', () => {
     const { repo } = repoInConflict('svc-show-merge')
     const service = serviceFor({ s1: repo })
     assert.ok((await service.stage('s1', ['a.txt'])).ok)
-    assert.ok((await service.continueMerge('s1')).ok)
+    assert.ok((await service.continueOperation('s1', 'merge')).ok)
 
     const head = git(repo, ['rev-parse', 'HEAD']).trim()
     const result = await service.showCommit('s1', head)
