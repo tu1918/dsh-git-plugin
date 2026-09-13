@@ -6,7 +6,15 @@
  * 1. **Every colour is a DSH token** (§4.3: "全部颜色走 DSH 设计 token, 禁写死色值").
  *    The panel must follow the user's theme — including the skin system, which
  *    rewrites these aliases — so a literal hex here would be a bug that only
- *    shows up in someone else's theme.
+ *    shows up in someone else's theme. **And the token has to exist**: eleven
+ *    declarations here used to say `--dsw-alias-fill-l2`, which no DSH version in
+ *    this profile defines (the theme package ships 79 alias tokens and has no
+ *    `fill` family at all). A `background` naming a missing token is invalid at
+ *    computed-value time, which computes to *transparent* — so those eleven
+ *    surfaces silently painted nothing, hover fills among them, until the panel
+ *    was finally looked at in a browser. Check a token against
+ *    `@deepseek-ai/dsh-client-ui-theme` before using it; the aliases we do use are
+ *    the ones that file lists.
  * 2. **Every git-typed value is set in the monospace face** (`--dsh-font-mono`):
  *    paths, branch names, hashes, and status letters. That is not decoration — it
  *    is git's own vernacular, it makes column alignment hold, and it
@@ -409,7 +417,9 @@ export const css = `
 }
 
 .${cls.branch}:hover {
-  background: var(--dsw-alias-fill-l2);
+  /* The same wash the rail's tool buttons use, so the row's controls answer to the
+     pointer in one voice. */
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .${cls.branchCaret} {
@@ -464,7 +474,10 @@ export const css = `
 }
 
 .${cls.branchPick}:hover:not(:disabled) {
-  background: var(--dsw-alias-fill-l2);
+  /* The card rows take the accent wash, like the right-click toolbar's entries:
+     the plain hover alias is 5.9% in the light theme and reads as nothing on a
+     raised card (reported from the running panel as no hover at all). */
+  background: var(--dsw-alias-interactive-bg-hover-accent);
 }
 
 .${cls.branchPick}:disabled {
@@ -658,7 +671,9 @@ export const css = `
 }
 
 .${cls.stashRow}:hover {
-  background: var(--dsw-alias-fill-l2);
+  /* Same accent wash as the branch list's rows: both are rows inside a floating
+     card, where the plain hover alias is too faint to see. */
+  background: var(--dsw-alias-interactive-bg-hover-accent);
 }
 
 .${cls.stashHead} {
@@ -721,7 +736,9 @@ export const css = `
   padding: 3px 8px;
   border: 1px solid var(--dsw-alias-state-error-primary, var(--dsw-alias-border-l3));
   border-radius: 6px;
-  background: var(--dsw-alias-fill-l2);
+  /* The danger wash rather than a neutral fill: this IS the state that says a
+     destructive click is one away, and DSH has a fill for exactly that. */
+  background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
   font: inherit;
   font-size: 11px;
@@ -737,7 +754,9 @@ export const css = `
   gap: 6px;
   padding: 6px 12px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-fill-l2);
+  /* An opaque step off the panel surface: the bar has to read as its own band
+     above the list, which a translucent wash does not do here. */
+  background: var(--dsw-alias-interactive-bg-hover-solid);
 }
 
 .${cls.mergeLabel} {
@@ -1049,7 +1068,8 @@ export const css = `
   flex: none;
   padding: 0 5px;
   border-radius: 7px;
-  background: var(--dsw-alias-fill-l2);
+  /* An opaque fill: the pill has to be a pill against the group header it sits in. */
+  background: var(--dsw-alias-interactive-bg-hover-solid);
   color: var(--dsw-alias-label-tertiary);
   font-family: var(--dsh-font-mono);
   font-size: 10px;
@@ -1170,7 +1190,9 @@ export const css = `
 .${cls.selectBox}[aria-checked='true'],
 .${cls.selectBox}[aria-checked='mixed'] {
   border-color: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3));
-  background: var(--dsw-alias-state-business-primary, var(--dsw-alias-fill-l2));
+  /* The fallbacks are for a deployment whose palette has no business ink: they
+     still have to be a visible fill rather than a token nobody defines. */
+  background: var(--dsw-alias-state-business-primary, var(--dsw-alias-label-primary));
 }
 
 /* A checked row is part of the pending batch; the faintest wash marks it,
@@ -1385,7 +1407,9 @@ export const css = `
 }
 
 .${cls.aiButton}:hover:not(:disabled) {
-  background: var(--dsw-alias-fill-l2);
+  /* On the commit box, which is the panel's own surface: the standard wash, the
+     one every other control up here uses. */
+  background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-brand-primary);
 }
 
@@ -1458,7 +1482,9 @@ export const css = `
 }
 
 .${cls.commitButton}:disabled {
-  background: var(--dsw-alias-fill-l2);
+  /* DSH's own fill for a primary button that cannot be pressed, so a disabled
+     commit button still looks like a button — just not one you can press. */
+  background: var(--dsw-alias-button-primary-dimmed);
   color: var(--dsw-alias-label-dimmed);
   cursor: default;
 }
@@ -2167,7 +2193,9 @@ export const css = `
   gap: 1px;
   padding: 1px;
   border-radius: 7px;
-  background: var(--dsw-alias-fill-l2);
+  /* The tray the segment buttons sit in: opaque, so the pair reads as one control
+     rather than two floating glyphs. */
+  background: var(--dsw-alias-interactive-bg-hover-solid);
 }
 
 .${cls.diffSegButton} {
@@ -2238,7 +2266,10 @@ export const css = `
   align-items: baseline;
   gap: 8px;
   padding: 2px 8px 2px 6px;
-  background: var(--dsw-alias-fill-l2);
+  /* A hunk header is a band across the code, and the band is what separates one
+     hunk from the next — an opaque fill, so it does not depend on the surface
+     behind it. */
+  background: var(--dsw-alias-interactive-bg-hover-solid);
   font-family: var(--dsh-font-mono);
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
