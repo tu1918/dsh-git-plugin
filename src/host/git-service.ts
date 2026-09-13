@@ -49,6 +49,7 @@ import type {
   BranchRef,
   CommitDetail,
   CommitInfo,
+  ConflictSide,
   DiffTarget,
   FileChange,
   FileDiff,
@@ -786,6 +787,77 @@ export function createGitService(
     )
     const summary = lines.map((line) => line.trim()).find((line) => line !== '') ?? ''
     return { ok: true, value: { summary, detail: detail.join('') } }
+  }
+
+  /**
+   * Resolve conflicted paths by accepting one whole side (FR-9.2).
+   *
+   * Two things make this more than a flag on `restore`:
+   *
+   * - **Which side "mine" is depends on the operation.** git names the stages
+   *   `ours`/`theirs` from the current branch's point of view, but a rebase
+   *   replays MY commits onto the other branch, so there `--ours` is the other
+   *   side and `--theirs` is mine. The browser sends the user's intent and the
+   *   host picks the stage from the operation it re-reads here — the same
+   *   execution-time recheck FR-9.4 asks for.
+   * - **`restore` alone does not resolve anything.** It writes the chosen stage
+   *   over the working tree and leaves the index unmerged; `git add` is what
+   *   collapses the three stages. Both run, so one click is one outcome.
+   *
+   * A path that is not unmerged is refused rather than resolved: `--ours` on a
+   * resolved path is not the same command, and a stale click must not overwrite
+   * the file with a stage that is no longer the question.
+   * @param sessionId - Session whose repository to act on.
+   * @param side - Which side the user accepts, in the user's words.
+   * @param paths - Repo-relative paths from the browser.
+   * @returns git's report, or the refusal that kept git from running.
+   */
+  async function resolveConflict(
+    sessionId: string,
+    side: ConflictSide,
+    paths: readonly string[],
+  ): Promise<Result<OperationReport>> {
+    const accepted = validatePaths(paths)
+    if (!accepted.ok) return accepted
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    // Which of these are still unmerged. `git diff --diff-filter=U` answers with
+    // raw paths (`-z`), unlike `ls-files -u`, whose records carry a mode/oid/stage
+    // prefix and would have to be split on a TAB that a path may itself contain.
+    const listed = await run(
+      ['diff', '--name-only', '--diff-filter=U', '-z', '--', ...accepted.value],
+      root.value,
+    )
+    if (!listed.ok) return listed
+    const unmerged = new Set(listed.value.stdout.split('\0').filter((path) => path !== ''))
+    const resolved = accepted.value.filter((path) => !unmerged.has(path))
+    if (resolved.length > 0) {
+      return fail('bad-request', `not unmerged: ${resolved.join(', ')}`)
+    }
+
+    // `--ours` is stage 2 (the current branch) everywhere except a rebase, which
+    // replays MY commits onto the other branch and therefore swaps the names.
+    const oursIsMine = (await operationInProgress(root.value)) !== 'rebase'
+    const flag = (side === 'mine') === oursIsMine ? '--ours' : '--theirs'
+
+    const restored = await run(['restore', flag, '--', ...accepted.value], root.value, true)
+    if (!restored.ok) return restored
+    const added = await run(['add', '--', ...accepted.value], root.value, true)
+    if (!added.ok) return added
+
+    // §7's M5a line: the working-tree content the user had is gone afterwards, so
+    // the log is the only record of which side replaced it.
+    ports.log(
+      'info',
+      `git-panel: accepted ${side} for ${accepted.value.length} path(s) in ${root.value}: ${auditPaths(accepted.value)}`,
+    )
+    const streams = [restored.value, added.value].flatMap((outcome) => [outcome.stdout, outcome.stderr])
+    const summary = streams
+      .flatMap((stream) => stream.split('\n'))
+      .map((line) => line.trim())
+      .find((line) => line !== '') ?? ''
+    return { ok: true, value: { summary, detail: streams.join('') } }
   }
 
   /**
@@ -2017,6 +2089,7 @@ export function createGitService(
     stage,
     unstage,
     discard,
+    resolveConflict,
     commit,
     commitAll,
     push: pushRepo,

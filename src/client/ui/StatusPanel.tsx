@@ -34,6 +34,7 @@ import type {
   RepoListing,
   ChangeArea,
   CommitInfo,
+  ConflictSide,
   DiffTarget,
   FileChange,
   InProgressOperation,
@@ -66,7 +67,7 @@ import {
 import { iconUrlsOf } from './file-icons.ts'
 import { readCollapsedGroups, writeCollapsedGroups } from './group-collapse.ts'
 import { createRepoChangeBus, RepoChangeProvider, type RepoChangeBus } from './repo-change.tsx'
-import { canDiscard } from './row-actions.ts'
+import { canDiscard, canResolveConflict } from './row-actions.ts'
 import { writeClipboard } from './clipboard.ts'
 import { useArmedKey } from './armed.ts'
 import { readRepoChoices, writeRepoChoice } from './repo-choice.ts'
@@ -75,6 +76,8 @@ import { say, sentence, verbatim, type Sentence, type Translate } from './transl
 import { NOTICE_DURATION_MS, Notice } from './notice.tsx'
 import { CredentialPrompt } from './CredentialPrompt.tsx'
 import {
+  AcceptMineGlyph,
+  AcceptTheirsGlyph,
   ArrowDownGlyph,
   ArrowUpGlyph,
   BranchGlyph,
@@ -85,6 +88,7 @@ import {
   DiscardGlyph,
   FetchGlyph,
   ListGlyph,
+  MergeGlyph,
   MinusGlyph,
   PlusGlyph,
   RefreshGlyph,
@@ -152,6 +156,7 @@ type ActionOp =
   | 'stage'
   | 'unstage'
   | 'discard'
+  | 'resolve'
   | 'commit'
   | 'push'
   | 'pull'
@@ -1351,6 +1356,31 @@ export function StatusPanel({
   }
 
   /**
+   * Accept one whole side of a conflicted file (FR-9.2).
+   *
+   * The notice is the panel's sentence rather than git's, for the same reason
+   * discard has one: `git restore` and `git add` print nothing on success, and
+   * the row leaves the conflict group a moment later — so this is the only place
+   * that says which side the user just took.
+   * @param entry - The conflicted row.
+   * @param side - Which side the user accepted, in the user's words.
+   */
+  const resolveConflict = (entry: FileChange, side: ConflictSide): void => {
+    disarm()
+    const label = say(side === 'mine' ? 'action.acceptMine' : 'action.acceptTheirs')
+    void perform('resolve', label, async () => {
+      const result = await git.resolveConflict(sessionId, side, [entry.path], signal)
+      if (!result.ok) return result
+      return {
+        ok: true,
+        value: say(side === 'mine' ? 'resolve.doneMine' : 'resolve.doneTheirs', {
+          path: entry.path,
+        }),
+      }
+    })
+  }
+
+  /**
    * Discard every checked row of one working-tree group.
    *
    * Only reachable through the header's armed button, so the two-click
@@ -1863,6 +1893,10 @@ export function StatusPanel({
   const discardKey = (entry: FileChange, area: ChangeArea): string =>
     `discard:${area}:${entry.path}`
 
+  /** The arming key of one conflict-side entry, keyed by side so the two do not share. */
+  const resolveKey = (entry: FileChange, area: ChangeArea, side: ConflictSide): string =>
+    `${side === 'mine' ? 'accept-mine' : 'accept-theirs'}:${area}:${entry.path}`
+
   /**
    * The entries of one file row's toolbar (§9's file menu).
    *
@@ -1923,11 +1957,55 @@ export function StatusPanel({
           ),
       },
     ]
-    if (!canDiscard(row.area)) return [staging, ...copies]
+    // A conflict row's menu offers the same choice the row's strip does (FR-9.2):
+    // take my side, take the other side, or — later — merge them. The two takes
+    // arm for the same reason the row's buttons do; the merge entry is disabled
+    // because it is not built, and a menu entry has nowhere to carry the button's
+    // tooltip, which is where that sentence lives.
+    const conflict: readonly ToolbarEntry[] = !canResolveConflict(row.area)
+      ? []
+      : [
+          ...(['mine', 'other'] as const).map((side): ToolbarEntry => {
+            const sideKey = resolveKey(row.entry, row.area, side)
+            const armedSide = armedKey === sideKey
+            return {
+              kind: 'item',
+              id: side === 'mine' ? 'acceptMine' : 'acceptTheirs',
+              label: armedSide
+                ? t(side === 'mine' ? 'action.acceptMineArmed' : 'action.acceptTheirsArmed')
+                : t(side === 'mine' ? 'action.acceptMine' : 'action.acceptTheirs'),
+              icon: side === 'mine' ? <AcceptMineGlyph /> : <AcceptTheirsGlyph />,
+              stayOpen: true,
+              disabled: pending,
+              onSelect: () => {
+                if (!armedSide) {
+                  // §4.3's first click: arm, and leave the card up for the second.
+                  armKey(sideKey)
+                  return
+                }
+                setMenu(null)
+                resolveConflict(row.entry, side)
+              },
+            }
+          }),
+          {
+            kind: 'item',
+            id: 'merge',
+            label: t('action.merge'),
+            icon: <MergeGlyph />,
+            disabled: true,
+            onSelect: () => {
+              // Drawn for where it will sit; the tooltip on the row's own button
+              // is what explains the wait.
+            },
+          },
+        ]
+    if (!canDiscard(row.area)) return [staging, ...conflict, ...copies]
     const key = discardKey(row.entry, row.area)
     const armedHere = armedKey === key
     return [
       staging,
+      ...conflict,
       {
         kind: 'item',
         id: 'discard',
@@ -2443,6 +2521,7 @@ export function StatusPanel({
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onResolve={resolveConflict}
             onToggleSelect={(path) => toggleSelected('staged', path)}
           />
         </div>
@@ -2504,6 +2583,7 @@ export function StatusPanel({
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onResolve={resolveConflict}
             onToggleSelect={(path) => toggleSelected('conflicted', path)}
           />
           {/* The working tree as two more sections of this one list. They do not
@@ -2536,6 +2616,7 @@ export function StatusPanel({
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onResolve={resolveConflict}
             onToggleSelect={(path) => toggleSelected('unstaged', path)}
           />
           <Group
@@ -2561,6 +2642,7 @@ export function StatusPanel({
             onOpen={openDiff}
             onMenu={openMenu}
             onDiscard={discard}
+            onResolve={resolveConflict}
             onToggleSelect={(path) => toggleSelected('untracked', path)}
           />
           {status.truncated && <p className={cls.note}>{t('state.truncated')}</p>}

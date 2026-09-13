@@ -37,6 +37,16 @@ export type StatusCode =
 export type ChangeArea = 'staged' | 'unstaged' | 'untracked' | 'conflicted'
 
 /**
+ * Which side of a conflict the user accepts, in the user's own words.
+ *
+ * Deliberately NOT git's `ours`/`theirs`: those names flip meaning under
+ * `git rebase`, where `--ours` is the branch being rebased onto and `--theirs`
+ * is the commit being replayed. The host translates this intent into the right
+ * stage when it runs, so the panel says the same thing in every operation kind.
+ */
+export type ConflictSide = 'mine' | 'other'
+
+/**
  * One changed path as `git status` reports it.
  *
  * A path carries two independent status letters — the index (`staged`) one and

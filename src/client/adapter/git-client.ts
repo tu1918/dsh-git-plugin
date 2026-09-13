@@ -30,6 +30,7 @@ import type {
   BranchRef,
   CommitDetail,
   CommitInfo,
+  ConflictSide,
   GeneratedMessage,
   InProgressOperation,
   LogPage,
@@ -180,6 +181,8 @@ export function createGitRemoteClient(): GitRemoteClient {
       mutate<OperationReport>('/unstage', { session: sessionId, paths }, signal),
     discard: (sessionId, paths, signal) =>
       mutate<OperationReport>('/discard', { session: sessionId, paths }, signal),
+    resolveConflict: (sessionId, side, paths, signal) =>
+      mutate<OperationReport>('/resolveConflict', { session: sessionId, side, paths }, signal),
     commit: (sessionId, message, signal) =>
       mutate<CommitInfo>('/commit', { session: sessionId, message }, signal),
     // The one argument that separates FR-3.4's two commits: `add -u` first, then

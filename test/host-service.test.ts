@@ -2136,6 +2136,36 @@ describe('the M4 mutation routes', () => {
       await harness.close()
     }
   })
+
+  it('resolves a conflict over POST, and refuses the same over GET', async () => {
+    const { repo } = repoInConflict('routes-resolve')
+    const harness = await startHarness({ s1: repo })
+    try {
+      const resolved = await post(harness, '/git-panel/resolveConflict', {
+        session: 's1',
+        side: 'other',
+        paths: ['a.txt'],
+      })
+      assert.equal(resolved.ok, true, JSON.stringify(resolved.error))
+      // The index now holds the accepted side, and there is nothing unmerged left.
+      assert.equal(git(repo, ['show', ':a.txt']), 'side\n')
+      assert.equal(gitTry(repo, ['ls-files', '-u']).stdout, '')
+
+      // Overwriting a working tree must not be reachable by a link.
+      const viaGet = await fetch(`${harness.origin}/git-panel/resolveConflict?session=s1`)
+      assert.equal(viaGet.status, 405)
+
+      const badSide = await post(harness, '/git-panel/resolveConflict', {
+        session: 's1',
+        side: 'both',
+        paths: ['a.txt'],
+      })
+      assert.equal(badSide.ok, false)
+      assert.equal(badSide.error?.code, 'bad-request')
+    } finally {
+      await harness.close()
+    }
+  })
 })
 
 describe('the stash routes (FR-6.2)', () => {

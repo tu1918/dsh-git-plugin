@@ -14,6 +14,7 @@ import type {
   CommitDetail,
   CommitFileStat,
   CommitInfo,
+  ConflictSide,
   DiffTarget,
   FileChange,
   FileDiff,
@@ -435,6 +436,25 @@ export interface WorkspaceGitService {
    */
   discard(
     sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Resolve conflicted paths by accepting one whole side (FR-9.2's row actions).
+   *
+   * Only an unmerged path has sides to accept, so the host re-reads that state
+   * before running and refuses the request otherwise rather than letting a stale
+   * click overwrite a resolved file. `side` is the user's intent, not git's
+   * vocabulary: the host reads the operation in progress and maps it, because
+   * `--ours`/`--theirs` swap meaning under `git rebase`.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param side - Which side the user accepts, in the user's words.
+   * @param paths - Repo-relative paths, validated before any git call (§5.5).
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  resolveConflict(
+    sessionId: string,
+    side: ConflictSide,
     paths: readonly string[],
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>
@@ -866,6 +886,19 @@ export interface GitRemoteClient {
    */
   discard(
     sessionId: string,
+    paths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Result<OperationReport>>
+  /**
+   * Resolve conflicted paths by accepting one whole side (FR-9.2).
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param side - Which side the user accepts, in the user's words.
+   * @param paths - Repo-relative paths.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  resolveConflict(
+    sessionId: string,
+    side: ConflictSide,
     paths: readonly string[],
     signal?: AbortSignal,
   ): Promise<Result<OperationReport>>

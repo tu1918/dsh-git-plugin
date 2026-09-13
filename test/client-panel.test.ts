@@ -294,6 +294,8 @@ function stubGit(options: {
   deleteBranch?: Result<OperationReport>
   /** What `discard` answers, for the refusal path. */
   discard?: Result<OperationReport>
+  /** What `resolveConflict` answers, for the refusal path. */
+  resolveConflict?: Result<OperationReport>
   /** What `fetch` answers, for the no-remote refusal path. */
   fetch?: Result<OperationReport>
   /** What `saveCredential` answers, for its own refusal path. */
@@ -374,6 +376,10 @@ function stubGit(options: {
     discard: (_sessionId, paths) => {
       note(`discard:${paths.join(',')}`)
       return Promise.resolve(options.discard ?? report)
+    },
+    resolveConflict: (_sessionId, side, paths) => {
+      note(`resolveConflict:${side}:${paths.join(',')}`)
+      return Promise.resolve(options.resolveConflict ?? report)
     },
     commit: (_sessionId, message) => {
       note(`commit:${message}`)
@@ -4960,9 +4966,13 @@ describe('the right-click toolbar (§9’s file menu)', () => {
     await settle()
 
     const menu = await openRowMenu(container, 'conflicted')
-    // The command is `git add` either way; the entry says what that means here.
+    // The command is `git add` either way; the entry says what that means here,
+    // and the conflict's own choices follow it (FR-9.2).
     assert.deepEqual(menuLabels(menu), [
       'Mark resolved',
+      'Accept mine',
+      'Accept theirs',
+      'Merge',
       'Copy relative path',
       'Copy absolute path',
     ])
@@ -5116,11 +5126,22 @@ describe('discarding a change from its row (FR-6.1, §4.3)', () => {
     // A staged row's action is unstage, and a conflicted row's is "mark resolved":
     // discarding from either would throw away state that row is not showing (the
     // rule is one function, `ui/row-actions.ts`).
-    for (const area of ['staged', 'conflicted']) {
-      const row = must<HTMLElement>(container, `[data-group="${area}"] .${cls.row}`)
-      const buttons = [...row.querySelectorAll(`.${cls.rowActions} button`)]
-      assert.equal(buttons.length, 1, `${area} has one button, not two`)
-    }
+    const stagedRow = must<HTMLElement>(container, `[data-group="staged"] .${cls.row}`)
+    assert.equal(
+      stagedRow.querySelectorAll(`.${cls.rowActions} button`).length,
+      1,
+      'the staged row offers unstage, and nothing to discard',
+    )
+    // The conflict row carries the conflict's own choices (FR-9.2) — mark resolved
+    // plus the three — and still no discard. Only the unbuilt merge is disabled.
+    const conflictRow = must<HTMLElement>(container, `[data-group="conflicted"] .${cls.row}`)
+    const conflictButtons = [...conflictRow.querySelectorAll(`.${cls.rowActions} button`)]
+    assert.equal(conflictButtons.length, 4, 'mark resolved + the three conflict actions')
+    assert.equal(
+      conflictButtons.filter((button) => button.hasAttribute('disabled')).length,
+      1,
+      'only the merge action is disabled',
+    )
     // ...and the menu agrees with the row: no discard entry, no hairline before
     // it, but the copying entries that belong to every row are still there.
     const stagedMenu = await openRowMenu(container, 'staged')
@@ -5173,6 +5194,95 @@ describe('discarding a change from its row (FR-6.1, §4.3)', () => {
     const box = must(container, '[data-action-error="discard"]')
     assert.match(box.textContent ?? '', /nope/u)
     assert.ok(container.querySelector(`[data-group="unstaged"] .${cls.row}`), 'the list survives')
+  })
+})
+
+describe('resolving a conflict from its row (FR-9.2)', () => {
+  /** The row's inline controls, in strip order. */
+  function conflictButtons(container: HTMLElement): readonly HTMLElement[] {
+    const row = must<HTMLElement>(container, `[data-group="conflicted"] .${cls.row}`)
+    return [...row.querySelectorAll<HTMLElement>(`.${cls.rowActions} button`)]
+  }
+
+  it('draws the three choices, with the merge one disabled and explained', async () => {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({}), t, locale: 'en' }),
+    )
+    await settle()
+
+    const buttons = conflictButtons(container)
+    assert.deepEqual(
+      buttons.map((button) => button.getAttribute('aria-label')),
+      [
+        'Mark both.txt as resolved',
+        'Accept my version of both.txt',
+        'Accept the other side’s version of both.txt',
+        'Merge · Coming in a later iteration — for now, let the model handle it',
+      ],
+    )
+    // The merge control is inert, and its sentence rides on the wrapper span so a
+    // disabled button cannot swallow the hover.
+    assert.equal(buttons[3]?.hasAttribute('disabled'), true)
+    assert.match(
+      buttons[3]?.parentElement?.getAttribute('title') ?? '',
+      /later iteration/u,
+    )
+  })
+
+  it('arms on the first click and takes my side on the second', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const mine = conflictButtons(container)[1]
+    assert.ok(mine)
+    await click(mine)
+    // §4.3's first click arms, and says what the second one will do; nothing ran.
+    assert.deepEqual(calls.entries, [])
+    const armed = must<HTMLElement>(container, '[data-armed="true"]')
+    assert.match(armed.textContent ?? '', /accept mine/u)
+    assert.match(armed.getAttribute('title') ?? '', /Overwrites/u)
+
+    await click(armed)
+    assert.deepEqual(calls.entries, ['resolveConflict:mine:both.txt'])
+    const done = must(container, '[data-action-done="resolve"]')
+    assert.match(done.textContent ?? '', /both\.txt/u)
+  })
+
+  it('takes the other side through its own button', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const theirs = conflictButtons(container)[2]
+    assert.ok(theirs)
+    await click(theirs)
+    assert.deepEqual(calls.entries, [])
+    assert.match(must(container, '[data-armed="true"]').textContent ?? '', /accept theirs/u)
+
+    await click(must<HTMLElement>(container, '[data-armed="true"]'))
+    assert.deepEqual(calls.entries, ['resolveConflict:other:both.txt'])
+  })
+
+  it('offers the same two takes in the row menu, arming like the row does', async () => {
+    const calls: ActionLog = { entries: [] }
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit({ calls }), t, locale: 'en' }),
+    )
+    await settle()
+
+    const menu = await openRowMenu(container, 'conflicted')
+    await click(must(menu, '[data-id="acceptMine"]'))
+    assert.deepEqual(calls.entries, [], 'the entry arms rather than fires')
+    assert.equal(must(container, '[data-toolbar="true"]'), menu, 'the card stays up')
+
+    await click(must(menu, '[data-id="acceptMine"]'))
+    assert.deepEqual(calls.entries, ['resolveConflict:mine:both.txt'])
+    assert.equal(container.querySelector('[data-toolbar="true"]'), null)
   })
 })
 

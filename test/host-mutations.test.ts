@@ -335,6 +335,120 @@ describe('discarding (FR-6.1)', () => {
   })
 })
 
+describe('resolving conflicts (FR-9.2)', () => {
+  /** A repository stopped on a merge conflict in c.txt: ours says "ours". */
+  function conflictedRepo(name: string): string {
+    const repo = makeRepo(name)
+    write(repo, 'c.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'other'])
+    write(repo, 'c.txt', 'theirs\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'theirs'])
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'c.txt', 'ours\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'ours'])
+    const merge = gitTry(repo, ['merge', 'other'])
+    assert.notEqual(merge.code, 0, 'the merge must conflict for this test to mean anything')
+    return repo
+  }
+
+  it('takes my side, and resolves the index with the same click', async () => {
+    const repo = conflictedRepo('mut-resolve-mine')
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'mine', ['c.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+
+    // `restore --ours` wrote the working tree; `add` collapsed the three stages,
+    // which is what makes it a resolution rather than a copy.
+    assert.equal(readFileSync(join(repo, 'c.txt'), 'utf8'), 'ours\n')
+    assert.equal(git(repo, ['show', ':c.txt']), 'ours\n')
+    assert.equal(gitTry(repo, ['ls-files', '-u']).stdout, '', 'the index is no longer unmerged')
+
+    const status = await serviceFor({ s1: repo }).status('s1')
+    assert.ok(status.ok)
+    assert.deepEqual(status.value.groups.conflicted, [])
+  })
+
+  it('takes the other side', async () => {
+    const repo = conflictedRepo('mut-resolve-other')
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'other', ['c.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(readFileSync(join(repo, 'c.txt'), 'utf8'), 'theirs\n')
+    assert.equal(gitTry(repo, ['ls-files', '-u']).stdout, '')
+  })
+
+  it('refuses a path that is not unmerged rather than overwriting it', async () => {
+    const repo = makeRepo('mut-resolve-resolved')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    write(repo, 'a.txt', 'edited but not staged\n')
+
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'mine', ['a.txt'])
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    // A stale click must not run `restore` on a resolved file: the worktree edit
+    // is exactly what accepting a side is not allowed to guess about here.
+    assert.equal(readFileSync(join(repo, 'a.txt'), 'utf8'), 'edited but not staged\n')
+  })
+
+  it('swaps the sides under a rebase, where "mine" is git’s --theirs', async () => {
+    // A rebase replays MY commits onto the other branch, so git's stage names are
+    // the reverse of a merge's. Sending the intent and letting the host translate
+    // is what keeps "accept mine" meaning the same thing to the reader.
+    const repo = makeRepo('mut-resolve-rebase-mine')
+    write(repo, 'c.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'topic'])
+    write(repo, 'c.txt', 'topic\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'topic'])
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'c.txt', 'main\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'main'])
+    git(repo, ['checkout', '-q', 'topic'])
+    assert.notEqual(gitTry(repo, ['rebase', branch]).code, 0, 'the rebase must conflict')
+
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'mine', ['c.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(readFileSync(join(repo, 'c.txt'), 'utf8'), 'topic\n', 'mine is the replayed commit')
+  })
+
+  it('and "other" under a rebase is the branch it is replayed onto', async () => {
+    const repo = makeRepo('mut-resolve-rebase-other')
+    write(repo, 'c.txt', 'base\n')
+    stageAll(repo)
+    commit(repo, 'base')
+    const branch = currentBranch(repo)
+    git(repo, ['checkout', '-q', '-b', 'topic'])
+    write(repo, 'c.txt', 'topic\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'topic'])
+    git(repo, ['checkout', '-q', branch])
+    write(repo, 'c.txt', 'main\n')
+    git(repo, ['commit', '-q', '-a', '--no-gpg-sign', '-m', 'main'])
+    git(repo, ['checkout', '-q', 'topic'])
+    assert.notEqual(gitTry(repo, ['rebase', branch]).code, 0, 'the rebase must conflict')
+
+    const result = await serviceFor({ s1: repo }).resolveConflict('s1', 'other', ['c.txt'])
+    assert.ok(result.ok, result.ok ? '' : JSON.stringify(result.error))
+    assert.equal(readFileSync(join(repo, 'c.txt'), 'utf8'), 'main\n', 'other is the base branch')
+  })
+
+  it('refuses an absolute path, a traversal, and a path inside .git', async () => {
+    const repo = conflictedRepo('mut-resolve-validate')
+    const service = serviceFor({ s1: repo })
+    for (const paths of [['/etc/passwd'], ['../c.txt'], ['.git/config'], [''], []]) {
+      const result = await service.resolveConflict('s1', 'mine', paths)
+      assert.equal(result.ok, false, `expected ${JSON.stringify(paths)} to be refused`)
+      assert.equal(result.ok ? '' : result.error.code, 'bad-request')
+    }
+    // Nothing ran: the conflict is exactly as git left it.
+    assert.notEqual(gitTry(repo, ['ls-files', '-u']).stdout, '')
+  })
+})
+
 describe('committing', () => {
   it('commits the index and reports the commit it created', async () => {
     const repo = makeRepo('mut-commit')

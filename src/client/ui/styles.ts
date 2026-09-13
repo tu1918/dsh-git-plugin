@@ -111,6 +111,7 @@ export const cls = {
   trackIcon: `${P}-track-icon`,
   spacer: `${P}-spacer`,
   tool: `${P}-tool`,
+  toolWrap: `${P}-tool-wrap`,
   body: `${P}-body`,
   group: `${P}-group`,
   groupHead: `${P}-group-head`,
@@ -1413,6 +1414,13 @@ export const css = `
   width: 30px;
   height: 30px;
   border-radius: 7px;
+}
+
+/* Wraps a tool button that must keep its tooltip while disabled. A disabled
+   button stops delivering pointer events in some engines, so the title rides on
+   this ancestor instead — the merge entry of a conflict row is the case. */
+.${cls.toolWrap} {
+  display: inline-flex;
 }
 
 .${cls.rowActions} {

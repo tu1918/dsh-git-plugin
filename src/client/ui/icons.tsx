@@ -477,6 +477,63 @@ export function UndoGlyph({ size = 13, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * An arrow settling onto a bar on the LEFT: accept my side of a conflict (FR-9.2).
+ *
+ * The bar is the side being kept and the arrow is the other side's content giving
+ * way to it. It is a mirror of {@link AcceptTheirsGlyph} rather than a different
+ * picture, because the two buttons are one question with two answers — but which
+ * git stage "mine" means is not this glyph's business (a rebase swaps them, and
+ * the row's tooltip is what names the side).
+ * @param props - Size and class.
+ */
+export function AcceptMineGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M3.4 3.4v9.2" />
+      <path d="M12.4 8H6" />
+      <path d="M8.4 5.6 6 8l2.4 2.4" />
+    </>,
+  )
+}
+
+/**
+ * An arrow settling onto a bar on the RIGHT: accept the other side (FR-9.2).
+ * @param props - Size and class.
+ */
+export function AcceptTheirsGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M12.6 3.4v9.2" />
+      <path d="M3.6 8H10" />
+      <path d="M7.6 5.6 10 8l-2.4 2.4" />
+    </>,
+  )
+}
+
+/**
+ * Two lines converging into one: merge the two sides (FR-9.2, not yet built).
+ *
+ * Deliberately not {@link SplitGlyph}, which already means the side-by-side
+ * layout in the diff header — one shape must not carry two unrelated verbs.
+ * @param props - Size and class.
+ */
+export function MergeGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M4.2 3.2c0 3.2 1.4 4.2 3.8 4.8" />
+      <path d="M11.8 3.2c0 3.2-1.4 4.2-3.8 4.8" />
+      <path d="M8 8v4.8" />
+    </>,
+  )
+}
+
+/**
  * What each kind draws, on its own.
  *
  * No shared outline on purpose. The first version drew every kind as a mark inside

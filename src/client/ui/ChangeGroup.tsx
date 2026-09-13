@@ -27,19 +27,22 @@ import { changeTreeOf, filesUnder, type ChangeTreeNode } from '../../core/change
 import { customIconFor, fileKindOf } from '../../core/file-kind.ts'
 import { pathParts } from '../../core/format.ts'
 import { badgeFor, type BadgeLetter } from '../../core/git-parse.ts'
-import type { ChangeArea, FileChange } from '../../core/types.ts'
+import type { ChangeArea, ConflictSide, FileChange } from '../../core/types.ts'
 import type { GitPanelKey } from '../locales.ts'
 import type { Translate } from './translate.ts'
 import { cls } from './styles.ts'
 import { useArmedKey } from './armed.ts'
 import { dirKey, type ChangeView, type FileIcons } from './change-view.ts'
-import { canDiscard } from './row-actions.ts'
+import { canDiscard, canResolveConflict } from './row-actions.ts'
 import type { ToolbarPoint } from './toolbar.ts'
 import {
+  AcceptMineGlyph,
+  AcceptTheirsGlyph,
   CaretGlyph,
   CheckGlyph,
   DiscardGlyph,
   FileKindGlyph,
+  MergeGlyph,
   MinusGlyph,
   PlusGlyph,
 } from './icons.tsx'
@@ -162,6 +165,12 @@ export function RowCheckbox({
  * And it carries FR-6.1's discard: on the working-tree rows (see
  * `ui/row-actions.ts` for which those are) the strip gains a third button which,
  * like every irreversible control here, arms instead of firing (§4.3).
+ *
+ * A conflict row is the one row with a real choice on it: accept my side, accept
+ * the other side, or merge the two. The first two arm like discard does, because
+ * accepting a side overwrites the working tree — including a merge the reader was
+ * part-way through. The third is drawn so its place is visible and disabled
+ * because it is not built yet (FR-9.2); its sentence is the button's tooltip.
  */
 export function ChangeRow({
   entry,
@@ -176,6 +185,7 @@ export function ChangeRow({
   onOpen,
   onMenu,
   onDiscard,
+  onResolve,
   onToggleSelect,
 }: {
   readonly entry: FileChange
@@ -212,6 +222,8 @@ export function ChangeRow({
   readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   /** Discard this row's working-tree change, once the row is armed (FR-6.1). */
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  /** Accept one side of this row's conflict, once the row is armed (FR-9.2). */
+  readonly onResolve: (entry: FileChange, side: ConflictSide) => void
   /** Add this row to the selection, or take it out. */
   readonly onToggleSelect: (path: string) => void
 }): ReactNode {
@@ -229,11 +241,15 @@ export function ChangeRow({
   // also how a merge is marked resolved — the same command git would be given
   // (FR-9.2) — so it is labelled as what it does there rather than as "stage".
   const canUnstage = area === 'staged'
-  // Which rows may discard at all is one rule, shared with the row menu
-  // (`ui/row-actions.ts`): the menu must not offer what this row has no button for.
+  // Which rows may discard, and which may take a side of a conflict, are one rule
+  // each, shared with the row menu (`ui/row-actions.ts`): the menu must not offer
+  // what this row has no button for.
   const discardable = canDiscard(area)
+  const resolvable = canResolveConflict(area)
   const { armed, arm, reset } = useArmedKey()
-  const discardArmed = armed === entry.path
+  const discardArmed = armed === discardKey(entry.path)
+  const mineArmed = armed === acceptMineKey(entry.path)
+  const theirsArmed = armed === acceptTheirsKey(entry.path)
   const stageLabel =
     area === 'conflicted' ? t('action.markResolved', { path: entry.path }) : t('action.stage')
 
@@ -326,11 +342,75 @@ export function ChangeRow({
             <MinusGlyph size={16} />
           </ToolButton>
         )}
+        {resolvable && !mineArmed && (
+          <ToolButton
+            label={t('action.acceptMinePath', { path: entry.path })}
+            disabled={busy}
+            onClick={() => arm(acceptMineKey(entry.path))}
+          >
+            <AcceptMineGlyph size={15} />
+          </ToolButton>
+        )}
+        {mineArmed && (
+          <button
+            type="button"
+            className={cls.danger}
+            data-armed="true"
+            disabled={busy}
+            title={t('action.acceptMineConfirm', { path: entry.path })}
+            onClick={() => {
+              reset()
+              onResolve(entry, 'mine')
+            }}
+          >
+            {t('action.acceptMineArmed')}
+          </button>
+        )}
+        {resolvable && !theirsArmed && (
+          <ToolButton
+            label={t('action.acceptTheirsPath', { path: entry.path })}
+            disabled={busy}
+            onClick={() => arm(acceptTheirsKey(entry.path))}
+          >
+            <AcceptTheirsGlyph size={15} />
+          </ToolButton>
+        )}
+        {theirsArmed && (
+          <button
+            type="button"
+            className={cls.danger}
+            data-armed="true"
+            disabled={busy}
+            title={t('action.acceptTheirsConfirm', { path: entry.path })}
+            onClick={() => {
+              reset()
+              onResolve(entry, 'other')
+            }}
+          >
+            {t('action.acceptTheirsArmed')}
+          </button>
+        )}
+        {resolvable && (
+          // Drawn so its place is visible, disabled because it is not built. Its
+          // sentence rides on this span rather than on the button: a disabled
+          // button stops delivering the pointer events some engines route their
+          // tooltip through, so an ancestor is what makes the hover work.
+          <span className={cls.toolWrap} title={t('action.mergePending')}>
+            <button
+              type="button"
+              className={cls.tool}
+              aria-label={`${t('action.merge')} · ${t('action.mergePending')}`}
+              disabled
+            >
+              <MergeGlyph size={15} />
+            </button>
+          </span>
+        )}
         {discardable && !discardArmed && (
           <ToolButton
             label={t('action.discardPath', { path: entry.path })}
             disabled={busy}
-            onClick={() => arm(entry.path)}
+            onClick={() => arm(discardKey(entry.path))}
           >
             <DiscardGlyph size={15} />
           </ToolButton>
@@ -365,6 +445,18 @@ export function ChangeRow({
     </div>
   )
 }
+
+/**
+ * One row's arming keys (§4.3's two-click confirmation).
+ *
+ * Keyed by action as well as path: a conflict row carries two arming controls
+ * beside discard's, and one shared key would let the first click of one action
+ * confirm another. The key is local to the row's own `useArmedKey`, so a path is
+ * all the identity the row part needs.
+ */
+const discardKey = (path: string): string => `discard:${path}`
+const acceptMineKey = (path: string): string => `accept-mine:${path}`
+const acceptTheirsKey = (path: string): string => `accept-theirs:${path}`
 
 /** A group's bulk action (FR-3.2). */
 export interface GroupBatch {
@@ -433,6 +525,7 @@ function TreeNodeView({
   onOpen,
   onMenu,
   onDiscard,
+  onResolve,
   onToggleSelect,
 }: {
   readonly node: ChangeTreeNode
@@ -447,6 +540,7 @@ function TreeNodeView({
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  readonly onResolve: (entry: FileChange, side: ConflictSide) => void
   /** Add a row to the selection, or take it out (called once per path). */
   readonly onToggleSelect: (path: string) => void
 }): ReactNode {
@@ -471,6 +565,7 @@ function TreeNodeView({
           onOpen={onOpen}
           onMenu={onMenu}
           onDiscard={onDiscard}
+          onResolve={onResolve}
           onToggleSelect={onToggleSelect}
         />
       </div>
@@ -537,6 +632,7 @@ function TreeNodeView({
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onResolve={onResolve}
             onToggleSelect={onToggleSelect}
           />
         ))}
@@ -578,6 +674,7 @@ export function Group({
   onOpen,
   onMenu,
   onDiscard,
+  onResolve,
   onToggleSelect,
 }: {
   readonly label: string
@@ -626,6 +723,7 @@ export function Group({
   readonly onOpen: (entry: FileChange, area: ChangeArea) => void
   readonly onMenu: (entry: FileChange, area: ChangeArea, point: ToolbarPoint) => void
   readonly onDiscard: (entry: FileChange, area: ChangeArea) => void
+  readonly onResolve: (entry: FileChange, side: ConflictSide) => void
   /** Add a row to the selection, or take it out (called once per path). */
   readonly onToggleSelect: (path: string) => void
 }): ReactNode {
@@ -736,6 +834,7 @@ export function Group({
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onResolve={onResolve}
             onToggleSelect={onToggleSelect}
           />
         ))}
@@ -755,6 +854,7 @@ export function Group({
             onOpen={onOpen}
             onMenu={onMenu}
             onDiscard={onDiscard}
+            onResolve={onResolve}
             onToggleSelect={onToggleSelect}
           />
         ))}

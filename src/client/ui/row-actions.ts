@@ -31,3 +31,16 @@ import type { ChangeArea } from '../../core/types.ts'
 export function canDiscard(area: ChangeArea): boolean {
   return area === 'unstaged' || area === 'untracked'
 }
+
+/**
+ * Whether a row offers "accept one side of the conflict" (FR-9.2).
+ *
+ * Only an unmerged path has sides to take, and only the conflict group holds
+ * those rows. The predicate exists for the same reason {@link canDiscard} does:
+ * the row's inline buttons and its menu must offer the same thing.
+ * @param area - The group the row is drawn in.
+ * @returns Whether the row's conflict actions exist.
+ */
+export function canResolveConflict(area: ChangeArea): boolean {
+  return area === 'conflicted'
+}
