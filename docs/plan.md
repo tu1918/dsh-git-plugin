@@ -851,6 +851,20 @@ rail 的两层保持原样（它们本来就该是同一个东西）。
 | 测试 | 557 → 565。新增：`placeToolbar` 5 项（贴点弹出、右边缘收回、翻到上方、太短时宁滚不钉顶、面板没有高度时不动）、面板 2 项（卡片的位置确实来自点击点并钉住 `max-height`；点落在面板右侧之外时被拉回）、`ContextToolbar` 1 项（有记号与没记号的条目都保留图标列）、互斥 1 项（键盘打开分支列表会收掉工具条）。重写：`data-menu` → `data-toolbar`（23 处）、用 `data-popover` 找行菜单的 3 处改成 `data-toolbar`（找分支/贮藏的 2 处不动）、`cls.menuItem` → `cls.toolbarItem`；Esc 那条断言顺带证明了「一次按键只关一次」 |
 | 已知边界 | 本插件从未在真实浏览器里看过（§10.4），所以收回与翻转只有纯函数 + 内联样式两层 jsdom 证据，真机观感需要产品方验收 |
 
+### 验收期新增：diff 提升到右侧栏标签页（2026-09-13，产品方提出）
+
+| 形状 | 说明 |
+|---|---|
+| 要什么 | diff 拿到**整栏高度**：在右侧栏开一个自己的标签页，与 Git 面板标签并列。产品方同日把 §10.3 原条目点名的三件事都定了：**一文件一标签**、面板内 `openFiles` / `bottomTab` 保留、**dock 为主、提升后移除** |
+| 为什么不是「搬过去」 | 选的是**提升**而不是迁移：点变更行仍开在 dock，diff 头部多一个「在新标签页中打开」操作；点了才把这一条移到右侧栏，并从 dock 撤掉。dock 是变更列表自己的阅读面，右侧栏适合长读，两个入口各归各的 |
+| 为什么走 **resource 类型** | page 类型在同一 pane 内按 kind 恒去重（`tab-registry.ts` 的 `claim` 把 contentId 记在一个地址上），做不到一文件一标签；resource 类型按地址去重，把**路径 + 对比目标**编码进地址即天然按文件分开。另已确认 `ctx.resources.pin()` 对没有 provider 的协议只挂空记录、不抛错（`dsh-client-resources/lib/client.js`），故本插件自建 `dsh-resource://git-diff/…` 地址、自渲染 body，不需要注册 provider |
+| 地址 | `dsh-resource://git-diff/<encodeURIComponent(diffTargetKey)>/<encodeURIComponent(path)>`。`client/adapter/sidebar-tab.tsx` 的 `diffTabAddress` / `parseDiffTabAddress` 互逆，`canOpen` 用后者否决读不出的地址；`diffTargetFromKey`（`core/diff-target.ts`）是 `diffTargetKey` 的反解。**不传 params**：地址就是标签的全部身份，被 undo 恢复的标签没有 params 也能读回自己 |
+| 类型与 body | `gitDiffDefinition`（kind `git-diff`、id `dsh-git-panel-diff`、priority `extension`、无 guide 条目——没选文件前没有可打开的地址），body 是新增的 `client/adapter/diff-tab-body.tsx`：从 `useTabInfo().tab.navigation.address` 反解出 path / target 交给现成的 `DiffPane`，Escape 走 `tab.actions.close()`。chip 标题用 `title(address)` 取文件名，不注册 title 组件 |
+| 打开动作 | `GitTabBody` 用 `useTabInfo().tab.actions.openResource(diffTabAddress(file))` 发起（默认落在本 pane 并展开右栏）；`StatusPanel` 只拿到一个 `onOpenDiffTab?: (file) => void`，仍不知道什么是资源地址 |
+| 面板侧 | `StatusPanel` 只多一个 `onOpenDiffTab?: (file) => void`：提升 = 发起开放 + 关掉 dock 标签（同一个点击，不是先开再关）。**刻意不记「已提升」**：sidebar-right 的 docked tab body 在切到别的标签时会卸载（`tab-domain.d.ts`：「switching tabs unmounts a body」），而提升后新标签立刻取得焦点，记在面板组件里的任何「它去了右边」都会当场丢掉；再点该行就按「dock 为主」重新开在 dock（等同编辑器里同一个文件开在两个分栏）。没有 `onOpenDiffTab` 时（裸渲染与 jsdom 测试）提升按钮不出现，dock 行为与从前逐字一致 |
+| 代价 | 右侧标签的开关状态不归面板，面板既看不到也关不掉它；被提升的文件在右侧标签存活期间再点行会在 dock 里再开一份。测试净增 18 项 |
+| 验收期修正（2026-09-13，产品方在右侧栏里看到） | 根因之一是**新宿主没给 diff 高度**：tab body（dock kit 的 pane body）自己是 `overflow: auto` 的滚动容器，而 `.dgp-diff-view` 无高度时高等于内容高，于是横向滚动条贴的是**内容末尾**而不是栏底（「现在在中间」）、hunk 头带只到滚动内容盒宽度（往右滚就断在左侧一截——那条带正是将来放「展开缝隙」的地方）、拖动要重栅格一整段。修法：`.dgp-diff-view` 加 `height: 100%`、`.dgp-diff-hunk` 加 `min-width: min-content` |
+
 ### 10.3 M5 之外登记在案、尚未排期
 
 | 事项 | 说明 |
@@ -862,10 +876,9 @@ rail 的两层保持原样（它们本来就该是同一个东西）。
 | **diff 虚拟滚动**（§6 性能 P1） | 现靠 FR-2.6 的 >5000 行折叠门兜底；千文件仓库 `status < 500ms` 与 monorepo 也仍未压测 |
 | **gpg 签名卡死的专门文案** | `commit.gpgsign=true` 的仓库里提交会卡到 15s deadline，`GIT_TERMINAL_PROMPT=0` 管不到 gpg（§11 新增行） |
 | **凭据缺失的专门文案** | push/pull 目前只报 git 原文，没有分类（§11 新增行） |
-| **在右侧栏的新标签页里打开 diff**（产品方 2026-09-13 提出，已确认是右侧栏、与 Git 面板并列的那种标签页） | 现在 diff 开在 Git 面板底部的 dock 里（一条文件一个标签，见「验收期改动：底部 pane 的 diff 标签」），拿到的是面板减掉提交框与列表之后的那半屏。要求是把它开成**右侧栏自己的标签页**，让 diff 拿到整栏高度。**路已通**：本插件已注入 `@deepseek-ai/dsh-client-ui-sidebar-right`，它支持同一 pane 内多条标签，且 `ISidebarRight.openTab(kind, options)` 带 `paneId` / `revealIfOpened` / `replaceTab`；做法是像 `gitPanelDefinition` 那样再注册一个**类型**（`client/adapter/sidebar-tab.tsx` + `client/index.tsx` 的两段注册），参数经 `SidebarRightTabParamsMap` 声明，打开动作从 tab body 的 `useTabInfo().tab.actions.openTab` 发起。**排期前要定三件事**：① 一个文件一条标签，还是所有 diff 共用一条——**page 类型按 kind 记在一个地址上、同 pane 内恒去重**（`revealIfOpened` 只管 resource 类型），所以「一个文件一条」要么走 resource 类型（地址即路径，天然按文件分开），要么共用一个标签、靠 `params` + `navigation.revision` 换内容；② 标签条的开关与面板内 `openFiles` / `tab` 这套状态谁说了算（dock 今天是受控组件，标签页版的标签条归 sidebar-right）；③ 底部 dock 是留还是撤。**未排期** |
-| **diff 视图的操作分区：视图操作 / 行间操作 / 行操作**（产品方 2026-09-13 提出） | 要求把 diff 头部的操作按这三类分开，并为三类各留出区域。三类各是什么：**视图操作**＝改「怎么看」的（布局切换、自动换行、重读）；**行间操作**＝插在两行之间的动作，今天只有「展开两处 hunk 之间的行」；**行操作**＝针对某一行的动作，本插件目前一条都没有，区域先留位。现状：`DiffView` 的头部是一列平铺按钮——布局段控（`inline` / `side-by-side` 两枚）+ 刷新，见 `src/client/ui/DiffView.tsx:442` 与 `:464`。**建议先做这条**：分区定了，后面三条的控件才知道挂在哪 |
-| **diff 视图改成单按钮切换**（同行 ⇄ 左右） | 现在是两枚 `diffSegButton`，靠 `aria-pressed` 标出当前布局（`src/client/ui/DiffView.tsx:442`）。要求一枚按钮，点一下在同行与左右之间切换，图标随当前布局变，且沿用现在这两枚字形（同行 `ArrowDownGlyph`、左右 `SplitGlyph`）。**代价**：段控的 `aria-pressed`（「现在哪个开着」）要换成单个按钮的 `aria-label` 与 `title`（「点下去会变成什么」），读当前布局的测试断言跟着改 |
-| **diff 视图增加「自动换行」** | 现在没有，行文本不折行：长行靠 `SplitHunks` 给左右两半各一个横向滚动条看全（`src/client/ui/DiffView.tsx:251` 的注释记了这段取舍）。要求加一个开关，打开后长行折行。它是视图操作，落在上一条预留的区里；与布局偏好同源，按 FR-2.4 的做法写进 `localStorage`（`DIFF_LAYOUT_KEY` 的邻居）。**2026-09-13 已定做法**：左右对照是两个各自滚动的半栏，配对的两格靠内容撑高（`src/client/ui/styles.ts:2373` 的注释写明"不一样高就会错位"），折行跨容器对不齐——因此**折行只在上下对照生效，左右对照下按钮禁用**（不改 FR-2.4 已验收的左右布局结构）。做法见 [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
+| **diff 视图的操作分区：视图操作 / 行间操作 / 行操作**（产品方 2026-09-13 提出） | 要求把 diff 头部的操作按这三类分开，并为三类各留出区域。三类各是什么：**视图操作**＝改「怎么看」的（布局切换、自动换行、重读）；**行间操作**＝插在两行之间的动作，今天只有「展开两处 hunk 之间的行」；**行操作**＝针对某一行的动作，本插件目前一条都没有，区域先留位。现状：`DiffView` 的头部是一列平铺按钮——布局段控（`inline` / `side-by-side` 两枚）+ 提升按钮（本次新增的「在新标签页中打开」）+ 刷新，见 `src/client/ui/DiffView.tsx:453` 与 `:489`。**建议先做这条**：分区定了，后面三条的控件才知道挂在哪 |
+| **diff 视图改成单按钮切换**（同行 ⇄ 左右） | 现在是两枚 `diffSegButton`，靠 `aria-pressed` 标出当前布局（`src/client/ui/DiffView.tsx:453`）。要求一枚按钮，点一下在同行与左右之间切换，图标随当前布局变，且沿用现在这两枚字形（同行 `ArrowDownGlyph`、左右 `SplitGlyph`）。**代价**：段控的 `aria-pressed`（「现在哪个开着」）要换成单个按钮的 `aria-label` 与 `title`（「点下去会变成什么」），读当前布局的测试断言跟着改 |
+| **diff 视图增加「自动换行」** | 现在没有，行文本不折行：长行靠 `SplitHunks` 给左右两半各一个横向滚动条看全（`src/client/ui/DiffView.tsx:252` 的注释记了这段取舍）。要求加一个开关，打开后长行折行。它是视图操作，落在上一条预留的区里；与布局偏好同源，按 FR-2.4 的做法写进 `localStorage`（`DIFF_LAYOUT_KEY` 的邻居）。**2026-09-13 已定做法**：左右对照是两个各自滚动的半栏，配对的两格靠内容撑高（`src/client/ui/styles.ts:2373` 的注释写明"不一样高就会错位"），折行跨容器对不齐——因此**折行只在上下对照生效，左右对照下按钮禁用**（不改 FR-2.4 已验收的左右布局结构）。做法见 [plan/diff-word-wrap.md](plan/diff-word-wrap.md) |
 | **diff 行间操作：展开两处 hunk 之间的行** | 缺的曾经是数据。**2026-09-13 已定**：① **行数**不用新数据，hunk 头就带起止（`src/core/types.ts:481`），`gap.oldCount = next.oldStart - (prev.oldStart + prev.oldCount)`；两处 hunk 之间是唯一不需要文件总行数的情形（`FileDiff` 没有这个字段），故"第一个 hunk 之上 / 最后一个 hunk 之下"不做。② **内容**走"逐处展开、开到底"：新增 `GET /git-panel/fileLines`（进 `READ_OPERATIONS`），host 按 `DiffTarget` 解析出 **old 侧**的 rev（`worktree` → `:<path>`、`index` → `HEAD:<path>`、`commit` → `<hash>^:<path>`）、取整个 blob 后切出 `[from, from+count)` 只回那几行。缝隙两侧逐字相同，所以**只读一侧**即可，且不必读文件系统（本插件至今没直接读过文件）。客户端按 gap 存展开集合、per-file promise 缓存 + epoch 守卫；渲染层只需把 `DiffHunks`/`SplitHunks` 改成遍历 hunk 与 gap 交替的 segments，`splitRows` 与 `LineCell` 不动。已否决的替代：复用现成 `diff` 路由把 `context` 加到 50——context 是整请求共同参数、相邻 hunk 会合并、且 50 行封顶，"点一处开一处、开到底"做不到。做法与验收见 [plan/diff-expand-gap.md](plan/diff-expand-gap.md) |
 
 ### 10.4 不排期（等条件，不是代码工作量）

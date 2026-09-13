@@ -13,6 +13,7 @@
  * @module dsh-git-panel/client/adapter/tab-body
  */
 
+import { useCallback } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Side-effect imports: each merges the slot declarations this component's props
@@ -23,7 +24,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 
 import type { GitRemoteClient } from '../../core/ports.ts'
 import { StatusPanel, type Translate } from '../ui/StatusPanel.tsx'
+import type { OpenFile } from '../ui/BottomPane.tsx'
 import type { NS } from '../locales.ts'
+import { diffTabAddress } from './sidebar-tab.tsx'
 
 /** The business face the registration publishes to this body. */
 export interface GitTabFace {
@@ -44,6 +47,23 @@ export type GitTabBodyProps = PropsRuntime<'sidebar.right.pane.tab'> &
  */
 export function GitTabBody({ sessionId, git, locale, t, useTabInfo }: GitTabBodyProps): ReactNode {
   const { tab } = useTabInfo()
+
+  /**
+   * Move one of the panel's open diffs into a right-side tab of its own.
+   *
+   * The OPEN happens here rather than in the panel: `StatusPanel` is DSH-free and
+   * never learns what a resource address is — it asks, with the path and the
+   * comparison it already holds, and this adapter turns that into an address. The
+   * call is the tab's own action, so the new tab lands in this pane and reveals
+   * the column in the same step.
+   */
+  const openDiffTab = useCallback(
+    (file: OpenFile): void => {
+      tab.actions.openResource(diffTabAddress(file))
+    },
+    [tab.actions],
+  )
+
   return (
     <StatusPanel
       sessionId={sessionId}
@@ -53,6 +73,7 @@ export function GitTabBody({ sessionId, git, locale, t, useTabInfo }: GitTabBody
       t={t as Translate}
       locale={locale}
       signal={tab.signal}
+      onOpenDiffTab={openDiffTab}
     />
   )
 }

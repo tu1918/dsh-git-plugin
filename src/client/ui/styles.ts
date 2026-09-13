@@ -2154,11 +2154,21 @@ export const css = `
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* The pane fills the dock, and the hunks inside it do the scrolling, so the path
-   header and the layout buttons stay put while a long diff moves under them. */
+/* The pane fills whoever hands it a box — the dock, and a right-side tab — and
+   the hunks inside it do the scrolling, so the path header and the layout buttons
+   stay put while a long diff moves under them.
+
+   The height is what makes the second host work. A right-side tab body is a
+   scroll container of its own (the dock kit's pane body is 'overflow: auto' with
+   a definite height), and a pane without a height is as tall as its content: the
+   tab body then scrolls the whole tree, and each inner scroller's horizontal bar
+   rides the end of the CONTENT instead of the foot of the tab — reported from the
+   running panel ("横向滚动条应该放在底下，现在在中间"). Given the height, the
+   hunks (or each split half) keep the bars, and they sit at the bottom. */
 .${cls.diffView} {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   flex: auto;
 }
@@ -2286,8 +2296,16 @@ export const css = `
   scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
 }
 
+/* A hunk is at least as wide as its widest line, so the header band above it
+   spans the code too. Without this the band — and the gap between hunks, which
+   is where a between-lines action will sit — stops at the scroller's content box
+   and only covers the left part of a row that has been scrolled sideways, which
+   is what a narrow right-side column shows constantly ("行间操作的区域没有全覆盖，
+   只覆盖了左侧的部分"). The header's own heading still ellipsizes (see the
+   .diffHunkHead rules): the width comes from the lines, never from the heading. */
 .${cls.diffHunk} {
   margin: 4px 0 6px;
+  min-width: min-content;
 }
 
 .${cls.diffHunkHead} {

@@ -63,6 +63,25 @@ export function BranchGlyph({ size = 14, className }: GlyphProps): ReactNode {
 }
 
 /**
+ * A panel with an arrow leaving it: open this reading in a tab of its own.
+ *
+ * Drawn as the move rather than as a tab-shaped picture, because the button's
+ * question is "where does this go", and the strip it lands in is right beside it.
+ * @param props - Size and class.
+ */
+export function OpenInTabGlyph({ size = 14, className }: GlyphProps): ReactNode {
+  return stroke(
+    size,
+    className,
+    <>
+      <path d="M12.6 9.4v3.4a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2V4.8a1.2 1.2 0 0 1 1.2-1.2h3.4" />
+      <path d="M9.6 2.6h3.8v3.8" />
+      <path d="M13.4 2.6 7.6 8.4" />
+    </>,
+  )
+}
+
+/**
  * A circular arrow: reload.
  * @param props - Size and class.
  */

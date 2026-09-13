@@ -38,6 +38,7 @@ import type { Translate } from './translate.ts'
 import { errorCopy } from './error-copy.ts'
 import {
   ArrowDownGlyph,
+  OpenInTabGlyph,
   RefreshGlyph,
   SpinnerGlyph,
   SplitGlyph,
@@ -400,6 +401,14 @@ export interface DiffViewProps {
   readonly onReload: () => void
   /** True while a read is in flight, so a reload cannot be started twice. */
   readonly busy: boolean
+  /**
+   * Promote this reading into a right-side tab of its own.
+   *
+   * Absent for a diff that is ALREADY in such a tab: there is nowhere further to
+   * open it, and a button that did nothing would be worse than no button. The
+   * dock passes it, which is the one place a diff can still be moved out of.
+   */
+  readonly onOpenInTab?: () => void
 }
 
 /**
@@ -409,8 +418,9 @@ export interface DiffViewProps {
  * commit's file later (FR-7.2) without a fetch of its own.
  *
  * Its header carries the diff's OWN operations and nothing else — the layout
- * pair and the reload. Closing is the tab strip's business (each tab has its own
- * ×), so this row never doubles as a way out of the pane.
+ * pair, the reload, and, in the dock, the move into a right-side tab of its own.
+ * Closing is the tab strip's business (each tab has its own ×), so this row
+ * never doubles as a way out of the pane.
  * @param props - The diff and the panel's callbacks.
  */
 export function DiffView({
@@ -423,6 +433,7 @@ export function DiffView({
   onCollapse,
   onReload,
   busy,
+  onOpenInTab,
 }: DiffViewProps): ReactNode {
   const { directory, name } = pathParts(diff.path)
   const state = diff.binary ? 'binary' : diff.combined ? 'combined' : diff.hunks.length === 0 ? 'empty' : 'lines'
@@ -461,6 +472,17 @@ export function DiffView({
             <SplitGlyph size={12} />
           </button>
         </span>
+        {onOpenInTab !== undefined && (
+          <button
+            type="button"
+            className={cls.tool}
+            title={t('diff.openInTab')}
+            aria-label={t('diff.openInTab')}
+            onClick={onOpenInTab}
+          >
+            <OpenInTabGlyph />
+          </button>
+        )}
         <button
           type="button"
           className={cls.tool}
@@ -536,6 +558,11 @@ export interface DiffPaneProps {
    * that owns the diff, so the header row stays "diff operations only".
    */
   readonly onClose: () => void
+  /**
+   * Move this diff into a right-side tab of its own, if there is somewhere to
+   * move it to. Omitted by a pane that is already such a tab.
+   */
+  readonly onOpenInTab?: () => void
 }
 
 /**
@@ -580,6 +607,7 @@ export function DiffPane({
   signal,
   active = true,
   onClose,
+  onOpenInTab,
 }: DiffPaneProps): ReactNode {
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [error, setError] = useState<GitPanelError | null>(null)
@@ -718,6 +746,7 @@ export function DiffPane({
       onCollapse={() => setExpanded(false)}
       onReload={reload}
       busy={busy}
+      onOpenInTab={onOpenInTab}
     />
   )
 }
