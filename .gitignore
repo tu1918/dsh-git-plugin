@@ -39,3 +39,15 @@ lib/
 # different project, so they are not this repository's history — they stay on
 # disk and out of the tree.
 contrib/
+
+# ── Sandbox clone of a real remote ───────────────────────────────────────────
+# `test/dsh-git-plugin-sandbox` is a clone of a throwaway GitHub repository,
+# used to drive the panel against a real HTTPS remote. It is another
+# repository's history, and a nested work tree would otherwise appear here as an
+# untracked directory.
+#
+# One consequence worth knowing: `tsconfig.json`'s `include` is `["src", "test",
+# "build"]`, so its `.ts` files ARE typechecked by `npm run check`. They pass
+# today; a future edit to the sandbox that does not typecheck would turn this
+# repository's check red.
+test/dsh-git-plugin-sandbox/
