@@ -253,6 +253,8 @@ export const zh = {
   'diff.collapse': '折叠',
   'diff.truncated': '输出达到上限，差异的结尾没有读取。',
   'diff.resize': '拖动调整差异区域高度',
+  'diff.scrollX': '横向滚动',
+  'diff.scrollY': '纵向滚动',
   'diffTab.missing': '这个标签页没有可以显示的差异。',
 
   'state.truncated': '改动太多，列表只显示了一部分。',
@@ -519,6 +521,8 @@ export const en: Record<GitPanelKey, string> = {
   'diff.collapse': 'Fold',
   'diff.truncated': 'The output hit its cap, so the end of the diff was not read.',
   'diff.resize': 'Drag to resize the diff',
+  'diff.scrollX': 'Scroll horizontally',
+  'diff.scrollY': 'Scroll vertically',
   'diffTab.missing': 'This tab has no diff to show.',
 
   'state.truncated': 'Too many changes: the list shows only some of them.',

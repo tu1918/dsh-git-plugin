@@ -90,6 +90,7 @@ const {
   parseDiffTabAddress,
 } = await import('../src/client/adapter/sidebar-tab.tsx')
 const { GitDiffBody } = await import('../src/client/adapter/diff-tab-body.tsx')
+const { DiffView } = await import('../src/client/ui/DiffView.tsx')
 const { apply } = await import('../src/client/index.tsx')
 
 import type {
@@ -897,7 +898,7 @@ describe('the panel stylesheet', () => {
     )
   })
 
-  it('gives each half of a side-by-side diff its own scrollbar, and keeps the halves fixed', () => {
+  it('keeps the halves fixed, and gives the split ONE scrollbar per axis', () => {
     installStyles(document)
     const sheet =
       document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
@@ -906,15 +907,35 @@ describe('the panel stylesheet', () => {
     // and then "如果有超出去的话在底部加滚动条". Letting the row grow to fit the
     // longest line pushed the right half off the pane; clipping it lost the rest of
     // the line. So each half is half of the pane whatever the lines are, and each
-    // half is its own scroller — the scrollbar for an over-long line appears at the
-    // bottom of the half that overflows.
-    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*display: flex`, 'u'))
+    // half is its own scroller.
     assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*flex: 1 1 50%`, 'u'))
     assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*overflow: auto`, 'u'))
+    // But two independent scrollers cannot share a native bar, and in the narrow
+    // right-side column that read as four bars — "会出现两个横向滚动条，纵向的也会
+    // 有这个问题". So the halves hide their natives and the split is a GRID that
+    // carries one bar per axis at its own edges.
+    assert.match(sheet, new RegExp(`\\.${cls.diffSide}\\s*\\{[^}]*scrollbar-width: none`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.diffHalves} \\.${cls.diffSide}::-webkit-scrollbar\\s*\\{[^}]*display: none`,
+        'u',
+      ),
+    )
+    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*display: grid`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*grid-template-columns: minmax\\(0, 1fr\\) auto`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*grid-template-rows: minmax\\(0, 1fr\\) auto`, 'u'),
+    )
     // The divider is a LANE, not just breathing room: the gap sits between the two
     // scrollers, so a per-line action placed there can never be dragged sideways by
     // a long line, and the hairline is the boundary itself.
-    assert.match(sheet, new RegExp(`\\.${cls.diffSplit}\\s*\\{[^}]*gap: 16px`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHalves}\\s*\\{[^}]*display: flex`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHalves}\\s*\\{[^}]*gap: 16px`, 'u'))
     assert.match(
       sheet,
       new RegExp(
@@ -936,6 +957,36 @@ describe('the panel stylesheet', () => {
     )
     // The INLINE layout keeps whole lines and the pane's own horizontal scroll.
     assert.match(sheet, new RegExp(`\\.${cls.diffLine}\\s*\\{[^}]*min-width: min-content`, 'u'))
+  })
+
+  it('draws the shared bars where the axes run, not over the code', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // The vertical bar is its own grid column at the right edge, the horizontal one
+    // its own row across the bottom — so neither ever covers a line of the diff and
+    // the lane between the halves stays whole. The thumb is the only visible part.
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*grid-column: 2`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*grid-row: 1`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*grid-column: 1 / span 2`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*grid-row: 2`, 'u'))
+    // A drag that leaves the 10px strip must keep going, and must not pan the pane
+    // on a touch screen.
+    assert.match(sheet, new RegExp(`\\.${cls.diffVBar}\\s*\\{[^}]*touch-action: none`, 'u'))
+    assert.match(sheet, new RegExp(`\\.${cls.diffHBar}\\s*\\{[^}]*touch-action: none`, 'u'))
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffBarThumb}\\s*\\{[^}]*background: var\\(--dsw-alias-scrollbar-bg-l1\\)`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffHBar} \\.${cls.diffBarThumb}\\s*\\{[^}]*height: 6px`, 'u'),
+    )
+    assert.match(
+      sheet,
+      new RegExp(`\\.${cls.diffVBar} \\.${cls.diffBarThumb}\\s*\\{[^}]*width: 6px`, 'u'),
+    )
   })
 
   it('keeps the diff’s own scrollbars at the foot of a right-side tab', () => {
@@ -3059,6 +3110,67 @@ describe('operation failures (§4.3)', () => {
 })
 
 describe('the diff view (FR-2)', () => {
+  /**
+   * Pretend every element is a 300x400 box holding 900x1200 of content.
+   *
+   * jsdom has no layout, so `clientWidth` and friends are all zero and a scrollbar
+   * would have nothing to compute from. Overriding the getters on the prototype is
+   * the only way to give the component numbers; `Element` owns them, so shadowing
+   * them on `HTMLElement` and deleting the shadow puts them back.
+   * @param sizes - The numbers to report; the defaults overflow on both axes.
+   * @returns A restore function to call in a `finally`.
+   */
+  function fakeDiffMetrics(
+    sizes: {
+      readonly viewportWidth?: number
+      readonly contentWidth?: number
+      readonly viewportHeight?: number
+      readonly contentHeight?: number
+    } = {},
+  ): () => void {
+    const {
+      viewportWidth = 300,
+      contentWidth = 900,
+      viewportHeight = 400,
+      contentHeight = 1200,
+    } = sizes
+    const proto = dom.window.HTMLElement.prototype
+    Object.defineProperties(proto, {
+      clientWidth: { configurable: true, get: () => viewportWidth },
+      scrollWidth: { configurable: true, get: () => contentWidth },
+      clientHeight: { configurable: true, get: () => viewportHeight },
+      scrollHeight: { configurable: true, get: () => contentHeight },
+    })
+    return () => {
+      for (const name of ['clientWidth', 'scrollWidth', 'clientHeight', 'scrollHeight']) {
+        delete (proto as unknown as Record<string, unknown>)[name]
+      }
+    }
+  }
+
+  /** The callbacks one diff render needs; the tests never press the header. */
+  function diffViewProps() {
+    return {
+      diff: diffFixture(),
+      t,
+      expanded: true,
+      onLayout: () => undefined,
+      onExpand: () => undefined,
+      onCollapse: () => undefined,
+      onReload: () => undefined,
+      busy: false,
+    }
+  }
+
+  /** Render one side-by-side diff on its own, with no panel around it. */
+  async function renderSideBySideDiff(): Promise<HTMLElement> {
+    const container = await render(
+      h(DiffView, { ...diffViewProps(), layout: 'side-by-side' }),
+    )
+    await flush()
+    return container
+  }
+
   it('opens on a change row, draws the hunks and the word marks, and closes again', async () => {
     const diffCalls: string[] = []
     const container = await render(
@@ -3430,13 +3542,123 @@ describe('the diff view (FR-2)', () => {
     assert.equal(after.scrollTop, 120, 'the halves stay paired while reading down')
     assert.equal(after.scrollLeft, 40, 'and stay on the same column while reading across')
 
-    // And the mirror image: the guard is the values being equal, so the copy does
-    // not bounce back.
+    // The copy's own scroll event must not be read as the reader moving it. The
+    // two halves do not have the same scrollable range — the two sides hold
+    // different text — so a mirrored half that stops short would otherwise write
+    // its clamped value back and drag the half the reader is holding, which is the
+    // reported flicker while dragging one side.
+    before.scrollTop = 111
+    await act(async () => {
+      before.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(after.scrollTop, 111)
+    // The browser's echo of that write: same position, so it is ours, not theirs.
+    await act(async () => {
+      after.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(before.scrollTop, 111, 'the echo must not drag the reader’s half back')
+
+    // And the mirror image: a real move on the other half still carries over.
     after.scrollTop = 300
     await act(async () => {
       after.dispatchEvent(new dom.window.Event('scroll'))
     })
     assert.equal(before.scrollTop, 300)
+  })
+
+  it('draws ONE bar per axis for both halves, sized from their shared range', async () => {
+    // Reported from the running panel, of the side-by-side diff in a right-side
+    // tab: "会出现两个横向滚动条。纵向的也会有这个问题". Two independent scrollers
+    // cannot share a native bar, so the halves hide theirs and the split draws one
+    // per axis from the LARGER of the two ranges.
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await renderSideBySideDiff()
+      const bars = [...container.querySelectorAll(`.${cls.diffVBar}, .${cls.diffHBar}`)]
+      assert.equal(bars.length, 2, 'one bar per axis, not one per half')
+      // 300x400 of viewport over 900x1200 of content: 600 across, 800 down.
+      assert.equal(
+        must(container, `[data-diff-bar="x"]`).getAttribute('aria-valuemax'),
+        '600',
+      )
+      assert.equal(
+        must(container, `[data-diff-bar="y"]`).getAttribute('aria-valuemax'),
+        '800',
+      )
+      // The thumb is the viewport's share of the content: a third of the track.
+      const thumb = must<HTMLElement>(container, `[data-diff-bar="y"] [data-diff-bar-thumb]`)
+      assert.ok(Math.abs(Number.parseFloat(thumb.style.height) - 100 / 3) < 0.01)
+      assert.equal(Number.parseFloat(thumb.style.top), 0, 'at the top, it sits at the start')
+    } finally {
+      restore()
+    }
+  })
+
+  it('shows no bar for an axis that cannot move', async () => {
+    // A bar that cannot move is a control that does nothing, and the grid leaves it
+    // no room either: only the vertical axis overflows here.
+    const restore = fakeDiffMetrics({ contentWidth: 300, contentHeight: 1200 })
+    try {
+      const container = await renderSideBySideDiff()
+      assert.equal(container.querySelector(`.${cls.diffHBar}`), null)
+      assert.equal(container.querySelector(`.${cls.diffVBar}`) !== null, true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('moves both halves from one shared bar', async () => {
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await renderSideBySideDiff()
+      const [before, after] = [
+        ...container.querySelectorAll<HTMLElement>(`.${cls.diffSide}`),
+      ] as [HTMLElement, HTMLElement]
+      const hbar = must<HTMLElement>(container, `[data-diff-bar="x"]`)
+      const thumb = must<HTMLElement>(hbar, `[data-diff-bar-thumb]`)
+
+      // Grab the thumb and drag it half of its travel (the track is 300 wide and
+      // the thumb a third of it, so 100px is half of the 200px it may move).
+      await act(async () => {
+        thumb.dispatchEvent(
+          new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 0 }),
+        )
+      })
+      await act(async () => {
+        hbar.dispatchEvent(
+          new dom.window.PointerEvent('pointermove', { bubbles: true, clientX: 100 }),
+        )
+      })
+      await act(async () => {
+        hbar.dispatchEvent(
+          new dom.window.PointerEvent('pointerup', { bubbles: true, clientX: 100 }),
+        )
+      })
+
+      assert.ok(Math.abs(before.scrollLeft - 300) < 0.001, 'half of the 600px range')
+      assert.ok(Math.abs(after.scrollLeft - 300) < 0.001)
+      // And the bar reports where the halves now are: half of its 66.6667% travel.
+      assert.equal(hbar.getAttribute('aria-valuenow'), '300')
+      assert.ok(Math.abs(Number.parseFloat(thumb.style.left) - 100 / 3) < 0.01)
+    } finally {
+      restore()
+    }
+  })
+
+  it('leaves the inline layout to its own single scroller', async () => {
+    // Inline has nothing to share: one scroller, one native bar per axis.
+    const restore = fakeDiffMetrics()
+    try {
+      const container = await render(
+        h(DiffView, { ...diffViewProps(), layout: 'inline' }),
+      )
+      await flush()
+      assert.equal(container.querySelector(`[data-diff-bar]`), null)
+      assert.equal(container.querySelector(`.${cls.diffHunks}`) !== null, true)
+      assert.equal(container.querySelector(`.${cls.diffSide}`), null)
+    } finally {
+      restore()
+    }
   })
 
   it('drops an open diff whose file is no longer changed', async () => {
