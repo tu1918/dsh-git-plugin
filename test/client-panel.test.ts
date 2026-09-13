@@ -755,6 +755,27 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('draws the toolbar’s divider as a line the card cannot squeeze away', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Three rounds of the running panel are pinned here, because each one alone
+    // changes the report: "no line, just a bit of empty space" (a 1px flex item
+    // with no content is exactly what a clamped flex column shrinks to nothing —
+    // its rows hold, their text gives them a min-height), then "the same colour as
+    // the system" (the hairline aliases are alphas over the surface: 12% for l3,
+    // 16% for l4), then "a bit loud" (label-primary is what the entries' words are
+    // written in). The divider now takes the icons' ink.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.toolbarSeparator}\\s*\\{[^}]*flex:\\s*none[^}]*height:\\s*1px[^}]*--dsw-alias-label-tertiary`,
+        'u',
+      ),
+    )
+  })
+
   it('paints an action in the GUI’s link ink, and keeps the footnote ink separate', () => {
     installStyles(document)
     const sheet =

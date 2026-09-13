@@ -285,6 +285,10 @@ export const css = `
 
 .${cls.toolbarItem} {
   display: flex;
+  /* The card is its own scroller (see the overflow above), so nothing in it may be
+     squeezed to make the content fit: a menu row that shrunk instead of the card
+     scrolling would be a row with its text cut off. */
+  flex: none;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -336,12 +340,32 @@ export const css = `
   overflow-wrap: anywhere;
 }
 
-/* The hairline between two groups of entries, inset from both edges the way the
-   entries' own text is. */
+/* The hairline between the two groups, inset from both edges the way the entries'
+   own text is.
+ *
+ * Three rounds of the running panel shaped this rule, and each one ruled something
+ * out — "no line, just a bit of empty space", then "the same colour as the system",
+ * then "a bit loud":
+ *
+ * - **flex: none.** The card is its own scroller, and a 1px flex item with no
+ *   content is the one item a clamped flex column shrinks to nothing — its rows
+ *   hold, because their text gives them a min-height of their own, so this
+ *   collapsed by itself and left its margins behind as blank space.
+ * - **Not a border alias.** The four hairline aliases are alpha over the surface —
+ *   light #0000000a / 1a / 1f / 29, dark #ffffff0f / 1f / 29 / fff3 — so l3 is a 12%
+ *   line and even l4 is 16%; on a raised card they read as no line at all. The
+ *   GUI's own menu is worse (primitives' Menu.module.css draws its separator with
+ *   l1 and admits in a comment that l1 is near-invisible on that surface).
+ * - **The icons' ink, not the labels'.** label-primary is what the entries are
+ *   written in, and a rule that heavy competes with the words it separates. The
+ *   divider takes label-tertiary instead — the same token the leading column of
+ *   marks is drawn in, so the quietest thing on the card stays quiet. The card's
+ *   own edge keeps l3. */
 .${cls.toolbarSeparator} {
+  flex: none;
   height: 1px;
   margin: 4px 8px;
-  background: var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-label-tertiary);
 }
 
 /* ── state rail ─────────────────────────────────────────────────────────── */
