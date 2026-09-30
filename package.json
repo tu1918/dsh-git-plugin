@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-panel",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DSH Web GUI git panel: a resident right-sidebar tab for reviewing, staging, committing, and syncing the session workspace.",
   "keywords": [
     "dsh",

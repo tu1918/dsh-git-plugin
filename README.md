@@ -5,13 +5,14 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
-Currently through **M5b order 9**: the foundation, a read-only panel, the commit
-loop (stage → commit → push), the diff view, branch management with the merge
-state, an AI-written commit message, a commit detail — then M5a's discard / undo
-/ stash and M5b's commit-file drill-down, copy entries, the commit graph,
-multi-repository workspaces, and the history row's rewriting operations (revert,
-cherry-pick, reset, squash, drop). What remains: the v1.0 release pass. Every
-item of the original M5 list — discard, stash, the commit graph, undo,
+Released as **v1.0.0**: the foundation, a read-only panel, the commit loop
+(stage → commit → push), the diff view, branch management with the merge state,
+an AI-written commit message, a commit detail — then M5a's discard / undo /
+stash, M5b's commit-file drill-down, copy entries, the commit graph,
+multi-repository workspaces, the history row's rewriting operations (revert,
+cherry-pick, reset, squash, drop), and the release pass itself, which closed the
+one defect left open (a git operation could leave the panel spinning for good).
+Every item of the original M5 list — discard, stash, the commit graph, undo,
 multi-repository — has shipped.
 
 ## Docs
@@ -36,7 +37,8 @@ multi-repository — has shipped.
 | Stage / unstage, one file or a whole group | ✅ |
 | Commit box with an explicit scope: the index only, or every tracked change (the button says which, and how many) | ✅ |
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
-| Fetch every remote — a dashed ↓ beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
+| Fetch every remote — a cloud with a ↓ under it, beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
+| A git operation is bounded end to end. The host's deadline escalates SIGTERM → SIGKILL and settles on the process *ending*, so a helper that ignores the polite signal (or holds the pipes open after its parent dies) can no longer leave a request pending; the request carries a deadline of its own in the host and one more in the browser. A mutation that runs past it says the result is **unknown** — git may still be running — and the panel re-reads the repository instead of lying about what happened | ✅ |
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
 | Multi-repository workspaces (FR-8): when the session's directory is a **container** rather than a repository, one level below it is scanned for repositories (skipping dot-directories, `node_modules`, `dist`, `build`) and the rail grows a picker — only when there is a choice, so a single-repository workspace looks exactly as before. The default is the repository whose git state moved most recently, and the choice is remembered per container. The browser may only choose among roots the host itself found there, so naming a path of its own gets a refusal | ✅ |
 | HTTPS credentials. A remote that wants one and has none is named as such (`auth-required`, with the origin git itself printed), and the same failure notice grows a username / password form. "Save and retry" stores the pair through the harness's own credential seam — `ctx.credentials`, so the provider owns where the value lives, and this profile's local provider writes its own 0600 document rather than us inventing a store — and then retries the very operation that failed. Every later push/pull/fetch/sync resolves the stored credential and hands it to git through `GIT_ASKPASS`, with `GIT_TERMINAL_PROMPT=0` unchanged so nothing can ever hang on a prompt. The value never reaches a log line | ✅ |
@@ -72,7 +74,7 @@ multi-repository — has shipped.
 | Drill into one file of a commit (FR-7.2): every row in a commit's file list is a button that opens that file as the commit changed it, in the same bottom diff tab a change row uses — `git show <hash> -m --first-parent -- <path>`, read against the revision rather than the working tree, so an uncommitted edit to the same file cannot appear in it. The reading follows moved refs only, and it is not swept away when the file is absent from the change list | ✅ |
 | Commit graph (FR-7.1): every history row carries its own swimlane strip — a first parent continues straight down, an extra parent opens a lane, and a line rejoins when the branches meet. The assignment is one pass over all loaded commits, so loading the next page extends the diagram without redrawing it (pagination cannot break the lines); the strip's width is one number shared by every row, so a merge cannot shift the hashes | ✅ |
 | Rewriting a commit from its row's toolbar, every entry armed (two clicks, the second one named): **Revert this commit** (a new commit that reverses it — any commit, and history is never rewritten), **Cherry-pick this commit** (apply it to the current branch as a new commit; a pick whose change is already here is cleaned up and refused rather than left as an operation with nothing to do), **Squash into the previous commit** (folds it into its parent, keeping that commit's message), **Drop this commit** (removes it and replays what followed), and **Reset to this commit…**, which opens into soft / mixed / hard — the hard one says it discards uncommitted work. Squash and drop are `git rebase` under the hood, so the panel refuses the cases where that would change more than asked: a merge commit as the target, a target outside this branch, a merge commit anywhere after it (the panel does not linearise a branch on your behalf), a detached HEAD, or an operation already in progress | ✅ |
-| The v1.0 release pass | ⏳ M5b |
+| The v1.0 release pass | ✅ v1.0.0 |
 
 The whole M2 loop runs without a terminal: change → stage → commit → push, with
 the panel's own end-to-end test driving it against a real repository and a real
@@ -120,7 +122,9 @@ which is what FR-2.3 asks for by name (see `docs/plan.md` D12).
 The host bundle carries two runtime `@deepseek-ai/*` imports, both behind an
 adapter. `host/adapter/llm.ts` uses the harness's own `BlockAssembler` and
 `createUserMessage` rather than reimplementing stream assembly
-(`@deepseek-ai/dsh-llm`, D23). `host/adapter/credentials.ts` stores HTTPS
+(`@deepseek-ai/dsh-llm`, D23) — and declares this plugin's own message source
+into the harness's `MessageSourceMap`, which is where DSH 0.2 expects a producer
+to name itself. `host/adapter/credentials.ts` stores HTTPS
 credentials through the harness's credential seam, `ctx.credentials`, rather
 than a store of this plugin's own (`@deepseek-ai/dsh-credentials`, D44). Both
 are peer dependencies; a composition that mounts neither still mounts the panel,
@@ -130,12 +134,13 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 588 tests && build
+npm run check      # tsc --noEmit && 630 tests && build
 ```
 
 ## Install
 
-Requires DSH >= 0.1.5-rc.1 (the right-sidebar tab-type registry this builds on)
+Requires DSH >= 0.2.0-rc.2 (the right-sidebar tab-type registry this builds on,
+and the merge-extensible message source map this plugin declares into)
 and git >= 2.20.
 
 ```sh
@@ -233,8 +238,17 @@ npm test
   origin the repository does not have, a remote that is not a bare origin, and a
   deployment with no credential provider — and the audit line's refusal to carry
   the value
-- `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, and the
-  panel mounting in a composition with no language model at all
+- `test/git-exec.test.ts` — the process seam against a stand-in `git` that
+  ignores SIGTERM or leaves a child holding its pipes: the deadline still settles
+  (and a surviving helper no longer delays the result), the output cap cuts and
+  says so without pretending to be a timeout, and a missing binary is its own
+  outcome
+- `test/git-client.test.ts` — the browser transport's deadlines: a host that
+  never answers becomes a `timeout`, a closed tab is not reported as one, and a
+  rewrite is given the long bound
+- `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, the
+  panel mounting in a composition with no language model at all, and a
+  `gitTimeoutMs` that would switch the deadline off being ignored out loud
 - `test/client-panel.test.ts` — the panel rendered in jsdom: groups, badges, path
   splitting, clean and failure states, lazy history, the commit box's four scopes
   and its `Ctrl+Enter`, per-row and per-group staging, the sync buttons' enabled
@@ -261,10 +275,15 @@ npm test
   into a zero-dependency MIT package — behind `core/diff-engine/marks.ts`. The
   line-level hunks do **not**: git produces those and `core/diff-parse.ts` reads
   them, so the engine never sees a whole file (see `docs/plan.md` D13).
-- `execFile` reports a non-zero exit on `error.code`, **not** `error.status`.
-  Reading only `status` turned every non-zero exit into `code: null`, which is
-  also what "killed by a signal" looks like; `git diff --no-index`'s ordinary
-  exit 1 — how an untracked file is rendered as all-new — is what surfaced it.
+- The git runner uses `spawn`, not `execFile`, and the difference is the whole
+  point of the deadline: `execFile`'s `timeout` sends SIGTERM and its callback
+  waits for the `close` event, so a child that ignores the signal — or a helper
+  that keeps the pipes after its parent dies — leaves the promise pending
+  forever. Here the deadline escalates to SIGKILL, the result is ready once the
+  process has **ended**, and a child in uninterruptible sleep is left behind
+  rather than waited on. Exit codes come from the `exit` event, where a
+  signal-killed process reports `code: null`; a `git diff --no-index` that finds
+  differences is an ordinary exit 1 and must stay distinguishable from that.
 - `GitRunner.run` takes `optionalLocks` as a third argument, defaulting to
   **false**, which stops `git status` from rewriting `.git/index`. That is
   load-bearing: the git state probe watches that file, so a read that wrote it would
