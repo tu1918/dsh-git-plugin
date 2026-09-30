@@ -113,20 +113,38 @@ export function ArrowDownGlyph({ size = 12, className }: GlyphProps): ReactNode 
 }
 
 /**
- * A dashed arrow pointing down: fetch, which receives refs without merging them.
+ * A cloud with an arrow dropping out of it: fetch, which takes what the remote
+ * has without merging any of it into the branch.
  *
- * Dashed rather than plain so it reads as a different action from Pull beside it
- * (the two are both "something comes down"); what it brings down is knowledge of
- * the remote, not changes to the working tree.
+ * The first version was a dashed down arrow — the same arrow Pull draws, with
+ * `strokeDasharray` on both halves — and it was reported from the running panel
+ * twice: 「太丑了」 and then 「不对称，看着很难受」. They are one defect. A dash
+ * pattern starts at its own path's beginning, so the shaft and the head (two
+ * paths) laid out independently and, worse, the head's two arms fell out of phase
+ * with each other: at 13px the left arm began with a gap and the right one with a
+ * dash, and what a reader saw was a broken arrow rather than a mark.
+ *
+ * So the distinction from Pull is drawn as a SHAPE now, not as a line style. The
+ * cloud is the remote — the thing being asked — and the solid arrow is what comes
+ * down from it; Pull keeps the bare arrow, because what IT brings down lands in
+ * the branch. Mirrored about the middle (both arms of the head, both sides of the
+ * cloud), so there is nothing left to be lopsided at any size.
+ *
+ * It is drawn at 15 rather than at the arrows' 13, which was asked for from the
+ * running panel right after the redraw (「icon 放大一点」): a cloud plus an arrow is
+ * two marks where the neighbours are one, so the same box gives it less ink — at
+ * 13 the cloud closed up into a smudge. The two numbers are independent (this is
+ * the glyph's own default, and the rail says nothing), so the size is one number
+ * to move either way.
  * @param props - Size and class.
  */
-export function FetchGlyph({ size = 13, className }: GlyphProps): ReactNode {
+export function FetchGlyph({ size = 15, className }: GlyphProps): ReactNode {
   return stroke(
     size,
     className,
     <>
-      <path d="M8 3.4v8.8" strokeDasharray="2.4 2.4" />
-      <path d="M4.7 8.7 8 12l3.3-3.3" strokeDasharray="2.4 2.4" />
+      <path d="M3.9 8.4a2 2 0 0 1 .7-3.4 3.7 3.7 0 0 1 6.8 0 2 2 0 0 1 .7 3.4z" />
+      <path d="M8 9.5v3M5.7 10.7 8 12.5l2.3-1.8" />
     </>,
   )
 }

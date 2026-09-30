@@ -655,9 +655,10 @@ function BranchRail({
       <ToolButton label={t('action.sync')} disabled={!canSync || busy} onClick={onSync}>
         <SyncGlyph />
       </ToolButton>
-      {/* Fetch sits beside Pull because both bring something down, and the dashed
-          arrow is how they are told apart: this one only updates what the panel
-          knows about the remote, and never touches the working tree. */}
+      {/* Fetch sits beside Pull because both bring something down, and the cloud
+          with the arrow under it is how they are told apart: this one only updates
+          what the panel knows about the remote, and never touches the working
+          tree. */}
       <ToolButton label={t('action.fetch')} disabled={busy} onClick={onFetch}>
         <FetchGlyph />
       </ToolButton>
