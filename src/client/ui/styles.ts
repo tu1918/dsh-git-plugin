@@ -1182,9 +1182,16 @@ export const css = `
   background: var(--dsw-alias-button-primary-hover);
 }
 
+/* The same pair as the commit button's disabled rule, and changed for the same
+   reason: label-dimmed IS this fill's colour in both themes, so a checked batch
+   action whose operation had started lost its words — "暂存选中 (2)" was painted
+   #43454a on #43454a (dark) and #e1e5ee on #ebeef2 (light). The unavailable ink
+   here is the one the button already reads in while it is merely greyed out (see
+   the groupActions ghost rule), so only its fill changes between "nothing to act
+   on" and "acting". */
 .${cls.groupActions} .${cls.ghost}[data-selected='true']:disabled {
   background: var(--dsw-alias-button-primary-dimmed);
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
   cursor: default;
 }
 
@@ -1597,9 +1604,20 @@ export const css = `
 
 .${cls.commitButton}:disabled {
   /* DSH's own fill for a primary button that cannot be pressed, so a disabled
-     commit button still looks like a button — just not one you can press. */
+     commit button still looks like a button — just not one you can press.
+
+     The ink is label-secondary, NOT label-dimmed, which is what this rule first
+     said. Those two tokens are the same colour as the fill in both themes —
+     dark: bluish-750 on bluish-750 (#43454a on #43454a, 1.00:1), light:
+     bluish-200 on bluish-100 (#e1e5ee on #ebeef2, 1.08:1) — so the words came
+     out invisible, reported from the running panel as 「提交按钮的文字和底色差异
+     太小了，看不出来」. label-secondary measures 6.37:1 on this fill in the dark
+     theme and 4.98:1 in the light one, and it is already what the group headers'
+     bulk buttons read in while THEY are unavailable (the groupActions ghost
+     rule), so the two greyed controls that sit one above the other say
+     "unavailable" in one voice. */
   background: var(--dsw-alias-button-primary-dimmed);
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
   cursor: default;
 }
 

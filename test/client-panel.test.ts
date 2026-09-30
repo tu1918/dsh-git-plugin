@@ -902,6 +902,45 @@ describe('the panel stylesheet', () => {
     )
   })
 
+  it('paints a disabled button’s words in ink that is not its own fill', () => {
+    installStyles(document)
+    const sheet =
+      document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${STYLE_TAG_ID}"]`)
+        ?.textContent ?? ''
+    // Reported from the running panel, of the commit button with nothing to
+    // commit: 「提交按钮的文字和底色差异太小了，看不出来」 — a grey box with no words
+    // in it. The fill is right (DSH's own `button-primary-dimmed`); the ink was
+    // not, because `label-dimmed` IS that fill's colour: bluish-750 on bluish-750
+    // in the dark theme, bluish-200 on bluish-100 in the light one, 1.00:1 and
+    // 1.08:1.
+    // jsdom resolves no `var()` and holds no palette, so what is pinned here is the
+    // pair of tokens, which is where the collision lives — the dimmed fill must not
+    // be written with the dimmed ink. The ink it takes instead is the one the group
+    // headers' bulk buttons already read in while THEY are unavailable, so the grey
+    // control above and the grey control below say "unavailable" in one voice.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.commitButton}:disabled\\s*\\{[^}]*--dsw-alias-button-primary-dimmed[^}]*--dsw-alias-label-secondary`,
+        'u',
+      ),
+    )
+    assert.doesNotMatch(
+      sheet,
+      new RegExp(`\\.${cls.commitButton}:disabled\\s*\\{[^}]*--dsw-alias-label-dimmed`, 'u'),
+    )
+    // The same pair, for the same reason, on the checked batch action: while an
+    // operation runs it wears the same dimmed primary fill, and its label names the
+    // selection ("Stage selected (2)") — words that were painted out with it.
+    assert.match(
+      sheet,
+      new RegExp(
+        `\\.${cls.groupActions} \\.${cls.ghost}\\[data-selected='true'\\]:disabled\\s*\\{[^}]*--dsw-alias-button-primary-dimmed[^}]*--dsw-alias-label-secondary`,
+        'u',
+      ),
+    )
+  })
+
   it('ellipsizes a file name too long for its tab or its diff header', () => {
     installStyles(document)
     const sheet =
