@@ -5,7 +5,7 @@
  * §5.2 arrangement: the git service builds a prompt as a string and gets a string
  * back, so no component, no service, and no test needs a model to exist.
  *
- * Two properties of the call are decided here rather than in the prompt builder:
+ * Three properties of the call are decided here rather than in the prompt builder:
  *
  * - **The route comes from the deployment's default model.** `agentDefaultModel`
  *   is what the harness itself uses for an Agent created without an explicit
@@ -17,6 +17,8 @@
  *   `ctx.get` is how "optional" is expressed: it does not add the service to
  *   `inject`, so the panel still mounts — and the rest of it still works — in a
  *   composition that has no model at all.
+ * - **The message wears this plugin's own source kind**, declared below rather
+ *   than borrowed from a shared one.
  *
  * @module dsh-git-panel/host/adapter/llm
  */
@@ -25,6 +27,30 @@ import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { Result } from '../../core/ports.ts'
+
+/**
+ * This plugin's source kind, declared into the harness's map.
+ *
+ * DSH 0.2 removed the shared `plugin` source (`MessageSourceMap` is now a
+ * merge-extensible sum whose producers each declare their own kind — the
+ * interface's own doc says there is no catch-all), so the attribution this
+ * plugin stamps can no longer be spelled with one of DSH's values and has to be
+ * added beside them.
+ *
+ * The augmentation names the module that DECLARES the interface, not the
+ * package entry: `@deepseek-ai/dsh-llm` only re-exports the type, and augmenting
+ * a re-export would declare a second, shadowing interface instead of merging
+ * with it.
+ *
+ * The key is a literal because an interface takes no computed name; it is the
+ * same string as {@link PLUGIN}, so renaming one without the other fails the
+ * typecheck rather than silently dropping the attribution.
+ */
+declare module '@deepseek-ai/dsh-llm/message' {
+  interface MessageSourceMap {
+    'dsh-git-panel': { kind: 'dsh-git-panel' }
+  }
+}
 
 /** One model's answer, in the panel's vocabulary. */
 export type TextGenerator = (prompt: string, signal?: AbortSignal) => Promise<Result<string>>
@@ -81,7 +107,7 @@ export function createTextGenerator(ctx: Context): TextGenerator {
         messages: [
           createUserMessage({
             content: [{ type: 'text', text: prompt }],
-            source: { kind: 'plugin', plugin: PLUGIN },
+            source: { kind: PLUGIN },
           }),
         ],
         maxTokens: MAX_OUTPUT_TOKENS,

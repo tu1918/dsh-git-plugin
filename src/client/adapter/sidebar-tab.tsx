@@ -37,6 +37,15 @@ export const GIT_PANEL_KIND = 'git-panel'
 export const GIT_PANEL_ID = 'dsh-git-panel'
 
 /**
+ * The panel's guide entry identity, which the tab registry requires to be
+ * stable within the type that contributes it. A string of its own rather than
+ * {@link GIT_PANEL_ID} reused: the entry is what the guide page draws, the
+ * identity is the type that picking it opens, and one value serving as both
+ * would read as if those were one record.
+ */
+const GIT_GUIDE_ID = 'dsh-git-panel-guide'
+
+/**
  * The diff viewer's tab kind.
  *
  * A RESOURCE type rather than a page: resource tabs are claimed by address and
@@ -138,6 +147,7 @@ export function gitPanelDefinition(t: TranslateNS<'gitPanel'>): SidebarRightTabD
     title: () => t('type.label'),
     guide: [
       {
+        id: GIT_GUIDE_ID,
         order: GUIDE_ORDER,
         title: () => t('guide.title'),
         description: () => t('guide.description'),
