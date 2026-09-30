@@ -284,6 +284,8 @@ export const zh = {
   'error.noSession': '这个会话没有可用的工作目录。',
   'error.gitMissing': '找不到 git 命令，请确认这台机器已安装 Git。',
   'error.timeout': 'Git 响应太慢，这次读取已中止。',
+  'error.timeoutUnknown':
+    '等待超过时限，操作结果未知：git 可能已经改动了仓库。已重新读取仓库状态。',
   'error.tooLarge': '输出太大，这次读取已中止。',
   'error.generic': '读取失败：{message}',
   'error.actionFailed': '操作失败：{message}',
@@ -571,6 +573,8 @@ export const en: Record<GitPanelKey, string> = {
   'error.noSession': 'This session has no usable working directory.',
   'error.gitMissing': 'The git command was not found. Check that Git is installed on this machine.',
   'error.timeout': 'Git took too long, so this read was stopped.',
+  'error.timeoutUnknown':
+    'Waited past the deadline, so the result is unknown: git may already have changed the repository. The state has been re-read.',
   'error.tooLarge': 'The output was too large, so this read was stopped.',
   'error.generic': 'Could not read: {message}',
   'error.actionFailed': 'The operation failed: {message}',

@@ -6,11 +6,15 @@
  * later means rewriting this file and nothing else — no component, no hook, no
  * dictionary.
  *
- * Two transport details are worth stating outright:
+ * Three transport details are worth stating outright:
  *
  * - Every response is the host's `{ ok, value } | { ok, error }` envelope, and a
  *   failure is returned as data rather than thrown. A network fault becomes the
  *   same shape, so the UI has exactly one error path.
+ * - Every request carries its own deadline, a little longer than the host's own
+ *   (see `adapter/routes.ts`), and answers `timeout` when it fires. The tab's
+ *   `AbortSignal` alone is not a bound: it aborts when the tab closes, so a host
+ *   that never answers used to leave a spinner turning with no way out (F-1).
  * - `watch` prefers the host's SSE stream and falls back to polling when the
  *   stream cannot help — no `EventSource` in the browser, or a host that answered
  *   "unavailable" because the session is not in a repository yet. That fallback is
@@ -51,6 +55,30 @@ const ROUTE_PREFIX = '/git-panel'
 /** Poll interval used when the stream is unavailable (FR-1.4's fallback). */
 const POLL_FALLBACK_MS = 10_000
 
+/**
+ * How long one request may wait before this client stops it.
+ *
+ * Deliberately a little longer than the host's own request deadline: when the
+ * host can answer — even to say it waited too long — that answer is the better
+ * one, and this bound is only for the host that has gone silent altogether.
+ */
+const REQUEST_DEADLINE_MS = 75_000
+
+/**
+ * The deadline for the two operations the host also gives longer: a rewrite
+ * replays history through a 60s rebase, and a generated commit message waits on
+ * the deployment's model.
+ */
+const LONG_REQUEST_DEADLINE_MS = 135_000
+
+/** The deadlines this client enforces; a test may shorten them. */
+export interface RequestDeadlines {
+  /** Deadline for an ordinary request, in milliseconds. */
+  readonly requestMs?: number
+  /** Deadline for a rewrite or a generated commit message, in milliseconds. */
+  readonly longRequestMs?: number
+}
+
 /** The host's response envelope. */
 type Envelope<T> =
   | { readonly ok: true; readonly value: T }
@@ -86,33 +114,80 @@ function envelopeOf<T>(body: unknown): Result<T> {
 }
 
 /**
+ * Issue one request, bounded in time.
+ *
+ * The caller's signal (the tab's lifetime) and the deadline abort the same
+ * controller, and which one fired decides what the answer says: a closed tab is
+ * not a failure to show, while a timeout is one the user has to be told about.
+ * `ui/error-copy.ts` writes the sentence, because the same code means "this read
+ * was stopped" for a read and "the result is unknown" for a mutation.
+ * @param url - The full URL to call.
+ * @param init - Method, headers, and body.
+ * @param signal - Caller cancellation.
+ * @param deadlineMs - How long to wait before giving up on the host.
+ * @returns The envelope the host sent, or a failure that fits the panel.
+ */
+async function send<T>(
+  url: URL,
+  init: {
+    readonly method: 'GET' | 'POST'
+    readonly headers: Readonly<Record<string, string>>
+    readonly body?: string
+  },
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+): Promise<Result<T>> {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, deadlineMs)
+  const abort = (): void => controller.abort()
+  // An already-aborted caller never fires its event again, so the check comes
+  // first: a request made after the tab closed must not wait for the deadline.
+  if (signal?.aborted === true) abort()
+  else signal?.addEventListener('abort', abort)
+
+  try {
+    const response = await fetch(url, {
+      method: init.method,
+      // Same-origin, so the session cookie rides along; the host's own fence
+      // decides whether this client may talk to it at all.
+      credentials: 'same-origin',
+      headers: init.headers,
+      ...(init.body === undefined ? {} : { body: init.body }),
+      signal: controller.signal,
+    })
+    return envelopeOf<T>(await response.json())
+  } catch (error) {
+    if (timedOut) {
+      return { ok: false, error: { code: 'timeout', message: 'the host did not answer in time' } }
+    }
+    return transportFailure(error, signal?.aborted === true)
+  } finally {
+    window.clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
+/**
  * Issue one JSON operation.
  * @param path - Route path under the prefix.
  * @param params - Query parameters.
  * @param signal - Caller cancellation.
+ * @param deadlineMs - How long to wait before giving up on the host.
  * @returns The envelope the host sent, or a transport failure.
  */
-async function request<T>(
+async function requestWith<T>(
   path: string,
   params: Readonly<Record<string, string | number>>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
 ): Promise<Result<T>> {
   const url = new URL(`${ROUTE_PREFIX}${path}`, window.location.origin)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value))
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      // Same-origin, so the session cookie rides along; the host's own fence
-      // decides whether this client may talk to it at all.
-      credentials: 'same-origin',
-      headers: { accept: 'application/json' },
-      ...(signal === undefined ? {} : { signal }),
-    })
-    return envelopeOf<T>(await response.json())
-  } catch (error) {
-    return transportFailure(error, signal?.aborted === true)
-  }
+  return send<T>(url, { method: 'GET', headers: { accept: 'application/json' } }, signal, deadlineMs)
 }
 
 /**
@@ -124,33 +199,55 @@ async function request<T>(
  * @param path - Route path under the prefix.
  * @param body - The request body, session included.
  * @param signal - Caller cancellation.
+ * @param deadlineMs - How long to wait before giving up on the host.
  * @returns The envelope the host sent, or a transport failure.
  */
-async function mutate<T>(
+async function mutateWith<T>(
   path: string,
   body: Readonly<Record<string, unknown>>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
 ): Promise<Result<T>> {
   const url = new URL(`${ROUTE_PREFIX}${path}`, window.location.origin)
-  try {
-    const response = await fetch(url, {
+  return send<T>(
+    url,
+    {
       method: 'POST',
-      credentials: 'same-origin',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      ...(signal === undefined ? {} : { signal }),
-    })
-    return envelopeOf<T>(await response.json())
-  } catch (error) {
-    return transportFailure(error, signal?.aborted === true)
-  }
+    },
+    signal,
+    deadlineMs,
+  )
 }
 
 /**
  * Build the browser's git client.
+ * @param deadlines - Request deadlines; defaults to the two constants above.
  * @returns The client the panel is handed.
  */
-export function createGitRemoteClient(): GitRemoteClient {
+export function createGitRemoteClient(deadlines: RequestDeadlines = {}): GitRemoteClient {
+  const requestMs = deadlines.requestMs ?? REQUEST_DEADLINE_MS
+  const longRequestMs = deadlines.longRequestMs ?? LONG_REQUEST_DEADLINE_MS
+  // The two primitives with this client's bounds already applied, so every
+  // method below spells only what its request is.
+  const request = <T>(
+    path: string,
+    params: Readonly<Record<string, string | number>>,
+    signal?: AbortSignal,
+  ): Promise<Result<T>> => requestWith<T>(path, params, signal, requestMs)
+  const mutate = <T>(
+    path: string,
+    body: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<Result<T>> => mutateWith<T>(path, body, signal, requestMs)
+  /** The same, for the two operations the host also gives longer. */
+  const mutateLong = <T>(
+    path: string,
+    body: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<Result<T>> => mutateWith<T>(path, body, signal, longRequestMs)
+
   return {
     status: (sessionId, signal) => request<RepoStatus>('/status', { session: sessionId }, signal),
     branches: (sessionId, signal) =>
@@ -212,7 +309,9 @@ export function createGitRemoteClient(): GitRemoteClient {
     abortOperation: (sessionId, kind: InProgressOperation, signal) =>
       mutate<OperationReport>('/abortOperation', { session: sessionId, kind }, signal),
     generateCommitMessage: (sessionId, locale, signal) =>
-      mutate<GeneratedMessage>(
+      // A generation waits on the deployment's model, which the host bounds at
+      // 60s; the ordinary request deadline would cut it short.
+      mutateLong<GeneratedMessage>(
         '/generateCommitMessage',
         { session: sessionId, locale },
         signal,
@@ -228,7 +327,8 @@ export function createGitRemoteClient(): GitRemoteClient {
     resetTo: (sessionId, hash, mode: ResetMode, signal) =>
       mutate<OperationReport>('/reset', { session: sessionId, hash, mode }, signal),
     rewriteCommit: (sessionId, hash, action: RewriteAction, signal) =>
-      mutate<OperationReport>('/rewrite', { session: sessionId, hash, action }, signal),
+      // A rewrite replays history through a 60s rebase; see the note above.
+      mutateLong<OperationReport>('/rewrite', { session: sessionId, hash, action }, signal),
 
     stashes: (sessionId, signal) =>
       request<readonly StashEntry[]>('/stashes', { session: sessionId }, signal),

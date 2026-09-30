@@ -1,20 +1,30 @@
 /**
  * The `git` process seam: argument-array invocation, a per-directory serial
- * queue, a deadline, and an output cap.
+ * queue, a bounded wait, and an output cap.
  *
  * Three properties matter, and each is a direct answer to a way this can go
  * wrong:
  *
- * - **No shell, ever.** Arguments go to `execFile` as an array, so a branch name
+ * - **No shell, ever.** Arguments go to `spawn` as an array, so a branch name
  *   or path containing `;`, backticks, or `$(...)` is one argv element and can
  *   never become a command (§5.3 "禁 shell 插值").
  * - **One git at a time per directory.** Git serialises itself with
  *   `.git/index.lock`, so two concurrent operations on one repository do not
  *   race politely — the loser fails with "Unable to create index.lock". The
  *   queue turns that into waiting.
- * - **A deadline and a cap.** A hung credential prompt or a status on a huge
- *   monorepo must not pin a browser request open forever, so every call is
- *   bounded in both time and bytes (§5.5, §8.4).
+ * - **The wait is bounded, and the promise always settles.** A hung credential
+ *   prompt or a status on a huge monorepo must not pin a browser request open
+ *   forever (§5.5, §8.4), so a call that outlives its deadline is asked to
+ *   leave and then made to; a call whose pipes never close still returns.
+ *
+ * The last property is why this is `spawn` and not `execFile`: `execFile`'s
+ * `timeout` sends SIGTERM and settles on the `close` event, so a git helper that
+ * ignores SIGTERM — `git-remote-https` or `ssh` surviving its parent — leaves
+ * the promise pending forever, which the panel shows as a spinner with no way
+ * out. Here the deadline escalates to SIGKILL, the result is ready once the
+ * process has ENDED rather than once its pipes are closed, and a child that
+ * cannot even be reaped (uninterruptible sleep) is left behind rather than
+ * waited on.
  *
  * `GIT_TERMINAL_PROMPT=0` means a missing credential is a fast failure rather
  * than a hang; a credential the user stored in the panel reaches git through
@@ -25,8 +35,10 @@
  * @module dsh-git-panel/host/git-exec
  */
 
-import { execFile } from 'node:child_process'
-import type { ExecFileException } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+import type { Readable } from 'node:stream'
+import { StringDecoder } from 'node:string_decoder'
 import type {
   GitAskPass,
   GitEditorControl,
@@ -40,6 +52,42 @@ const DEFAULT_TIMEOUT_MS = 15_000
 
 /** Default stdout cap. A status listing far past this is not renderable anyway. */
 const DEFAULT_MAX_STDOUT_BYTES = 8 * 1024 * 1024
+
+/**
+ * How long a child gets to leave after SIGTERM before SIGKILL follows.
+ *
+ * SIGTERM alone is not a bound: a process that ignores it (`ssh` waiting on a
+ * network read, a shell with `trap '' TERM`) would keep the call alive forever.
+ * Git itself leaves promptly on SIGTERM, so the grace is short.
+ */
+const SIGTERM_GRACE_MS = 2_000
+
+/**
+ * How long SIGKILL is given to be acted on before the call stops waiting.
+ *
+ * SIGKILL cannot be ignored, but it cannot always be acted on either: a process
+ * in uninterruptible sleep (D state, on a network or FUSE filesystem) is not
+ * reaped until the kernel operation it is inside returns. The promise settles
+ * anyway — the request gets an answer, and the unreaped child is the kernel's
+ * business rather than this request's.
+ */
+const SIGKILL_GRACE_MS = 1_000
+
+/**
+ * How long `close` is waited for after the process itself has exited.
+ *
+ * `close` is the event that says every pipe is drained. It is also the event
+ * that never comes when a git helper outlives its parent holding the write end,
+ * so it may inform the result but must not gate it: the process ending is what
+ * makes the result available, and this grace only lets the pipes catch up.
+ */
+const PIPE_DRAIN_GRACE_MS = 1_000
+
+/** The two pipes this runner reads. Stdin is `ignore`, so the child has none. */
+interface GitProcess extends ChildProcess {
+  readonly stdout: Readable
+  readonly stderr: Readable
+}
 
 /**
  * The environment every git call runs with.
@@ -150,11 +198,6 @@ function isMissingBinary(error: NodeJS.ErrnoException): boolean {
   return error.code === 'ENOENT'
 }
 
-/** Whether Node cut the output because it exceeded `maxBuffer`. */
-function isOutputOverflow(error: NodeJS.ErrnoException): boolean {
-  return error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
-}
-
 /**
  * Build the runner.
  * @returns The `GitRunner` the git service depends on.
@@ -164,91 +207,151 @@ export function createGitRunner(): GitRunner {
 
   return {
     run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
-      const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+      // A deadline that is zero, negative, or not a number would fire the timer
+      // at once (`execFile` used to read its `timeout: 0` as "no deadline at
+      // all", which silently removed the bound). Neither is what a caller asked
+      // for, so the default stands in; `host/index.ts` warns about the spelling
+      // at the config seam, where the operator can see it.
+      const configured = options.timeoutMs
+      const timeoutMs =
+        configured !== undefined && Number.isFinite(configured) && configured > 0
+          ? configured
+          : DEFAULT_TIMEOUT_MS
       const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES
       const env = gitEnvironment(options.optionalLocks ?? false, options.askpass, options.editor)
 
       // The task holds the directory's queue slot for the whole process life,
-      // which is what makes the lock guarantee real.
+      // which is what makes the lock guarantee real. The queue carries no
+      // deadline of its own: every task now settles, so a wait behind others is
+      // bounded by their deadlines, and the request deadline in `adapter/routes`
+      // bounds the whole call from above.
       return queues.run(options.cwd, () =>
         new Promise<GitRunResult>((resolve) => {
-          execFile(
-            'git',
-            [...args],
-            {
-              cwd: options.cwd,
-              env,
-              timeout: timeoutMs,
-              maxBuffer: maxStdoutBytes,
-              encoding: 'utf8',
-              windowsHide: true,
-              // No `stdio` here: `execFile` always pipes stdout/stderr, and it is
-              // not one of its options. Stdin is not left readable by a prompt
-              // because GIT_TERMINAL_PROMPT=0 makes git fail instead of asking.
-            },
-            (error: ExecFileException | null, stdout: string, stderr: string) => {
-              const out = typeof stdout === 'string' ? stdout : ''
-              const err = typeof stderr === 'string' ? stderr : ''
-              if (error === null) {
-                resolve({
-                  code: 0,
-                  stdout: out,
-                  stderr: err,
-                  timedOut: false,
-                  truncated: false,
-                  spawnFailed: false,
-                })
-                return
-              }
+          // `stdio` is spelled out so stdin is not a pipe git could wait on;
+          // that also makes TypeScript type the result as a plain `ChildProcess`,
+          // so this narrows it to the two pipes actually read below.
+          const child = spawn('git', [...args], {
+            cwd: options.cwd,
+            env,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          }) as GitProcess
 
-              const nodeError = error as NodeJS.ErrnoException & {
-                killed?: boolean
-                signal?: NodeJS.Signals | null
-                status?: number | null
-                /** The numeric exit code, which is where `execFile` puts it. */
-                code?: string | number
-              }
-              if (isMissingBinary(nodeError)) {
-                resolve({
-                  code: null,
-                  stdout: '',
-                  stderr: err,
-                  timedOut: false,
-                  truncated: false,
-                  spawnFailed: true,
-                })
-                return
-              }
+          const outDecoder = new StringDecoder('utf8')
+          const errDecoder = new StringDecoder('utf8')
+          let stdout = ''
+          let stderr = ''
+          /** Combined bytes kept so far, against {@link maxStdoutBytes}. */
+          let capturedBytes = 0
+          let truncated = false
+          /** Whether the deadline, rather than the cap, is what cut this call. */
+          let deadlineHit = false
+          let exitCode: number | null = null
+          let exitSignal: NodeJS.Signals | null = null
+          let settled = false
+          let deadlineTimer: NodeJS.Timeout | undefined
+          let killTimer: NodeJS.Timeout | undefined
+          let giveUpTimer: NodeJS.Timeout | undefined
+          let drainTimer: NodeJS.Timeout | undefined
 
-              // `execFile` kills the child when `timeout` elapses; a truncated
-              // read is reported as truncated output rather than a timeout,
-              // because the advice to give the user differs. A killed process is
-              // recognised by the signal, since `killed` alone is not set on
-              // every Node version's overflow path.
-              const truncated = isOutputOverflow(nodeError)
-              const killed = nodeError.killed === true || nodeError.signal != null
-              resolve({
-                // `execFile` reports a non-zero exit on `error.code`, not on
-                // `error.status` — probed, and the reason this reads both. Taking
-                // `status` alone turned every non-zero exit into `null`, which is
-                // also "killed by a signal": a caller could no longer tell git's
-                // ordinary "the files differ" (exit 1 from `diff --no-index`)
-                // from a crash. `code` is a string only for spawn and buffer
-                // failures, and both are handled above.
-                code:
-                  typeof nodeError.status === 'number'
-                    ? nodeError.status
-                    : typeof nodeError.code === 'number'
-                      ? nodeError.code
-                      : null,
-                stdout: out,
-                stderr: err,
-                timedOut: killed && !truncated,
-                truncated,
-                spawnFailed: false,
-              })
-            },
-          )
+          /** Ask the process to leave, and put a floor under how long that takes. */
+          const terminate = (): void => {
+            child.kill('SIGTERM')
+            if (killTimer === undefined) {
+              killTimer = setTimeout(() => child.kill('SIGKILL'), SIGTERM_GRACE_MS)
+            }
+            if (giveUpTimer === undefined) {
+              giveUpTimer = setTimeout(() => settle(), SIGTERM_GRACE_MS + SIGKILL_GRACE_MS)
+            }
+          }
+
+          /** Finish the call, whichever of the four ways got here. */
+          const settle = (spawnFailed = false): void => {
+            if (settled) return
+            settled = true
+            for (const timer of [deadlineTimer, killTimer, giveUpTimer, drainTimer]) {
+              if (timer !== undefined) clearTimeout(timer)
+            }
+            // The reader stops here: a helper still holding the write end writes
+            // into nothing rather than keeping this call alive.
+            child.stdout.destroy()
+            child.stderr.destroy()
+            stdout += outDecoder.end()
+            stderr += errDecoder.end()
+            // A process that ended on its own (no signal, a real exit code) did
+            // the work: a deadline that fired while it was finishing must not
+            // turn a completed `git status` into "did not finish in time". A
+            // signal is the other case — that one is this runner's own SIGTERM
+            // or SIGKILL unless the call outlives even the kill.
+            const endedOnItsOwn = exitSignal === null && exitCode !== null
+            resolve({
+              code: spawnFailed ? null : exitCode,
+              stdout,
+              stderr,
+              // A cut at the cap is reported as truncation rather than as a
+              // timeout, because the advice to give the user differs.
+              timedOut: deadlineHit && !endedOnItsOwn && !truncated,
+              truncated,
+              spawnFailed,
+            })
+          }
+
+          /**
+           * Keep one chunk, within the cap.
+           *
+           * Bytes rather than decoded text: a multi-byte character split across
+           * chunks is reassembled by the decoder, so the cap counts what git
+           * sent, not what UTF-8 happened to align.
+           */
+          const keep = (chunk: Buffer, decoder: StringDecoder, append: (text: string) => void): void => {
+            if (truncated) return
+            capturedBytes += chunk.length
+            if (capturedBytes > maxStdoutBytes) {
+              const over = capturedBytes - maxStdoutBytes
+              const fits = Math.max(0, chunk.length - over)
+              truncated = true
+              if (fits > 0) append(decoder.write(chunk.subarray(0, fits)))
+              terminate()
+              return
+            }
+            append(decoder.write(chunk))
+          }
+
+          child.stdout.on('data', (chunk: Buffer) => {
+            keep(chunk, outDecoder, (text) => {
+              stdout += text
+            })
+          })
+          child.stderr.on('data', (chunk: Buffer) => {
+            keep(chunk, errDecoder, (text) => {
+              stderr += text
+            })
+          })
+
+          child.on('error', (error: NodeJS.ErrnoException) => {
+            // A process that never started — no `git` on PATH, no permission to
+            // run it — is its own outcome rather than an ordinary exit.
+            if (child.pid === undefined || isMissingBinary(error)) settle(true)
+          })
+
+          child.on('exit', (code, signal) => {
+            exitCode = code
+            exitSignal = signal
+            // The process is gone, so there is nothing left to kill, and its
+            // pipes are only a grace period away from being written off.
+            if (deadlineTimer !== undefined) {
+              clearTimeout(deadlineTimer)
+              deadlineTimer = undefined
+            }
+            if (drainTimer === undefined) drainTimer = setTimeout(() => settle(), PIPE_DRAIN_GRACE_MS)
+          })
+
+          child.on('close', () => settle())
+
+          deadlineTimer = setTimeout(() => {
+            deadlineHit = true
+            terminate()
+          }, timeoutMs)
         }),
       )
     },

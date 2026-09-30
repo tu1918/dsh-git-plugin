@@ -3066,6 +3066,39 @@ describe('the sync actions (FR-5.1)', () => {
     // A refused operation leaves the change list where it was (§4.3).
     assert.equal(container.querySelectorAll(`.${cls.badge}`).length, 4)
   })
+
+  it('re-reads the repository when a mutation times out, and says the result is unknown', async () => {
+    // F-1's other half: a timeout is not a refusal. The host may still be running
+    // the fetch — git may have moved refs after the answer was written — so the
+    // panel says the outcome is unknown AND re-reads, rather than leaving the
+    // list as it was before the click.
+    let reads = 0
+    const base = stubGit({
+      fetch: { ok: false, error: { code: 'timeout', message: 'the host did not answer in time' } },
+    })
+    const git: GitRemoteClient = {
+      ...base,
+      status: (sessionId, signal) => {
+        reads += 1
+        return base.status(sessionId, signal)
+      },
+    }
+    const container = await render(h(StatusPanel, { sessionId: 's1', git, t, locale: 'en' }))
+    await settle()
+    const before = reads
+
+    await click(railActions(container)[1] as HTMLButtonElement)
+
+    const box = must(container, '[data-action-error="fetch"]')
+    assert.match(box.textContent ?? '', /result is unknown/)
+    assert.match(box.textContent ?? '', /re-read/)
+    assert.ok(reads > before, `expected the repository to be re-read, saw ${reads - before} reads`)
+    // The control comes back: the spinner is what F-1 was about, so the fetch
+    // button being usable again (rather than disabled forever) is part of the
+    // contract, not an implementation detail.
+    assert.equal((railActions(container)[1] as HTMLButtonElement).disabled, false)
+    assert.equal(container.querySelector(`.${cls.spinner}`), null)
+  })
 })
 
 describe('several repositories in one workspace (FR-8)', () => {

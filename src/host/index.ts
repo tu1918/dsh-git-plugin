@@ -16,6 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
+import type { HostPorts } from '../core/ports.ts'
 import { createHostPorts } from './adapter/logger.ts'
 import { createSessionDirResolver } from './adapter/workspace.ts'
 import { createGitRunner } from './git-exec.ts'
@@ -33,9 +34,40 @@ import { createFileIconRegistry, resolveIconConfigPath } from './file-icons.ts'
  */
 export const inject = ['webServer', 'sessions']
 
+/**
+ * Read a positive millisecond setting, or `undefined`.
+ *
+ * `0` is the spelling that matters: it used to be handed straight to Node's
+ * process options, where it means "no deadline at all", so a profile could
+ * switch the safety net off without saying so. Anything that is not a positive,
+ * finite number is dropped with a warning and the default stands instead.
+ * @param value - What the profile said.
+ * @param name - The setting's name, for the log line.
+ * @param ports - Diagnostic port.
+ * @returns The value when it is usable, otherwise `undefined`.
+ */
+function positiveMs(
+  value: number | undefined,
+  name: string,
+  ports: HostPorts,
+): number | undefined {
+  if (value === undefined) return undefined
+  if (Number.isFinite(value) && value > 0) return value
+  ports.log(
+    'warn',
+    `ignoring ${name}=${String(value)}: a positive number of milliseconds is required, so the default stands`,
+  )
+  return undefined
+}
+
 /** Plugin configuration, as a profile patch or the settings card may set it. */
 export interface Config {
-  /** Deadline for one git call, in milliseconds. */
+  /**
+   * Deadline for one git call, in milliseconds.
+   *
+   * Must be positive; a zero or negative value is ignored with a warning rather
+   * than read as "no deadline" (see {@link positiveMs}).
+   */
   readonly gitTimeoutMs?: number
   /** Ceiling on captured stdout for one git call, in bytes. */
   readonly maxStdoutBytes?: number
@@ -56,8 +88,9 @@ export interface Config {
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const ports = createHostPorts(ctx)
+  const timeoutMs = positiveMs(config.gitTimeoutMs, 'gitTimeoutMs', ports)
   const limits: GitServiceLimits = {
-    ...(config.gitTimeoutMs === undefined ? {} : { timeoutMs: config.gitTimeoutMs }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(config.maxStdoutBytes === undefined ? {} : { maxStdoutBytes: config.maxStdoutBytes }),
   }
 

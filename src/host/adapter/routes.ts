@@ -125,6 +125,39 @@ const WRITE_OPERATIONS: ReadonlySet<string> = new Set([
 const MAX_BODY_BYTES = 1024 * 1024
 
 /**
+ * How long one request may take before the browser is answered anyway.
+ *
+ * The runner bounds every git process, so this is deliberately the outer of the
+ * two bounds: sized past what a legitimate call can take (one or two 15s git
+ * calls plus repository discovery) so it never cuts real work. It exists for
+ * what the runner does not own — a promise inside the service that never settles
+ * — because a request the browser waits on forever is the one thing the panel
+ * cannot show (F-1).
+ */
+const REQUEST_DEADLINE_MS = 60_000
+
+/**
+ * The deadline for operations that legitimately take a minute.
+ *
+ * A rewrite replays history through a rebase with its own 60s budget
+ * (`REWRITE_TIMEOUT_MS` in `git-service`), and a generated commit message waits
+ * on the deployment's model with a 60s budget of its own; both plus discovery
+ * still fit inside this.
+ */
+const LONG_REQUEST_DEADLINE_MS = 120_000
+
+/** Operations that may legitimately outlive {@link REQUEST_DEADLINE_MS}. */
+const LONG_OPERATIONS: ReadonlySet<string> = new Set(['rewrite', 'generateCommitMessage'])
+
+/** The request deadlines this layer enforces; a test may shorten them. */
+export interface RequestLimits {
+  /** Deadline for an ordinary request, in milliseconds. */
+  readonly requestMs?: number
+  /** Deadline for a {@link LONG_OPERATIONS} request, in milliseconds. */
+  readonly longRequestMs?: number
+}
+
+/**
  * Whether a request arrived over the loopback interface.
  *
  * This fence exists because the DSH frontend's own authentication does NOT cover
@@ -333,6 +366,7 @@ function intOf(url: URL, name: string, fallback: number): number {
  * @param probe - The git state probe feeding the stream.
  * @param ports - Diagnostic port.
  * @param icons - The deployment's own file-type icons (FR-1.2), if it configured any.
+ * @param limits - Request deadlines; defaults to the two constants above.
  * @returns A disposer that unregisters both routes and ends every open stream.
  */
 export function registerGitPanelRoutes(
@@ -341,9 +375,57 @@ export function registerGitPanelRoutes(
   probe: GitProbe,
   ports: HostPorts,
   icons: FileIconRegistry,
+  limits: RequestLimits = {},
 ): () => void {
   /** Live SSE responses, so disposal can end them rather than leak sockets. */
   const streams = new Set<ServerResponse>()
+
+  /**
+   * Answer one operation within a bound, whatever the operation does.
+   *
+   * The operation itself is NOT cancelled: a mutation may already have changed
+   * the repository, and killing it half-way would be worse than letting it
+   * finish. So the envelope says the wait ended and — for a mutation — that the
+   * result is unknown, rather than claiming the operation failed. The abandoned
+   * promise keeps its own error handling; the extra `catch` here only stops a
+   * failure that arrives after the race from becoming an unhandled rejection.
+   * @param operation - The operation's name, for the deadline and the log line.
+   * @param isWrite - Whether it mutates, which decides the wording.
+   * @param work - The operation's promise.
+   * @returns The operation's envelope, or the one the deadline wrote.
+   */
+  async function bounded<T>(
+    operation: string,
+    isWrite: boolean,
+    work: Promise<Envelope<T>>,
+  ): Promise<Envelope<T>> {
+    const deadlineMs = LONG_OPERATIONS.has(operation)
+      ? (limits.longRequestMs ?? LONG_REQUEST_DEADLINE_MS)
+      : (limits.requestMs ?? REQUEST_DEADLINE_MS)
+    void work.catch(() => undefined)
+    let timer: NodeJS.Timeout | undefined
+    const expiry = new Promise<Envelope<never>>((resolve) => {
+      timer = setTimeout(() => {
+        ports.log('warn', `route ${operation} exceeded its request deadline (${deadlineMs} ms)`)
+        resolve(
+          fail(
+            'timeout',
+            isWrite
+              ? 'this took too long to answer; the operation may still be running, so its result is unknown'
+              : 'this read took too long to answer',
+          ),
+        )
+      }, deadlineMs)
+      // The socket the request arrived on keeps the process alive while an
+      // answer is owed; this timer should not be what holds an idle one open.
+      timer.unref()
+    })
+    try {
+      return await Promise.race([work, expiry])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
 
   /** Run one operation against the service. */
   async function dispatchOperation(
@@ -610,7 +692,7 @@ export function registerGitPanelRoutes(
     }
 
     try {
-      const result = await dispatchOperation(operation, sessionId, url, body)
+      const result = await bounded(operation, isWrite, dispatchOperation(operation, sessionId, url, body))
       writeJson(res, 200, result.ok ? { ok: true, value: result.value } : result)
     } catch (error) {
       // A thrown handler must still answer, or the browser waits for a response

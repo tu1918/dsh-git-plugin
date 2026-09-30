@@ -27,6 +27,7 @@ import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { apply, inject } from '../src/host/index.ts'
+import { waitForListener } from './helpers/net.ts'
 import { cleanupRepos, commit, makeRepo, stageAll, write } from './helpers/repo.ts'
 
 after(cleanupRepos)
@@ -110,6 +111,9 @@ async function serve(registrations: readonly Registration[]): Promise<{
   const server: Server = createServer((req, res) => dispatch(registrations, req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
+  // See `helpers/net.ts`: on this machine the first connection to a freshly
+  // bound port can be refused while the loopback path settles.
+  await waitForListener(port)
   return {
     origin: `http://127.0.0.1:${port}`,
     close: async () => {
@@ -285,6 +289,27 @@ describe('the host plugin entry', () => {
     } finally {
       await harness.close()
     }
+  })
+
+  it('ignores a gitTimeoutMs that would switch the deadline off, and says so', () => {
+    // The hole this closes: the value used to be handed straight to Node's
+    // process options, where a zero timeout means "no deadline at all" — a
+    // profile could remove the safety net and nothing would say so.
+    const { ctx, lines } = stubContext({})
+    apply(ctx, { gitTimeoutMs: 0 })
+    assert.ok(
+      lines.some((line) => line.includes('gitTimeoutMs=0')),
+      `expected a warning about the ignored setting, got ${JSON.stringify(lines)}`,
+    )
+  })
+
+  it('accepts a positive gitTimeoutMs without a word', () => {
+    const { ctx, lines } = stubContext({})
+    apply(ctx, { gitTimeoutMs: 20_000 })
+    assert.ok(
+      !lines.some((line) => line.includes('gitTimeoutMs')),
+      'a usable setting is not worth a warning',
+    )
   })
 
   it('unregisters both routes when its effect is disposed', () => {

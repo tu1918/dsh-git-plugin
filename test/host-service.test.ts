@@ -27,11 +27,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createGitRunner } from '../src/host/git-exec.ts'
 import { createGitService } from '../src/host/git-service.ts'
 import { resetDiscoveryCache } from '../src/host/repo-discovery.ts'
-import { registerGitPanelRoutes } from '../src/host/adapter/routes.ts'
+import { registerGitPanelRoutes, type RequestLimits } from '../src/host/adapter/routes.ts'
 import { createGitProbe } from '../src/host/git-probe.ts'
 import { createFileIconRegistry } from '../src/host/file-icons.ts'
-import type { GitCredential, HostPorts, Result, SessionDirResolver } from '../src/core/ports.ts'
+import type {
+  GitCredential,
+  HostPorts,
+  Result,
+  SessionDirResolver,
+  WorkspaceGitService,
+} from '../src/core/ports.ts'
 import type { DiffTarget } from '../src/core/types.ts'
+import { waitForListener } from './helpers/net.ts'
 import {
   cleanupRepos,
   commit,
@@ -736,25 +743,32 @@ interface Harness {
  * Start a real HTTP server over the real route layer.
  * @param sessions - Session→directory map the service resolves against.
  * @param ports - Diagnostic and model port; silent by default.
+ * @param iconConfigPath - Where the icon map lives; a path of nothing by default.
+ * @param options - A service to stand in for the real one (the request-deadline
+ *   test needs an operation that never settles), and shortened deadlines.
  * @returns The harness, already listening on a loopback port.
  */
 async function startHarness(
   sessions: Readonly<Record<string, string>>,
   ports: HostPorts = SILENT,
   iconConfigPath?: string,
+  options: { service?: WorkspaceGitService; limits?: RequestLimits } = {},
 ): Promise<Harness> {
   const registrations: Registration[] = []
   const ctx = stubContext(registrations)
-  const service = serviceWith(ports, sessions)
+  const service = options.service ?? serviceWith(ports, sessions)
   const probe = createGitProbe(ports)
   // An unmapped deployment is the default: a path that does not exist, so every
   // test that is not about icons sees the panel exactly as before.
   const icons = createFileIconRegistry(ports, iconConfigPath ?? join(tmpdir(), 'dsh-git-panel-no-icons.yml'))
-  const dispose = registerGitPanelRoutes(ctx, service, probe, ports, icons)
+  const dispose = registerGitPanelRoutes(ctx, service, probe, ports, icons, options.limits)
 
   const server: Server = createServer((req, res) => dispatch(registrations, req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
+  // See `helpers/net.ts`: on this machine the first connection to a freshly
+  // bound port can be refused while the loopback path settles.
+  await waitForListener(port)
 
   return {
     origin: `http://127.0.0.1:${port}`,
@@ -2342,6 +2356,121 @@ describe('the file-icon route (FR-1.2)', () => {
       ).json()) as { ok: boolean; value?: Record<string, string> }
       assert.equal(body.ok, true)
       assert.deepEqual(body.value, {}, 'the panel then draws its built-in glyphs')
+    } finally {
+      await harness.close()
+    }
+  })
+})
+
+describe('the request deadline (F-1)', () => {
+  /**
+   * The reported bug was a git child that outlived its SIGTERM, so the runner
+   * now makes every process settle — but the browser is owed an answer even if
+   * something ABOVE the runner never settles (a bug in the service, an await on
+   * a promise nobody will resolve). These tests stand in a service whose
+   * operation never returns and shorten the deadline to milliseconds, because
+   * the real 60/120s bounds are not something a test should wait out.
+   */
+
+  /** A silent port that records the log lines the deadline writes. */
+  function loggingPorts(): { ports: HostPorts; lines: string[] } {
+    const lines: string[] = []
+    return {
+      ports: {
+        log: (_level, message) => lines.push(message),
+        generateText: () => Promise.reject(new Error('no model in this test')),
+      },
+      lines,
+    }
+  }
+
+  it('answers a read that never returns, and says so in the log', async () => {
+    const repo = makeRepo('route-deadline-read')
+    write(repo, 'a.txt', 'one\n')
+    const real = serviceFor({ s1: repo })
+    const stalling: WorkspaceGitService = {
+      ...real,
+      status: () => new Promise<never>(() => undefined),
+    }
+    const { ports, lines } = loggingPorts()
+    const harness = await startHarness({ s1: repo }, ports, undefined, {
+      service: stalling,
+      limits: { requestMs: 50 },
+    })
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/status?session=s1`)
+      assert.equal(response.status, 200, 'a deadline is an operation failure, not a transport one')
+      const body = (await response.json()) as { ok: boolean; error?: { code: string; message: string } }
+      assert.equal(body.ok, false)
+      assert.equal(body.error?.code, 'timeout')
+      assert.match(body.error?.message ?? '', /read took too long/)
+      assert.ok(
+        lines.some((line) => line.includes('status exceeded its request deadline')),
+        `expected a log line about the deadline, got ${JSON.stringify(lines)}`,
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('tells a mutation that waited that its result is unknown, not that it failed', async () => {
+    // The distinction the panel exists to make: git may have finished the work
+    // after the answer was written, so claiming failure would be a lie.
+    const repo = makeRepo('route-deadline-write')
+    write(repo, 'a.txt', 'one\n')
+    const real = serviceFor({ s1: repo })
+    const stalling: WorkspaceGitService = {
+      ...real,
+      fetch: () => new Promise<never>(() => undefined),
+    }
+    const harness = await startHarness({ s1: repo }, SILENT, undefined, {
+      service: stalling,
+      limits: { requestMs: 50 },
+    })
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/fetch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ session: 's1' }),
+      })
+      const body = (await response.json()) as { ok: boolean; error?: { code: string; message: string } }
+      assert.equal(response.status, 200)
+      assert.equal(body.error?.code, 'timeout')
+      assert.match(body.error?.message ?? '', /result is unknown/)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('lets a long operation use its longer deadline', async () => {
+    // `rewrite` and `generateCommitMessage` legitimately outlive the ordinary
+    // bound, so shortening the ordinary one to 10ms must not cut them: this
+    // rewrite resolves well after that and still answers with its own value.
+    const repo = makeRepo('route-deadline-long')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const real = serviceFor({ s1: repo })
+    const slow: WorkspaceGitService = {
+      ...real,
+      rewriteCommit: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        return { ok: true, value: { summary: 'rewritten', detail: '' } }
+      },
+    }
+    const harness = await startHarness({ s1: repo }, SILENT, undefined, {
+      service: slow,
+      limits: { requestMs: 10, longRequestMs: 2_000 },
+    })
+    try {
+      const response = await fetch(`${harness.origin}/git-panel/rewrite`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: harness.origin },
+        body: JSON.stringify({ session: 's1', hash: 'a'.repeat(40), action: 'drop' }),
+      })
+      const body = (await response.json()) as { ok: boolean; value?: { summary: string } }
+      assert.equal(body.ok, true, 'the long deadline is what applies to a rewrite')
+      assert.equal(body.value?.summary, 'rewritten')
     } finally {
       await harness.close()
     }

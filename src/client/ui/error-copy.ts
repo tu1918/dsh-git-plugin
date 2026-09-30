@@ -39,7 +39,15 @@ export function errorCopy(
     case 'git-missing':
       return { title: t('error.gitMissing'), detail: undefined }
     case 'timeout':
-      return { title: t('error.timeout'), detail: undefined }
+      // Two sentences, because the same code means two different things: a read
+      // that was stopped costs nothing, while an operation that waited past its
+      // deadline may still be running — git may have changed the repository
+      // after the answer was written, so the panel says the result is unknown
+      // rather than claiming a failure (F-1).
+      return {
+        title: mode === 'action' ? t('error.timeoutUnknown') : t('error.timeout'),
+        detail: undefined,
+      }
     case 'too-large':
       return { title: t('error.tooLarge'), detail: undefined }
     case 'bad-request':

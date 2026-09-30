@@ -1140,6 +1140,11 @@ export function StatusPanel({
       }
       if (!result.ok) {
         setAction({ kind: 'failed', op, label, error: result.error })
+        // A mutation that waited past its deadline did not necessarily fail: it
+        // may still be running, and the repository may have moved after the
+        // answer was written. Re-reading is the only way to show what is
+        // actually true, and the notice beside it says so (F-1).
+        if (result.error.code === 'timeout') reload()
         // A remote that wanted a credential is the one failure the panel can
         // offer to fix in place: remember how to re-run the operation and which
         // origin git named, so the form beside the refusal can answer it.
