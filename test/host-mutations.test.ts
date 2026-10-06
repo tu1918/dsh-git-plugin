@@ -1715,10 +1715,20 @@ describe('stashing (FR-6.2)', () => {
   })
 
   it('lets git refuse a stash mid-merge, and leaves the conflict untouched', async () => {
-    // Probed: `git stash push` with unmerged paths exits 1 printing "a.txt: needs
-    // merge" on STDOUT, and the conflicted index is exactly as it was. The panel
-    // forwards git's sentence rather than inventing a resolution for a merge the
-    // user is in the middle of.
+    // `git stash push` with unmerged paths exits 1 and the conflicted index is
+    // exactly as it was. The panel forwards git's sentence rather than inventing
+    // a resolution for a merge the user is in the middle of.
+    //
+    // WHICH sentence is git's own business and has already changed once. Probed
+    // on 2.43: "a.txt: needs merge" on STDOUT with stderr EMPTY, so
+    // `git-service`'s "first line of stderr, else stdout" rule falls back to it.
+    // On 2.55 the same refusal is reported on stderr as "could not write index":
+    // upstream turned a silent `return -1` after the stash-create path's
+    // `repo_refresh_and_write_index` into `error(_("could not write index"))`,
+    // and a non-empty stderr now wins. Both are git refusing; neither is the
+    // panel's to word. What this asserts is therefore "git's own refusal was
+    // forwarded", not one version's phrasing — and the two assertions below are
+    // the ones that would catch the refusal going wrong.
     const repo = makeRepo('stash-conflicted')
     write(repo, 'a.txt', 'one\n')
     stageAll(repo)
@@ -1737,7 +1747,7 @@ describe('stashing (FR-6.2)', () => {
 
     const result = await serviceFor({ s1: repo }).stashSave('s1', null, false)
     assert.equal(result.ok, false)
-    assert.match(result.ok ? '' : result.error.message, /needs merge/u)
+    assert.match(result.ok ? '' : result.error.message, /needs merge|could not write index/u)
     // The conflict is still there, and no entry was created.
     assert.equal(gitTry(repo, ['stash', 'list']).stdout.trim(), '')
     assert.match(readFileSync(join(repo, 'a.txt'), 'utf8'), /<<<<<<< /u)
