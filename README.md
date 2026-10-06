@@ -5,6 +5,8 @@ workspace's changes, grouped the way git groups them, with the branch's state
 against its upstream — without leaving DSH and without a modal overlay covering
 the conversation.
 
+![The panel as a tab of the right sidebar: the branch rail above, the staged changes / changes / untracked files sections and the commit box, and the recent-commits list below with its swimlane graph](assets/screenshots/panel.png)
+
 Released as **v1.0.0**: the foundation, a read-only panel, the commit loop
 (stage → commit → push), the diff view, branch management with the merge state,
 an AI-written commit message, a commit detail — then M5a's discard / undo /
@@ -144,11 +146,37 @@ and the merge-extensible message source map this plugin declares into)
 and git >= 2.20.
 
 ```sh
-dsh plugin --profile web add link:/absolute/path/to/dsh-git-plugin
+# the newest release, prebuilt — nothing is compiled at install time
+dsh plugin --profile web add https://github.com/tu1918/dsh-git-plugin/releases/latest/download/dsh-git-panel.tgz
 # then restart `dsh web` — a NEW bundle is composed at startup
 ```
 
+The release asset is deliberately **not** version-named, so that URL keeps
+working across releases; `latest/download/` resolves the tag at request time but
+takes the filename literally, and a versioned asset name would 404 the day after
+it was published.
+
+To run from a checkout instead — which is what you want while editing the
+plugin — point at the directory. `lib/` is a derived artifact and is not
+committed, so the build must have run at least once:
+
+```sh
+git clone https://github.com/tu1918/dsh-git-plugin.git
+cd dsh-git-plugin && npm install     # the `prepare` script builds
+dsh plugin --profile web add link:"$PWD"
+```
+
 The panel appears through the right sidebar's **＋** control as "Git changes".
+
+The two `@deepseek-ai/*` packages the host half names at runtime (`dsh-llm`,
+`dsh-credentials`) are declared as **peer** dependencies, not dependencies, so a
+composition that mounts neither still mounts the panel. Their ranges carry an
+explicit `||` branch — `^0.2.0-rc.2 || >=0.2.1-0 <0.3.0` — because node-semver
+only lets a prerelease build satisfy a range that carries a comparator on the
+*same* `major.minor.patch` tuple, itself tagged as a prerelease. A bare
+`^0.2.0-rc.2` silently excludes the harness's next prerelease and hands users an
+`ERESOLVE` to work around by hand. `@deepseek-ai/cordis` needs no branch: it is
+published as a plain 4.x.
 
 ## Custom file-type icons
 

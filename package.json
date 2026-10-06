@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-panel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DSH Web GUI git panel: a resident right-sidebar tab for reviewing, staging, committing, and syncing the session workspace.",
   "keywords": [
     "dsh",
@@ -8,6 +8,15 @@
     "deepseek-harness",
     "git"
   ],
+  "homepage": "https://github.com/tu1918/dsh-git-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/tu1918/dsh-git-plugin/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tu1918/dsh-git-plugin.git"
+  },
+  "author": "tujunwenjie <732100212@qq.com>",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -43,8 +52,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2"
+    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.2 || >=0.2.1-0 <0.3.0",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2 || >=0.2.1-0 <0.3.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
