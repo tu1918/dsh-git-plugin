@@ -1,0 +1,37 @@
+# Every push to master and every pull request runs the same `npm run check` a
+# contributor runs locally — on a machine nobody has touched, from a checkout
+# that has never been built.
+#
+# Node 24 is pinned rather than left to the runner's default, and it is pinned
+# for the TOOLCHAIN, not for the plugin. `npm run check` reads the sources
+# directly: `.ts` through Node's own type stripping (which is why
+# `test/tsx-hooks.mjs` intercepts only `.tsx`) and `.tsx` through esbuild. What
+# SHIPS is a different question — `build/build.mjs` targets `node22`, and that is
+# what `package.json`'s `engines` declares. Pinning the runner to 24 keeps the
+# suite honest about the environment it was written for; declaring `>=24` in
+# `engines` would warn DSH users whose Node runs the bundle perfectly well.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# The suite needs to read the checkout and nothing else. Saying so keeps the
+# automatically injected GITHUB_TOKEN down to a read while third-party actions
+# are running.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check

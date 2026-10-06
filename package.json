@@ -43,6 +43,9 @@
     "README.md"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "node build/build.mjs",
     "prepare": "node build/build.mjs",

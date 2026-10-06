@@ -1,0 +1,59 @@
+# Pushing a version tag cuts the GitHub Release and attaches the prebuilt
+# package, so a release stops being three hand-typed commands.
+#
+# The asset is renamed to drop the version ON PURPOSE. The README installs with
+# `releases/latest/download/dsh-git-panel.tgz`: `latest/download/` resolves the
+# TAG at request time but takes the FILENAME literally, so a version-named asset
+# works the day it is published and 404s the day after the next release. Keep
+# the name version-free here and keep the README pointing at that name.
+#
+# Nothing here needs a secret of its own: `GITHUB_TOKEN` is injected by the
+# runner, and `contents: write` is what lets it create the Release.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # A tag that is not green must not become a release. Running the suite
+      # here, instead of trusting that CI saw this commit, also covers the tag
+      # pushed straight onto a commit the branch listing never showed.
+      - run: npm run check
+
+      # The tag and the package must say the same thing. Without this, `v1.0.2`
+      # on a `package.json` still reading 1.0.1 packs a tarball that contradicts
+      # the Release it is attached to.
+      - name: the tag matches package.json
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          if [ "$expected" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $expected"
+            exit 1
+          fi
+
+      - run: npm pack
+      - run: mv dsh-git-panel-*.tgz dsh-git-panel.tgz
+
+      - name: create the release
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dsh-git-panel.tgz
+          --title "$GITHUB_REF_NAME"
+          --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
