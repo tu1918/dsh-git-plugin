@@ -66,6 +66,32 @@ export function originOf(remoteUrl: string): string | null {
 }
 
 /**
+ * Whether a remote URL is one SSH answers.
+ *
+ * Both spellings git accepts: a scheme (`ssh://git@host/path`) and the scp-like
+ * shorthand (`git@host:path`, or `host:path` with no user). Everything else —
+ * `https://`, `git://`, `file://`, a local path — is answered by something that
+ * cannot block on a question: only SSH asks for a passphrase or a host-key
+ * confirmation, which is the thing this panel has no terminal to answer.
+ * @param remoteUrl - A remote's configured URL.
+ * @returns True when the URL names an SSH transport.
+ */
+export function isSshRemote(remoteUrl: string): boolean {
+  const url = remoteUrl.trim()
+  if (url === '') return false
+  if (/^ssh:\/\//iu.test(url)) return true
+  // Any other scheme decides the question here, so the shorthand test below
+  // never has to guess about a URL that already named its transport.
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(url)) return false
+  // A single letter before the colon is a Windows drive (`C:/repos/x`), not a
+  // host: git on that platform reads it as a path, so it is not SSH here either.
+  if (/^[a-z]:[\\/]/iu.test(url)) return false
+  // scp-like `[user@]host:path`. A local path starts with `/`, `./`, `../` or
+  // `~`, and none of those can put a colon where this requires one.
+  return /^[^/\\:@]+(@[^/\\:@]+)?:/u.test(url)
+}
+
+/**
  * The id segment of the credential record for one origin.
  *
  * The grammar for a record key segment is `^[a-z][a-z0-9-]*$`, which a URL can

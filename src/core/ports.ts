@@ -90,6 +90,30 @@ export type GitErrorCode =
   /** This composition has no credential provider, so a credential cannot be saved. */
   | 'credentials-unavailable'
   /**
+   * A commit was configured to be signed and the signing agent never answered.
+   *
+   * `commit.gpgsign=true` sends the commit through gpg, which asks pinentry (a
+   * terminal or a GUI) for a passphrase. This panel has neither, so the child
+   * waits until its deadline and is killed — the operation's outcome is unknown,
+   * which is why this is not an ordinary failure. `GIT_TERMINAL_PROMPT=0` does
+   * not help: the prompt does not belong to git.
+   */
+  | 'gpg-prompt'
+  /** gpg answered, and said no (no secret key, a pinentry it cannot use). */
+  | 'gpg-failed'
+  /**
+   * SSH produced no answer at all: it is waiting for a passphrase or for a host
+   * key to be confirmed, and this panel has no terminal to give either.
+   *
+   * Distinguished from `timeout` because the answer is actionable ("load the key
+   * into ssh-agent, or confirm the host once in a terminal") and from
+   * `auth-required` because SSH takes no username and password: there is no form
+   * the panel could usefully show.
+   */
+  | 'ssh-prompt'
+  /** SSH answered, and refused (a key it would not accept, a host key it would not trust). */
+  | 'ssh-failed'
+  /**
    * The branch is configured to merge with an upstream ref the fetch did not get.
    *
    * git's own words are "Your configuration specifies to merge with the ref

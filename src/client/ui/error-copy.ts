@@ -85,6 +85,25 @@ export function errorCopy(
       // Nothing to add to the host's own sentence: the deployment is missing a
       // capability, and no retry of the user's will change that.
       return { title: error.message, detail: undefined }
+    case 'gpg-prompt':
+      // The commit was configured to be signed, and the prompt that wants a
+      // terminal is not git's, so no flag of the panel's can suppress it. git's
+      // own words are absent (the child was killed), which is why the sentence
+      // has to carry the whole answer — including that the result is unknown.
+      return { title: t('error.gpgPrompt'), detail: error.detail }
+    case 'gpg-failed':
+      // gpg answered and said no. git's output names the key and the reason, so
+      // it stays as the detail under the sentence that says where to look.
+      return { title: t('error.gpgFailed'), detail: error.detail }
+    case 'ssh-prompt':
+      // SSH's prompt is not git's either, and it takes no username and password:
+      // there is no form to show, only the two things the user has to do in a
+      // terminal. As with gpg, a killed child leaves no output to forward.
+      return { title: t('error.sshPrompt'), detail: error.detail }
+    case 'ssh-failed':
+      // Same two fixes as above, but this one is a definite refusal: SSH said so,
+      // and its words (which key, which host) are the detail.
+      return { title: t('error.sshFailed'), detail: error.detail }
     case 'upstream-gone':
       // git's own words name the ref it could not merge with; the title says what
       // that means and how to get out of it, because the panel has no button for

@@ -14,7 +14,7 @@ import { basename, isAbsolute, join } from 'node:path'
 
 import { buildCommitMessagePrompt, cleanCommitMessage, truncateDiff } from '../core/commit-message.ts'
 import { parseUnifiedDiff } from '../core/diff-parse.ts'
-import { originOf } from '../core/remote-origin.ts'
+import { isSshRemote, originOf } from '../core/remote-origin.ts'
 import { buildAskpass } from './askpass.ts'
 import { discoverRepos, type RunCapture } from './repo-discovery.ts'
 import { buildSequenceEditor } from './sequence-editor.ts'
@@ -242,6 +242,19 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'a commit message may not be empty',
   },
   {
+    // A signed commit whose signing agent said no, in gpg's own words. Fast
+    // failures only: when pinentry never answers there is nothing to match, and
+    // the deadline path names that case instead (see `hangHint`).
+    pattern: /gpg failed to sign the data|gpg: signing failed|gpg: skipped|no secret key/iu,
+    code: 'gpg-failed',
+    message: 'this commit is configured to be signed, and gpg could not produce a signature',
+  },
+  {
+    pattern: /permission denied \(publickey|host key verification failed/iu,
+    code: 'ssh-failed',
+    message: 'SSH refused: the key it needs is not loaded, or this host has not been trusted yet',
+  },
+  {
     // An HTTPS remote that wanted a credential git had nobody to ask. The
     // panel answers with a form and a retry, which it can only do if this is a
     // code of its own rather than git's prose (see `authRemoteOf` for the
@@ -304,6 +317,24 @@ const FAILURE_PATTERNS: readonly FailurePattern[] = [
     message: 'there is nothing staged to commit',
   },
 ]
+
+/**
+ * The verbs that create a commit — which is exactly the set `commit.gpgsign`
+ * covers, and therefore the set that can hang on a signature prompt. `stash` is
+ * in it because git builds its two commits through the same path.
+ */
+const COMMIT_VERBS: ReadonlySet<string> = new Set([
+  'commit',
+  'merge',
+  'rebase',
+  'cherry-pick',
+  'revert',
+  'am',
+  'stash',
+])
+
+/** The verbs that talk to a remote, over whatever transport its URL names. */
+const REMOTE_VERBS: ReadonlySet<string> = new Set(['fetch', 'push', 'pull', 'ls-remote', 'submodule'])
 
 /**
  * Every line a failed git call printed, stderr first.
@@ -462,6 +493,50 @@ export function createGitService(
   }
 
   /**
+   * Whether `commit.gpgsign` is on for this repository.
+   *
+   * Asked of git rather than of a config file, so `--bool` decides every spelling
+   * git accepts (`true`, `1`, `yes`, …) and the repository's effective value is
+   * what comes back. An unset key exits 1, which is the ordinary "off" answer.
+   * @param cwd - Repository root.
+   */
+  async function signingConfigured(cwd: string): Promise<boolean> {
+    const outcome = await runner.run(['config', '--get', '--bool', 'commit.gpgsign'], options(cwd, false))
+    return outcome.code === 0 && outcome.stdout.trim() === 'true'
+  }
+
+  /**
+   * Why a git call that hit its deadline most likely never finished.
+   *
+   * A deadline cannot say by itself: the child is killed before it prints
+   * anything, so the two hangs this panel can name are recognised from **what was
+   * being run** and from the repository's own configuration. Both halves are
+   * asked only on the timeout path, so no ordinary call pays for them.
+   *
+   * The two are the ones a git GUI actually meets: a signed commit waiting on
+   * pinentry, and an SSH remote waiting on a passphrase or a host-key
+   * confirmation. Neither prompt belongs to git, so `GIT_TERMINAL_PROMPT=0` — the
+   * flag that keeps every other call from waiting on a terminal — cannot reach
+   * them.
+   * @param args - Arguments after `git`.
+   * @param cwd - Directory the call ran in.
+   * @returns The code to report, or `undefined` when this is an ordinary timeout.
+   */
+  async function hangHint(
+    args: readonly string[],
+    cwd: string,
+  ): Promise<'gpg-prompt' | 'ssh-prompt' | undefined> {
+    const verb = args[0] ?? ''
+    if (COMMIT_VERBS.has(verb) && (await signingConfigured(cwd))) return 'gpg-prompt'
+    if (REMOTE_VERBS.has(verb)) {
+      for (const url of await remoteUrls(cwd)) {
+        if (isSshRemote(url)) return 'ssh-prompt'
+      }
+    }
+    return undefined
+  }
+
+  /**
    * Run one git command and classify its outcome.
    *
    * Every call goes through here, so the "git is missing", "git timed out", and
@@ -490,7 +565,23 @@ export function createGitService(
     if (outcome.timedOut) {
       // §8.4: report the deadline rather than hanging the request, so the panel
       // shows what it has instead of a spinner that never stops.
-      ports.log('warn', `git ${args[0] ?? ''} exceeded its deadline in ${cwd}`)
+      const hint = await hangHint(args, cwd)
+      ports.log(
+        'warn',
+        `git ${args[0] ?? ''} exceeded its deadline in ${cwd}${hint === undefined ? '' : ` (${hint})`}`,
+      )
+      if (hint === 'gpg-prompt') {
+        return fail(
+          'gpg-prompt',
+          'git waited for a signature that needs a terminal or a pinentry this panel cannot reach',
+        )
+      }
+      if (hint === 'ssh-prompt') {
+        return fail(
+          'ssh-prompt',
+          'SSH never answered: it is waiting for a passphrase or a host-key confirmation',
+        )
+      }
       return fail('timeout', 'git did not finish in time')
     }
     if (outcome.code !== 0) {
@@ -940,25 +1031,38 @@ export function createGitService(
   }
 
   /**
-   * The origins of every URL this repository has configured.
+   * Every URL this repository has configured for a remote.
    *
    * Read from git's config rather than from an argument the browser sent, so the
-   * set of origins a credential may be stored for is the repository's own.
-   * `--get-regexp` exits 1 with no output when nothing matches, which is the
-   * ordinary "no remote" answer rather than a failure.
+   * set of origins a credential may be stored for — and the transports a call
+   * may go out over — are the repository's own. `--get-regexp` exits 1 with no
+   * output when nothing matches, which is the ordinary "no remote" answer rather
+   * than a failure.
    * @param cwd - Repository root.
-   * @returns Distinct HTTP(S) origins, in config order.
+   * @returns The configured URLs, in config order, duplicates and all.
    */
-  async function remoteOrigins(cwd: string): Promise<readonly string[]> {
+  async function remoteUrls(cwd: string): Promise<readonly string[]> {
     const outcome = await runner.run(
       ['config', '--get-regexp', '^remote\\..*\\.(url|pushurl)$'],
       options(cwd, false),
     )
     if (outcome.code !== 0) return []
-    const origins = new Set<string>()
+    const urls: string[] = []
     for (const line of outcome.stdout.split('\n')) {
       const url = line.replace(/^\S+\s+/u, '').trim()
-      if (url === '') continue
+      if (url !== '') urls.push(url)
+    }
+    return urls
+  }
+
+  /**
+   * The HTTP(S) origins of every URL this repository has configured.
+   * @param cwd - Repository root.
+   * @returns Distinct HTTP(S) origins, in config order.
+   */
+  async function remoteOrigins(cwd: string): Promise<readonly string[]> {
+    const origins = new Set<string>()
+    for (const url of await remoteUrls(cwd)) {
       const origin = originOf(url)
       if (origin !== null) origins.add(origin)
     }

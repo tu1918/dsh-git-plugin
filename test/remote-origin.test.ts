@@ -11,7 +11,32 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { credentialRecordId, originOf } from '../src/core/remote-origin.ts'
+import { credentialRecordId, isSshRemote, originOf } from '../src/core/remote-origin.ts'
+
+describe('isSshRemote', () => {
+  it('recognises both spellings git accepts for an SSH transport', () => {
+    assert.equal(isSshRemote('ssh://git@host/repo.git'), true)
+    assert.equal(isSshRemote('ssh://host:2222/repo.git'), true)
+    assert.equal(isSshRemote('git@github.com:owner/repo.git'), true)
+    assert.equal(isSshRemote('host.xz:path/to/repo.git'), true)
+    assert.equal(isSshRemote('  git@host:repo.git  '), true)
+  })
+
+  it('answers false for every other transport and for a local path', () => {
+    // The distinction is load-bearing: only SSH can be the thing that waits for
+    // a passphrase or a host-key confirmation, so nothing else may be blamed for
+    // a hang it cannot cause.
+    assert.equal(isSshRemote('https://host/repo.git'), false)
+    assert.equal(isSshRemote('http://host:8080/repo.git'), false)
+    assert.equal(isSshRemote('git://host/repo.git'), false)
+    assert.equal(isSshRemote('file:///srv/repo.git'), false)
+    assert.equal(isSshRemote('/srv/repo.git'), false)
+    assert.equal(isSshRemote('../sibling/repo.git'), false)
+    assert.equal(isSshRemote('~/repos/x.git'), false)
+    assert.equal(isSshRemote('C:/repos/x.git'), false)
+    assert.equal(isSshRemote(''), false)
+  })
+})
 
 describe('originOf', () => {
   it('keeps the scheme, host and port, and drops everything finer', () => {

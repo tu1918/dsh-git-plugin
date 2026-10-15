@@ -297,6 +297,13 @@ export const zh = {
   'error.noLlm': '这个部署没有配置可用的语言模型，因此无法生成提交信息。',
   'error.clipboard': '浏览器拒绝写入剪贴板。',
   'error.authRequired': '远端需要用户名与密码，面板不弹终端，所以 git 无法询问。在下面填入即可重试。',
+  'error.gpgPrompt':
+    '这次提交被配置为需要签名，而签名提示要一个终端或图形 pinentry——面板给不了，所以 git 一直等到超时。请检查签名配置（密钥、gpg-agent、pinentry），或先在终端里提交一次。这次操作的结果未知。',
+  'error.gpgFailed': '签名失败，gpg 拒绝了这次签名。请检查签名配置（密钥、gpg-agent、pinentry）。',
+  'error.sshPrompt':
+    'SSH 一直没有回答：多半是在等口令或等确认主机指纹，而面板里没有终端可以回答。请确认 ssh-agent 已加载密钥、这个主机已在终端里确认过一次。这次操作的结果未知。',
+  'error.sshFailed':
+    'SSH 拒绝了这次认证：需要的密钥没有加载，或这个主机还没被信任。请把密钥交给 ssh-agent，并在终端里确认一次主机指纹。',
   'error.upstreamGone':
     '这条分支跟踪的上游在远端已不存在（被删除或改名），所以没有东西可拉取。可以在终端里 `git branch --unset-upstream` 停止跟踪，或 `git branch -u origin/<新分支>` 改指向新的上游，然后再拉取。',
   'credential.title': '{remote} 需要凭据',
@@ -591,6 +598,14 @@ export const en: Record<GitPanelKey, string> = {
   'error.clipboard': 'The browser refused to write to the clipboard.',
   'error.authRequired':
     'The remote wants a username and password, and this panel has no terminal to prompt on. Fill them in below and retry.',
+  'error.gpgPrompt':
+    'This commit is configured to be signed, and the signature prompt needs a terminal or a graphical pinentry the panel cannot provide, so git waited until its deadline. Check the signing setup (the key, gpg-agent, pinentry), or commit once from a terminal. The result of this operation is unknown.',
+  'error.gpgFailed':
+    'Signing failed: gpg refused to sign this commit. Check the signing setup (the key, gpg-agent, pinentry).',
+  'error.sshPrompt':
+    'SSH never answered: it is most likely waiting for a passphrase or for a host key to be confirmed, and this panel has no terminal to give either. Check that ssh-agent holds the key and that this host has been trusted once from a terminal. The result of this operation is unknown.',
+  'error.sshFailed':
+    'SSH refused this authentication: the key it needs is not loaded, or this host has not been trusted yet. Load the key into ssh-agent, and confirm the host key once from a terminal.',
   'error.upstreamGone':
     'The upstream this branch tracks no longer exists on the remote (deleted or renamed), so there is nothing to pull. In a terminal, `git branch --unset-upstream` stops tracking it, or `git branch -u origin/<new>` points it at the replacement — then pull again.',
   'credential.title': '{remote} needs a credential',

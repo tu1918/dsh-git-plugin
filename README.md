@@ -41,6 +41,7 @@ multi-repository — has shipped.
 | Pull ↓ / push ↑n / sync ⇅, with the upstream set on the first push | ✅ |
 | Fetch every remote — a cloud with a ↓ under it, beside Pull — updating the remote-tracking branches without touching the working tree, the index or the current branch, so the ↑/↓ counts and the ○/● markers learn what the remote has and a merge can never be the side effect. A repository with no remote is told so rather than shown a silent success | ✅ |
 | A git operation is bounded end to end. The host's deadline escalates SIGTERM → SIGKILL and settles on the process *ending*, so a helper that ignores the polite signal (or holds the pipes open after its parent dies) can no longer leave a request pending; the request carries a deadline of its own in the host and one more in the browser. A mutation that runs past it says the result is **unknown** — git may still be running — and the panel re-reads the repository instead of lying about what happened | ✅ |
+| The two prompts that are not git's are **named** rather than reported as a bare timeout: a commit configured to be signed (`commit.gpgsign`) that waits on pinentry, and an SSH remote waiting for a passphrase or a host-key confirmation. `GIT_TERMINAL_PROMPT=0` cannot reach either, so both used to end as "git did not finish in time". The host reads the cause from *what was being run* plus the repository's own configuration — on the timeout path only, so no ordinary call pays for it — and answers `gpg-prompt` / `ssh-prompt` (a hang, outcome unknown, with the fix: check gpg-agent/pinentry, load the key into ssh-agent, trust the host once from a terminal). gpg and SSH answering and *refusing* are their own codes too (`gpg-failed`, `ssh-failed`), with git's own words kept as the detail | ✅ |
 | Remote-tracking branches in the branch picker, as a **read-only** section (`origin/feature` plus its tip's subject), read while the picker is open and so refreshed by the same fetch. The rows are labels, not buttons on purpose: checking a remote branch out needs the rebase-onto-origin / drop-local-commits decision and can land in a conflict, which belongs with the conflict view | ✅ |
 | Multi-repository workspaces (FR-8): when the session's directory is a **container** rather than a repository, one level below it is scanned for repositories (skipping dot-directories, `node_modules`, `dist`, `build`) and the rail grows a picker — only when there is a choice, so a single-repository workspace looks exactly as before. The default is the repository whose git state moved most recently, and the choice is remembered per container. The browser may only choose among roots the host itself found there, so naming a path of its own gets a refusal | ✅ |
 | HTTPS credentials. A remote that wants one and has none is named as such (`auth-required`, with the origin git itself printed), and the same failure notice grows a username / password form. "Save and retry" stores the pair through the harness's own credential seam — `ctx.credentials`, so the provider owns where the value lives, and this profile's local provider writes its own 0600 document rather than us inventing a store — and then retries the very operation that failed. Every later push/pull/fetch/sync resolves the stored credential and hands it to git through `GIT_ASKPASS`, with `GIT_TERMINAL_PROMPT=0` unchanged so nothing can ever hang on a prompt. The value never reaches a log line | ✅ |
@@ -136,7 +137,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 630 tests && build
+npm run check      # tsc --noEmit && 639 tests && build
 ```
 
 ## Install
@@ -274,6 +275,12 @@ npm test
 - `test/git-client.test.ts` — the browser transport's deadlines: a host that
   never answers becomes a `timeout`, a closed tab is not reported as one, and a
   rewrite is given the long bound
+- `test/host-hang-hints.test.ts` — the hangs a deadline alone cannot name, each
+  one real: a signed commit waiting on a sleeping `gpg.program` (`gpg-prompt`),
+  gpg refusing (`gpg-failed`), a fetch over an `ssh://` remote whose
+  `core.sshCommand` sleeps (`ssh-prompt`) or refuses (`ssh-failed`), and a hang
+  with neither cause configured — `core.fsmonitor` sleeping through a
+  `git status` — staying an ordinary `timeout`
 - `test/host-mount.test.ts` — `apply()` from the plugin entry to the wire, the
   panel mounting in a composition with no language model at all, and a
   `gitTimeoutMs` that would switch the deadline off being ignored out loud

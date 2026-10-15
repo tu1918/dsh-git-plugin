@@ -3298,6 +3298,36 @@ describe('the credential form (HTTPS remotes)', () => {
 })
 
 describe('operation failures (§4.3)', () => {
+  it('names the prompt a signed commit could not answer, instead of a bare timeout', async () => {
+    // The host can tell a signing hang apart from an ordinary deadline (see
+    // test/host-hang-hints), and the sentence it earns is the panel's job: git
+    // printed nothing before it was killed, so the copy has to carry the cause,
+    // the fix, and the fact that the outcome is unknown.
+    const container = await render(
+      h(StatusPanel, {
+        sessionId: 's1',
+        git: stubGit({
+          status: { ok: true, value: stagedOnlyStatus() },
+          commit: {
+            ok: false,
+            error: { code: 'gpg-prompt', message: 'waited for a signature' },
+          },
+        }),
+        t,
+        locale: 'en',
+      }),
+    )
+    await settle()
+    await typeInto(must<HTMLTextAreaElement>(container, `.${cls.commitInput}`), 'signed')
+    await click(must<HTMLButtonElement>(container, `.${cls.commitButton}`))
+    await flush()
+
+    const text = container.textContent ?? ''
+    assert.match(text, /configured to be signed/u)
+    assert.match(text, /result of this operation is unknown/u)
+    assert.doesNotMatch(text, /took too long/u, 'the bare deadline sentence is not the answer here')
+  })
+
   it('shows a refused push beside the list, keeping git’s output and the list', async () => {
     const container = await render(
       h(StatusPanel, {
