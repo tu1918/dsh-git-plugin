@@ -204,7 +204,6 @@ export const cls = {
   diffGapButton: `${P}-diff-gap-button`,
   diffGapNote: `${P}-diff-gap-note`,
   diffHunkHead: `${P}-diff-hunk-head`,
-  diffHunkRange: `${P}-diff-hunk-range`,
   diffHunkHeading: `${P}-diff-hunk-heading`,
   diffSplit: `${P}-diff-split`,
   diffHalves: `${P}-diff-halves`,
@@ -2449,6 +2448,11 @@ export const css = `
   min-width: min-content;
 }
 
+/* The band above a hunk, carrying git's function context for the block and nothing
+   else: the @@ -a,b +c,d @@ address it used to print is answered better by the
+   gutter beside every row, so printing it only asked the reader to add up an offset.
+   A hunk git could infer no heading for renders no band at all (see HunkHead), which
+   is why this rule has to look right with one short line in it. */
 .${cls.diffHunkHead} {
   display: flex;
   /* The header must not widen the pane either: the split rows are 100% of the
@@ -2456,7 +2460,6 @@ export const css = `
      and push the right half out again. Its heading ellipsizes instead. */
   min-width: 0;
   align-items: baseline;
-  gap: 8px;
   padding: 2px 8px 2px 6px;
   /* A hunk header is a band across the code, and the band is what separates one
      hunk from the next — an opaque fill, so it does not depend on the surface
@@ -2467,7 +2470,6 @@ export const css = `
   color: var(--dsw-alias-label-tertiary);
 }
 
-.${cls.diffHunkRange} { flex: none; }
 .${cls.diffHunkHeading} {
   flex: 0 1 auto;
   min-width: 0;

@@ -454,14 +454,38 @@ function LineCell({
   )
 }
 
-/** The `@@ -a,b +c,d @@` row that introduces a hunk, heading included. */
+/**
+ * git's own address for a hunk: `-oldStart,oldCount +newStart,newCount`.
+ *
+ * Kept as an invisible anchor on the band rather than printed (see {@link HunkHead}):
+ * it is the one thing about a hunk the DOM can still be asked for — a test asserting
+ * that opening a run did not move the diff's own numbers, for instance — while the
+ * reader sees only what a gutter cannot say.
+ */
+function hunkAddress(hunk: DiffHunk): string {
+  return `-${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount}`
+}
+
+/**
+ * The `@@ -a,b +c,d @@` row that introduces a hunk — and, deliberately, only its
+ * heading.
+ *
+ * The `@@` numbers are git's own notation for where the block is, and the panel
+ * answers "where" better than they can: every row carries its own line number in the
+ * gutter beside it, on the side that number belongs to, so a reader locates a line by
+ * looking left rather than by reading an offset and adding it up. What a gutter cannot
+ * say is which function or section the block sits inside, so that is what the band
+ * carries — and a hunk git could infer no heading for gets no band at all, rather than
+ * an empty separator standing for nothing. Where lines are MISSING, the row between
+ * two hunks says so and offers to open them (A-12).
+ */
 function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
+  if (hunk.heading === '') return null
   return (
-    <div className={cls.diffHunkHead}>
-      <span className={cls.diffHunkRange}>
-        {`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@`}
+    <div className={cls.diffHunkHead} data-hunk-range={hunkAddress(hunk)}>
+      <span className={cls.diffHunkHeading} title={hunk.heading}>
+        {hunk.heading}
       </span>
-      {hunk.heading !== '' && <span className={cls.diffHunkHeading}>{hunk.heading}</span>}
     </div>
   )
 }
@@ -635,10 +659,9 @@ function SplitHunks({
   /**
    * One half: the same hunk structure as the other, one cell per row.
    *
-   * Each side renders its own copy of the hunk header, so a half always says
-   * where in the file it is — that is what the header is for, and the two copies
-   * are the same height, which is what keeps the rows aligned. The between-hunk rows
-   * are copied the same way, for the same reason.
+   * Each side renders its own copy of a hunk's band, so the two halves stay the same
+   * height and a paired row keeps its pairing. The between-hunk rows are copied the
+   * same way, for the same reason.
    */
   const half = (
     which: 'left' | 'right',
@@ -707,9 +730,9 @@ function SplitHunks({
 /**
  * Every hunk of a diff, laid out the chosen way.
  *
- * The hunk header is emitted for both layouts: it is where the two sides' line
- * numbers come from, and an inline diff without it loses the only anchor a reader
- * has for "where in the file is this".
+ * A hunk's band (git's function context, see {@link HunkHead}) is emitted for both
+ * layouts, so switching between them changes how the file is read and not what the
+ * reader can see.
  *
  * What is walked is the SEGMENT list rather than the hunks (A-12), so the row
  * between two hunks — where the lines git left out belong — has one place to come

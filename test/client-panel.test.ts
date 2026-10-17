@@ -3553,9 +3553,22 @@ describe('the diff view (FR-2)', () => {
     assert.equal(pane.style.height, '')
     assert.equal(container.querySelector(`.${cls.paneGrip}`)?.getAttribute('role'), 'separator')
 
-    // Every hunk says where it is, heading included.
-    const heads = [...container.querySelectorAll(`.${cls.diffHunkRange}`)].map((n) => n.textContent)
-    assert.deepEqual(heads, ['@@ -1,3 +1,3 @@', '@@ -10,1 +10,1 @@'])
+    // A hunk's band carries git's function context and NOT its `@@ -a,b +c,d @@`
+    // address: the line numbers are in the gutter beside every row, and the address
+    // only asked the reader to add an offset up. The address stays on the band as an
+    // attribute, which a test can pin without drawing it — and a hunk git could infer
+    // no heading for gets no band at all.
+    const heads = [...container.querySelectorAll<HTMLElement>(`.${cls.diffHunkHead}`)]
+    assert.deepEqual(
+      heads.map((head) => head.getAttribute('data-hunk-range')),
+      ['-1,3 +1,3'],
+      'the fixture’s second hunk has no heading, so only one band is drawn',
+    )
+    assert.deepEqual(
+      heads.map((head) => head.querySelector(`.${cls.diffHunkHeading}`)?.textContent),
+      ['function fixture()'],
+    )
+    assert.equal(/@@/.test(container.textContent ?? ''), false, 'the address is not drawn')
     assert.match(container.textContent ?? '', /function fixture\(\)/)
 
     // Inline: one row per line, an old line number for a removal, a new one for
@@ -4203,9 +4216,9 @@ describe('the lines between two hunks (A-12)', () => {
     )
 
     // The diff's own numbers are untouched: opening a run adds context, not changes.
-    assert.deepEqual(
-      [...container.querySelectorAll(`.${cls.diffHunkRange}`)].map((node) => node.textContent),
-      ['@@ -1,3 +1,3 @@', '@@ -10,1 +10,1 @@'],
+    assert.equal(
+      must<HTMLElement>(container, '[data-hunk-range]').getAttribute('data-hunk-range'),
+      '-1,3 +1,3',
     )
     assert.match(container.textContent ?? '', /\+2/)
     assert.match(container.textContent ?? '', /−2/)
