@@ -47,7 +47,7 @@ jobs:
           fi
 
       - run: npm pack
-      - run: mv dsh-git-panel-*.tgz dsh-git-panel.tgz
+      - run: mv tutu1918-dsh-git-panel-*.tgz dsh-git-panel.tgz
 
       - name: create the release
         run: >-

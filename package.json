@@ -1,5 +1,5 @@
 {
-  "name": "dsh-git-panel",
+  "name": "@tutu1918/dsh-git-panel",
   "version": "1.0.1",
   "description": "DSH Web GUI git panel: a resident right-sidebar tab for reviewing, staging, committing, and syncing the session workspace.",
   "keywords": [

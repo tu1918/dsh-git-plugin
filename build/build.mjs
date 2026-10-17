@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 
 /** The package name: the module id the browser registers this bundle under. */
-const CLIENT_ID = 'dsh-git-panel'
+const CLIENT_ID = '@tutu1918/dsh-git-panel'
 
 /**
  * Specifiers the browser's platform module table seeds statically.
