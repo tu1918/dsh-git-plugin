@@ -200,6 +200,9 @@ export const cls = {
   diffHunks: `${P}-diff-hunks`,
   diffHunk: `${P}-diff-hunk`,
   diffGap: `${P}-diff-gap`,
+  diffGapBlock: `${P}-diff-gap-block`,
+  diffGapButton: `${P}-diff-gap-button`,
+  diffGapNote: `${P}-diff-gap-note`,
   diffHunkHead: `${P}-diff-hunk-head`,
   diffHunkRange: `${P}-diff-hunk-range`,
   diffHunkHeading: `${P}-diff-hunk-heading`,
@@ -2474,16 +2477,66 @@ export const css = `
   white-space: nowrap;
 }
 
-/* The row between two hunks, and the BETWEEN-LINE operations' one anchor: an
-   "expand the lines git left out" control can only live on the row that stands
-   where those lines are. Nothing renders this class today — a diff whose hunks
-   touch has no row between them, and the control is a later change — but the
-   anchor is named here, with the class of operation in the selector, so that
-   control has one landing place and the naming cannot drift. */
+/* The row between two hunks, and the BETWEEN-LINE operations' anchor (A-12): the run
+   of unchanged lines git left out is printed nowhere in a diff, so the row that
+   stands where those lines are carries the one control that reads them back. A band
+   with a hairline on each side, the control centred in it, and the same opaque fill
+   the hunk header uses — it is structure (the file continues here), not a second
+   hunk header, which is why nothing about it is loud.
+
+   The block around it exists for the band's WIDTH, not for layout taste: a band is
+   only as wide as its own content, so inside a horizontally scrolled diff it would
+   stop at the pane's edge while the code kept going — the very complaint the
+   .diffHunk rule above answers ("行间操作的区域没有全覆盖，只覆盖了左侧的部分").
+   A min-content minimum is the same trick, over both the band and the lines it
+   opens. */
+.${cls.diffGapBlock} {
+  min-width: min-content;
+}
+
 .${cls.diffGap}[data-op-group='gap'] {
   display: flex;
   align-items: center;
-  min-height: 18px;
+  justify-content: center;
+  gap: 8px;
+  min-height: 20px;
+  padding: 1px 8px;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* The control itself: quiet, because the diff's subject is the changed lines rather
+   than the unchanged run between them, and wide enough to be a target in a narrow
+   right-side column. */
+.${cls.diffGapButton} {
+  padding: 1px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.${cls.diffGapButton}:hover {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+
+.${cls.diffGapButton}:focus-visible {
+  outline: 1px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+/* A read in flight, and a run that could not be read: one line of prose where the
+   control would be, so a band never offers a click that would do nothing. */
+.${cls.diffGapNote} {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 /* The side-by-side split: two FIXED halves, each its own scroller, and ONE pair

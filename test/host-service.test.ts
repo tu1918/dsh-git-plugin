@@ -592,6 +592,131 @@ describe('git service diff (FR-2)', () => {
   })
 })
 
+describe('git service between-hunk lines (A-12)', () => {
+  it('reads the run between two hunks from the diff’s old side', async () => {
+    const repo = makeRepo('file-lines-worktree')
+    write(repo, 'a.txt', Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join('\n') + '\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const changed = Array.from({ length: 20 }, (_, index) =>
+      index === 1 || index === 17 ? 'CHANGED' : `line ${index + 1}`,
+    ).join('\n')
+    write(repo, 'a.txt', `${changed}\n`)
+
+    const service = serviceFor({ s1: repo })
+    const diff = await service.diff('s1', 'a.txt', { area: 'worktree' }, 3)
+    assert.ok(diff.ok, diff.ok ? '' : JSON.stringify(diff.error))
+    // Two hunks, so there is a run between them — and it starts where the first hunk
+    // ends rather than where a reader might guess.
+    assert.equal(diff.value.hunks.length, 2)
+    const [first, second] = diff.value.hunks
+    assert.ok(first !== undefined && second !== undefined)
+    const from = first.oldStart + first.oldCount
+    const count = second.oldStart - from
+    assert.equal(count, 9)
+
+    // A worktree diff compares the index against the working tree, so the OLD side is
+    // the index: the committed text, not the edited one.
+    const read = await service.fileLines('s1', 'a.txt', { area: 'worktree' }, from, count)
+    assert.ok(read.ok, read.ok ? '' : JSON.stringify(read.error))
+    assert.equal(read.value.from, from)
+    assert.equal(read.value.truncated, false)
+    assert.deepEqual(read.value.lines, ['line 6', 'line 7', 'line 8', 'line 9', 'line 10', 'line 11', 'line 12', 'line 13', 'line 14'])
+  })
+
+  it('reads HEAD for an index diff and the first parent for a commit diff', async () => {
+    const repo = makeRepo('file-lines-sides')
+    write(repo, 'a.txt', Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join('\n') + '\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const second = Array.from({ length: 20 }, (_, index) =>
+      index === 1 || index === 17 ? 'SECOND' : `line ${index + 1}`,
+    ).join('\n')
+    write(repo, 'a.txt', `${second}\n`)
+    stageAll(repo)
+    commit(repo, 'second')
+    const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+    const third = second.replace('line 3', 'THIRD')
+    write(repo, 'a.txt', `${third}\n`)
+    git(repo, ['add', 'a.txt'])
+
+    const service = serviceFor({ s1: repo })
+    // An `index` diff is the index against HEAD, so its old side is HEAD — here the
+    // first commit, whose line 3 is unchanged.
+    const staged = await service.fileLines('s1', 'a.txt', { area: 'index' }, 3, 1)
+    assert.ok(staged.ok, staged.ok ? '' : JSON.stringify(staged.error))
+    assert.deepEqual(staged.value.lines, ['line 3'])
+
+    // A commit diff is the commit against its first parent, so its old side is that
+    // parent: the reverted text of the two lines the commit changed.
+    const committed = await service.fileLines('s1', 'a.txt', { area: 'commit', hash }, 2, 1)
+    assert.ok(committed.ok, committed.ok ? '' : JSON.stringify(committed.error))
+    assert.deepEqual(committed.value.lines, ['line 2'])
+  })
+
+  it('falls back to stage 2 for an unmerged path, which has no stage 0', async () => {
+    const { repo } = repoInConflict('file-lines-conflict')
+    // `git show :a.txt` has nothing to answer for a conflicted path — the index holds
+    // stages 1/2/3 rather than a stage 0 — so the read has to name the side the
+    // conflict view itself draws as the old one.
+    const read = await serviceFor({ s1: repo }).fileLines('s1', 'a.txt', { area: 'worktree' }, 1, 10)
+    assert.ok(read.ok, read.ok ? '' : JSON.stringify(read.error))
+    assert.deepEqual(read.value.lines, ['base'])
+  })
+
+  it('says a range was cut rather than answering with part of it', async () => {
+    const repo = makeRepo('file-lines-cut')
+    write(repo, 'a.txt', Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join('\n') + '\n')
+    stageAll(repo)
+    commit(repo, 'first')
+
+    const service = serviceFor({ s1: repo })
+    // Past the host's own ceiling, which is the width of a run the panel can open at
+    // all: half a run would put every line below it at the wrong number.
+    const wide = await service.fileLines('s1', 'a.txt', { area: 'worktree' }, 1, 9999)
+    assert.ok(wide.ok)
+    assert.equal(wide.value.truncated, true)
+
+    // Past the end of the file is not an error — there is simply nothing there — but it
+    // is also not the run that was asked for, which is what the caller checks.
+    const past = await service.fileLines('s1', 'a.txt', { area: 'worktree' }, 500, 10)
+    assert.ok(past.ok)
+    assert.equal(past.value.truncated, false)
+    assert.deepEqual(past.value.lines, [])
+  })
+
+  it('refuses a range, a path, or an area the panel would never send', async () => {
+    const repo = makeRepo('file-lines-refuse')
+    write(repo, 'a.txt', 'one\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const service = serviceFor({ s1: repo })
+
+    for (const [from, count] of [
+      [0, 10],
+      [-1, 10],
+      [1, 0],
+      [1, -3],
+    ] as const) {
+      const refused = await service.fileLines('s1', 'a.txt', { area: 'worktree' }, from, count)
+      assert.equal(refused.ok, false, `from ${from}, count ${count}`)
+      assert.equal(refused.ok ? '' : refused.error.code, 'bad-request')
+    }
+
+    const absolute = await service.fileLines('s1', '/etc/passwd', { area: 'worktree' }, 1, 1)
+    assert.equal(absolute.ok ? '' : absolute.error.code, 'bad-request')
+
+    const unknownArea = await service.fileLines(
+      's1',
+      'a.txt',
+      'sideways' as unknown as DiffTarget,
+      1,
+      1,
+    )
+    assert.equal(unknownArea.ok ? '' : unknownArea.error.code, 'bad-request')
+  })
+})
+
 describe('git service commit diff (FR-7.2)', () => {
   it('reads one file as the commit changed it, not as the working tree stands', async () => {
     const repo = makeRepo('commit-diff')
@@ -968,6 +1093,79 @@ describe('the /git-panel routes over a real socket', () => {
       const asPost = await fetch(`${harness.origin}/git-panel/diff?session=s1&path=a.txt&area=worktree`, {
         method: 'POST',
       })
+      assert.equal(asPost.status, 405)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('serves the lines between two hunks, and refuses a range it cannot serve', async () => {
+    const repo = makeRepo('routes-file-lines')
+    write(repo, 'a.txt', Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join('\n') + '\n')
+    stageAll(repo)
+    commit(repo, 'first')
+    const changed = Array.from({ length: 20 }, (_, index) =>
+      index === 1 || index === 17 ? 'CHANGED' : `line ${index + 1}`,
+    ).join('\n')
+    write(repo, 'a.txt', `${changed}\n`)
+
+    const harness = await startHarness({ s1: repo })
+    try {
+      // The gap the two hunks leave is old lines 6–14; the worktree diff's old side is
+      // the index, which still holds the committed text.
+      const ok = await fetch(
+        `${harness.origin}/git-panel/fileLines?session=s1&path=a.txt&area=worktree&from=6&count=9`,
+      )
+      assert.equal(ok.status, 200)
+      const body = (await ok.json()) as {
+        ok: boolean
+        value: { from: number; lines: string[]; truncated: boolean }
+      }
+      assert.equal(body.ok, true)
+      assert.equal(body.value.from, 6)
+      assert.equal(body.value.truncated, false)
+      assert.deepEqual(body.value.lines, ['line 6', 'line 7', 'line 8', 'line 9', 'line 10', 'line 11', 'line 12', 'line 13', 'line 14'])
+
+      // Both numbers are required: a caller that does not say where its range starts
+      // would be handed lines from somewhere else.
+      for (const query of ['path=a.txt&area=worktree&count=9', 'path=a.txt&area=worktree&from=6', 'path=a.txt&area=worktree&from=0&count=9']) {
+        const refused = await fetch(`${harness.origin}/git-panel/fileLines?session=s1&${query}`)
+        assert.equal(refused.status, 200, query)
+        const refusedBody = (await refused.json()) as { ok: boolean; error: { code: string } }
+        assert.equal(refusedBody.ok, false, query)
+        assert.equal(refusedBody.error.code, 'bad-request', query)
+      }
+
+      const noArea = await fetch(
+        `${harness.origin}/git-panel/fileLines?session=s1&path=a.txt&area=sideways&from=1&count=1`,
+      )
+      const noAreaBody = (await noArea.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(noAreaBody.error.code, 'bad-request')
+
+      // FR-7.2's commit form again: the same route with the revision, and a refusal
+      // when the revision is missing.
+      const hash = git(repo, ['rev-parse', 'HEAD']).trim()
+      const parentForm = await fetch(
+        `${harness.origin}/git-panel/fileLines?session=s1&path=a.txt&area=commit&hash=${hash}&from=1&count=2`,
+      )
+      const parentBody = (await parentForm.json()) as { ok: boolean; error?: { code: string } }
+      // `HEAD^` does not exist on this repository's only commit, which is a git
+      // failure rather than a malformed request — and an honest one: there is no old
+      // side, and no gap either.
+      assert.equal(parentBody.ok, false)
+      assert.equal(parentBody.error?.code, 'git-failed')
+
+      const noHash = await fetch(
+        `${harness.origin}/git-panel/fileLines?session=s1&path=a.txt&area=commit&from=1&count=2`,
+      )
+      const noHashBody = (await noHash.json()) as { ok: boolean; error: { code: string } }
+      assert.equal(noHashBody.error.code, 'bad-request')
+
+      // A read has no POST form, like every other read.
+      const asPost = await fetch(
+        `${harness.origin}/git-panel/fileLines?session=s1&path=a.txt&area=worktree&from=1&count=2`,
+        { method: 'POST' },
+      )
       assert.equal(asPost.status, 405)
     } finally {
       await harness.close()

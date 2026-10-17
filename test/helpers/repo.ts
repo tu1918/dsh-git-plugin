@@ -20,17 +20,47 @@ import { dirname, join } from 'node:path'
  * Environment for every git call in tests: no credential prompt (a test must
  * fail fast, never hang), and no user or system config, so the machine's own
  * git settings cannot leak into an expectation.
+ *
+ * The `GIT_CONFIG_*` entries are what makes the second promise hold on Windows, and
+ * they are here because of a real incident rather than for symmetry. `/dev/null` as a
+ * config path does not keep a credential HELPER out, and a configured Git Credential
+ * Manager answers a `git fetch` that meets a 401 by opening a GUI dialog: the
+ * credential test drives exactly that fetch against a loopback server, so the dialog
+ * appeared on the developer's desktop, the fetch waited on it until the deadline
+ * (failing as `timeout` instead of the `auth-required` the test asserts), and the
+ * repository it had made could not then be removed (`EBUSY` — the helper still held
+ * it). An empty `credential.helper` resets the helper list, and the environment-config
+ * layer is the highest-precedence one, so a helper wired in globally, system-wide, per
+ * repository, or through the credential store cannot reach a test process.
  */
 const ISOLATED_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_TERMINAL_PROMPT: '0',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'credential.helper',
+  GIT_CONFIG_VALUE_0: '',
+  GCM_INTERACTIVE: 'never',
   GIT_AUTHOR_NAME: 'Test Author',
   GIT_AUTHOR_EMAIL: 'author@example.com',
   GIT_COMMITTER_NAME: 'Test Committer',
   GIT_COMMITTER_EMAIL: 'committer@example.com',
 }
+
+/**
+ * The same isolation for git calls this process does NOT spawn itself.
+ *
+ * The host tests drive the real `createGitRunner`, whose children inherit
+ * `process.env` rather than {@link ISOLATED_ENV} — so the helper reset has to be in
+ * this process's own environment too, or a service-level fetch would still be able to
+ * raise a dialog. Set at module load, before any test body runs.
+ */
+process.env.GIT_TERMINAL_PROMPT = '0'
+process.env.GIT_CONFIG_COUNT = '1'
+process.env.GIT_CONFIG_KEY_0 = 'credential.helper'
+process.env.GIT_CONFIG_VALUE_0 = ''
+process.env.GCM_INTERACTIVE = 'never'
 
 /** Every directory a test created, removed together at the end. */
 const created: string[] = []

@@ -70,6 +70,7 @@ const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'remoteBranches',
   'log',
   'diff',
+  'fileLines',
   'showCommit',
   'stashes',
   'fileIcons',
@@ -480,6 +481,32 @@ export function registerGitPanelRoutes(
           return await service.diff(sessionId, path, { area, hash }, intOf(url, 'context', 3))
         }
         return await service.diff(sessionId, path, { area }, intOf(url, 'context', 3))
+      }
+      case 'fileLines': {
+        // A-12's read: the run between two hunks, which a diff does not carry. The
+        // two numbers are required rather than defaulted — a caller that does not say
+        // where its range starts is asking for lines that belong to somewhere else.
+        const path = url.searchParams.get('path')
+        if (path === null || path === '') {
+          return fail('bad-request', 'the path query parameter is required')
+        }
+        const area = url.searchParams.get('area')
+        if (area !== 'worktree' && area !== 'index' && area !== 'commit') {
+          return fail('bad-request', 'the area query parameter must be worktree, index, or commit')
+        }
+        const from = intOf(url, 'from', 0)
+        const count = intOf(url, 'count', 0)
+        if (from < 1 || count < 1) {
+          return fail('bad-request', 'from and count must both be positive integers')
+        }
+        if (area === 'commit') {
+          const hash = url.searchParams.get('hash')
+          if (hash === null || hash === '') {
+            return fail('bad-request', 'the hash query parameter is required for a commit diff')
+          }
+          return await service.fileLines(sessionId, path, { area, hash }, from, count)
+        }
+        return await service.fileLines(sessionId, path, { area }, from, count)
       }
       case 'stage':
       case 'unstage':
