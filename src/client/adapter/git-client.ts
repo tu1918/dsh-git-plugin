@@ -45,6 +45,7 @@ import type {
   ResetMode,
   RewriteAction,
   FileDiff,
+  FileSnippet,
   StashEntry,
   UndoResult,
 } from '../../core/types.ts'
@@ -269,6 +270,16 @@ export function createGitRemoteClient(deadlines: RequestDeadlines = {}): GitRemo
         target.area === 'commit'
           ? { session: sessionId, path, area: target.area, hash: target.hash, context: contextLines }
           : { session: sessionId, path, area: target.area, context: contextLines },
+        signal,
+      ),
+    // A-12's read of the lines between two hunks: the same target vocabulary as
+    // `diff`, plus the range. It is a plain read, so it answers `GET`.
+    fileLines: (sessionId, path, target, from, count, signal) =>
+      request<FileSnippet>(
+        '/fileLines',
+        target.area === 'commit'
+          ? { session: sessionId, path, area: target.area, hash: target.hash, from, count }
+          : { session: sessionId, path, area: target.area, from, count },
         signal,
       ),
 

@@ -18,6 +18,7 @@ import type {
   DiffTarget,
   FileChange,
   FileDiff,
+  FileSnippet,
   GeneratedMessage,
   InProgressOperation,
   LogLevel,
@@ -424,6 +425,34 @@ export interface WorkspaceGitService {
     contextLines: number,
     signal?: AbortSignal,
   ): Promise<Result<FileDiff>>
+  /**
+   * Read a run of lines out of one side of a diff's file (A-12).
+   *
+   * This is what fills the row between two hunks: a diff carries its own hunks and
+   * nothing between them, so the lines git left out have to be read separately. The
+   * run is unchanged on both sides — that is what "between the hunks" means — so
+   * exactly ONE side is read: the diff's OLD side. It is always a git object (the
+   * index for a worktree diff, HEAD for an index diff, the first parent for a commit
+   * diff), which is why this can be answered without reading the file system.
+   *
+   * A read that cannot cover the whole range says so with `FileSnippet.truncated`
+   * rather than answering with part of it: half a run would silently mis-number every
+   * line after it.
+   * @param sessionId - Opaque session identity from the browser.
+   * @param path - Repo-relative path, validated before any git call (§5.5).
+   * @param target - Which comparison the gap belongs to, and its revision.
+   * @param from - 1-based first line wanted.
+   * @param count - How many lines were asked for; the host has its own ceiling.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  fileLines(
+    sessionId: string,
+    path: string,
+    target: DiffTarget,
+    from: number,
+    count: number,
+    signal?: AbortSignal,
+  ): Promise<Result<FileSnippet>>
 
   /**
    * Stage paths: what the `+` on a change row does (FR-3.1, FR-3.2).
@@ -880,6 +909,29 @@ export interface GitRemoteClient {
     contextLines: number,
     signal?: AbortSignal,
   ): Promise<Result<FileDiff>>
+  /**
+   * Read a run of lines out of the old side of a diff's file (A-12).
+   *
+   * The run between two hunks is printed nowhere in the diff, so it is read from the
+   * side that is always a git object: the index for a worktree diff, HEAD for an
+   * index diff, the first parent for a commit diff. An unmerged path has no stage 0,
+   * so a worktree read falls back to stage 2 — the side the conflict reading itself
+   * shows as the old one.
+   * @param sessionId - Opaque session identity, supplied by the slot.
+   * @param path - Repo-relative path.
+   * @param target - Which comparison the gap belongs to, and its revision.
+   * @param from - 1-based first line wanted.
+   * @param count - How many lines were asked for; clamped to this host's ceiling.
+   * @param signal - Cancels the request when the tab goes away.
+   */
+  fileLines(
+    sessionId: string,
+    path: string,
+    target: DiffTarget,
+    from: number,
+    count: number,
+    signal?: AbortSignal,
+  ): Promise<Result<FileSnippet>>
   /**
    * Stage paths (FR-3.1, FR-3.2).
    * @param sessionId - Opaque session identity, supplied by the slot.

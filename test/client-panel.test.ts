@@ -90,7 +90,7 @@ const {
   parseDiffTabAddress,
 } = await import('../src/client/adapter/sidebar-tab.tsx')
 const { GitDiffBody } = await import('../src/client/adapter/diff-tab-body.tsx')
-const { DiffView } = await import('../src/client/ui/DiffView.tsx')
+const { DiffView, DiffPane } = await import('../src/client/ui/DiffView.tsx')
 const { apply } = await import('../src/client/index.tsx')
 
 import type {
@@ -98,6 +98,8 @@ import type {
   CommitDetail,
   CommitInfo,
   FileDiff,
+  FileSnippet,
+  DiffHunk,
   GeneratedMessage,
   OperationReport,
   RemoteBranchRef,
@@ -108,6 +110,7 @@ import type {
 } from '../src/core/types.ts'
 import type { GitChange, GitChangeKind, GitRemoteClient, Result } from '../src/core/ports.ts'
 import type { ToolbarEntry } from '../src/client/ui/toolbar.tsx'
+import type { DiffViewProps, GapReading } from '../src/client/ui/DiffView.tsx'
 import type { OpenFile } from '../src/client/ui/BottomPane.tsx'
 
 /** A translator over one of the real dictionaries, with `{name}` substitution. */
@@ -262,6 +265,22 @@ function diffFixture(overrides: Partial<FileDiff> = {}): FileDiff {
 }
 
 /**
+ * The lines a between-hunk read answers with (A-12).
+ *
+ * {@link diffFixture}'s two hunks cover old lines 1–3 and 10, so old lines 4–9 — and
+ * the new file's 4–9, the two sides differing by no offset — are the run the panel
+ * left unprinted. This is that run, numbered from `from`, so a test can assert the
+ * text and the gutter of every line it draws.
+ */
+function snippetFixture(from: number, count: number): FileSnippet {
+  return {
+    from,
+    lines: Array.from({ length: count }, (_, index) => `hidden ${from + index}`),
+    truncated: false,
+  }
+}
+
+/**
  * A git client whose answers the test chooses.
  *
  * `diff` answers the same way for every request unless the caller overrides it;
@@ -287,6 +306,13 @@ function stubGit(options: {
   diff?: (path: string, area: FileDiff['area']) => Result<FileDiff>
   /** Where diff requests are recorded, as `target:path@context`. */
   diffCalls?: string[]
+  /**
+   * What `fileLines` answers (A-12); a snippet cut out of the file the diff fixture
+   * stands for by default, so a between-hunk read succeeds without saying how.
+   */
+  fileLines?: (from: number, count: number) => Result<FileSnippet>
+  /** Where `fileLines` requests are recorded, as `from:count`. */
+  fileLinesCalls?: string[]
   /** What `showCommit` answers; an empty file list by default. */
   showCommit?: Result<CommitDetail>
   /** What `generateCommitMessage` answers; a fixed message by default. */
@@ -365,6 +391,12 @@ function stubGit(options: {
         value: diffFixture({ path, area: target.area }),
       }
       return Promise.resolve(answer)
+    },
+    fileLines: (_sessionId, _path, _target, from, count) => {
+      options.fileLinesCalls?.push(`${from}:${count}`)
+      return Promise.resolve(
+        options.fileLines?.(from, count) ?? { ok: true as const, value: snippetFixture(from, count) },
+      )
     },
     stage: (_sessionId, paths) => {
       note(`stage:${paths.join(',')}`)
@@ -3461,17 +3493,29 @@ describe('the diff view (FR-2)', () => {
     }
   }
 
-  /** The callbacks one diff render needs; the tests never press the header. */
-  function diffViewProps() {
+  /**
+   * The callbacks one diff render needs; the tests never press the header.
+   *
+   * A between-hunk row starts closed and unread — the pane's own default — and a test
+   * that wants one open hands in its own set (A-12).
+   */
+  function diffViewProps(overrides: Partial<DiffViewProps> = {}): DiffViewProps {
     return {
       diff: diffFixture(),
       t,
+      layout: 'inline',
       expanded: true,
       onLayout: () => undefined,
       onExpand: () => undefined,
       onCollapse: () => undefined,
       onReload: () => undefined,
       busy: false,
+      openGaps: new Set<string>(),
+      gapReadings: new Map<string, GapReading>(),
+      readingKey: 'src/changed.ts\u0000worktree',
+      onToggleGap: () => undefined,
+      onRetryGap: () => undefined,
+      ...overrides,
     }
   }
 
@@ -3539,9 +3583,22 @@ describe('the diff view (FR-2)', () => {
     assert.equal(pane.style.height, '')
     assert.equal(container.querySelector(`.${cls.paneGrip}`)?.getAttribute('role'), 'separator')
 
-    // Every hunk says where it is, heading included.
-    const heads = [...container.querySelectorAll(`.${cls.diffHunkRange}`)].map((n) => n.textContent)
-    assert.deepEqual(heads, ['@@ -1,3 +1,3 @@', '@@ -10,1 +10,1 @@'])
+    // A hunk's band carries git's function context and NOT its `@@ -a,b +c,d @@`
+    // address: the line numbers are in the gutter beside every row, and the address
+    // only asked the reader to add an offset up. The address stays on the band as an
+    // attribute, which a test can pin without drawing it — and a hunk git could infer
+    // no heading for gets no band at all.
+    const heads = [...container.querySelectorAll<HTMLElement>(`.${cls.diffHunkHead}`)]
+    assert.deepEqual(
+      heads.map((head) => head.getAttribute('data-hunk-range')),
+      ['-1,3 +1,3'],
+      'the fixture’s second hunk has no heading, so only one band is drawn',
+    )
+    assert.deepEqual(
+      heads.map((head) => head.querySelector(`.${cls.diffHunkHeading}`)?.textContent),
+      ['function fixture()'],
+    )
+    assert.equal(/@@/.test(container.textContent ?? ''), false, 'the address is not drawn')
     assert.match(container.textContent ?? '', /function fixture\(\)/)
 
     // Inline: one row per line, an old line number for a removal, a new one for
@@ -4113,6 +4170,264 @@ describe('the diff view (FR-2)', () => {
       ['0', '0', '0'],
       'the panel is showing a clean working tree',
     )
+  })
+})
+
+describe('the lines between two hunks (A-12)', () => {
+  /** One more hunk for {@link diffFixture}, so a file has TWO runs to open. */
+  function thirdHunk(): DiffHunk {
+    return {
+      oldStart: 20,
+      oldCount: 1,
+      newStart: 20,
+      newCount: 1,
+      heading: '',
+      lines: [
+        { kind: 'removed', text: 'let tail = 1', oldLine: 20, newLine: null, marks: [] },
+        { kind: 'added', text: 'let tail = 2', oldLine: null, newLine: 20, marks: [] },
+      ],
+    }
+  }
+
+  /** The six lines the fixture's one run is made of, as the fake host answers them. */
+  function hiddenLines(): string[] {
+    return ['hidden 4', 'hidden 5', 'hidden 6', 'hidden 7', 'hidden 8', 'hidden 9']
+  }
+
+  /** Open the unstaged row's diff, in the dock, and hand back the panel's DOM. */
+  async function openDiff(options: Parameters<typeof stubGit>[0] = {}): Promise<HTMLElement> {
+    const container = await render(
+      h(StatusPanel, { sessionId: 's1', git: stubGit(options), t, locale: 'en' }),
+    )
+    await settle()
+    await click(must(container, `[data-group="unstaged"] .${cls.row}`))
+    return container
+  }
+
+  /** The DOM text of one gap's opened lines, in order. */
+  function gapTexts(container: HTMLElement): (string | null)[] {
+    return [...container.querySelectorAll(`[data-gap-block] .${cls.diffLine}`)].map(
+      (row) => row.querySelector(`.${cls.diffText}`)?.textContent ?? null,
+    )
+  }
+
+  it('offers the run between two hunks, and reads it on the first click', async () => {
+    const fileLinesCalls: string[] = []
+    const container = await openDiff({ fileLinesCalls })
+
+    // The row stands where the missing lines are, between the two hunks, and it says
+    // how many there are before anything is read.
+    const bands = [...container.querySelectorAll<HTMLElement>(`[data-op-group="gap"]`)]
+    assert.equal(bands.length, 1)
+    assert.equal(bands[0]?.getAttribute('data-gap-state'), 'closed')
+    assert.equal(bands[0]?.textContent, 'Expand the 6 hidden lines')
+    assert.deepEqual(fileLinesCalls, [], 'nothing is read until the reader asks')
+    assert.deepEqual(gapTexts(container), [])
+
+    await click(must(container, `[data-op-group="gap"] button`))
+    // One read, of exactly the run that was asked about: old lines 4 to 9.
+    assert.deepEqual(fileLinesCalls, ['4:6'])
+
+    const opened = must<HTMLElement>(container, `[data-op-group="gap"]`)
+    assert.equal(opened.getAttribute('data-gap-state'), 'ready')
+    assert.equal(opened.textContent, 'Collapse the 6 hidden lines')
+    assert.deepEqual(gapTexts(container), hiddenLines())
+
+    // Every row is ordinary context, numbered from where the run starts — the new file's
+    // numbers too, which for this fixture are the same.
+    const rows = [...container.querySelectorAll<HTMLElement>(`[data-gap-block] .${cls.diffLine}`)]
+    assert.deepEqual(
+      rows.map((row) => row.getAttribute('data-kind')),
+      ['context', 'context', 'context', 'context', 'context', 'context'],
+    )
+    assert.deepEqual(
+      rows.map((row) => row.querySelector(`.${cls.diffGutter}`)?.textContent),
+      ['4', '5', '6', '7', '8', '9'],
+    )
+
+    // The diff's own numbers are untouched: opening a run adds context, not changes.
+    assert.equal(
+      must<HTMLElement>(container, '[data-hunk-range]').getAttribute('data-hunk-range'),
+      '-1,3 +1,3',
+    )
+    assert.match(container.textContent ?? '', /\+2/)
+    assert.match(container.textContent ?? '', /−2/)
+
+    // Closing it takes the lines away and opens nothing new; opening it again reuses the
+    // read, because the lines have already been fetched once.
+    await click(must(container, `[data-op-group="gap"] button`))
+    assert.equal(
+      must<HTMLElement>(container, `[data-op-group="gap"]`).getAttribute('data-gap-state'),
+      'closed',
+    )
+    assert.deepEqual(gapTexts(container), [])
+    await click(must(container, `[data-op-group="gap"] button`))
+    assert.deepEqual(gapTexts(container), hiddenLines())
+    assert.deepEqual(fileLinesCalls, ['4:6'], 'a run already read is not read again')
+  })
+
+  it('opens each run of a file on its own', async () => {
+    const fileLinesCalls: string[] = []
+    const container = await openDiff({
+      fileLinesCalls,
+      diff: (path, area) => ({
+        ok: true,
+        value: diffFixture({ path, area: area as FileDiff['area'], hunks: [...diffFixture().hunks, thirdHunk()] }),
+      }),
+    })
+
+    // Three hunks leave two runs: old lines 4–9 and 11–19. They are addressed
+    // separately, and each says its own size.
+    const bands = [...container.querySelectorAll<HTMLElement>(`[data-op-group="gap"]`)]
+    assert.equal(bands.length, 2)
+    assert.equal(bands[0]?.textContent, 'Expand the 6 hidden lines')
+    assert.equal(bands[1]?.textContent, 'Expand the 9 hidden lines')
+
+    await click(must(bands[0] as Element, 'button'))
+    assert.deepEqual(fileLinesCalls, ['4:6'])
+    assert.deepEqual(
+      [...container.querySelectorAll<HTMLElement>(`[data-op-group="gap"]`)].map((band) =>
+        band.getAttribute('data-gap-state'),
+      ),
+      ['ready', 'closed'],
+      'opening one run leaves the other where it was',
+    )
+
+    await click(must(bands[1] as Element, 'button'))
+    assert.deepEqual(fileLinesCalls, ['4:6', '11:9'])
+  })
+
+  it('draws an opened run in both halves of a side-by-side diff', async () => {
+    const fileLinesCalls: string[] = []
+    const container = await openDiff({ fileLinesCalls })
+
+    await click(
+      [...container.querySelectorAll<HTMLButtonElement>(`.${cls.diffSegButton}`)][1] as HTMLButtonElement,
+    )
+    await flush()
+    // One band per half: each half is a scroller of its own, so neither can hold the
+    // other's rows.
+    const bands = [...container.querySelectorAll<HTMLElement>(`[data-op-group="gap"]`)]
+    assert.equal(bands.length, 2)
+
+    await click(must(bands[0] as Element, 'button'))
+    assert.deepEqual(fileLinesCalls, ['4:6'])
+    // And the lines land in BOTH halves, or a paired line below the run would sit
+    // opposite a different line.
+    const blocks = [...container.querySelectorAll<HTMLElement>('[data-gap-block]')]
+    assert.equal(blocks.length, 2)
+    for (const block of blocks) {
+      assert.deepEqual(
+        [...block.querySelectorAll(`.${cls.diffCell}`)].map(
+          (cell) => cell.querySelector(`.${cls.diffText}`)?.textContent,
+        ),
+        hiddenLines(),
+      )
+    }
+  })
+
+  it('states a run it could not read, and reads it again on request', async () => {
+    const fileLinesCalls: string[] = []
+    /** The first answer is cut short; the retry is the run itself. */
+    let cut = true
+    const container = await openDiff({
+      fileLinesCalls,
+      fileLines: (from, count) => {
+        const lines = hiddenLines().slice(0, count)
+        return cut
+          ? { ok: true, value: { from, lines, truncated: true } }
+          : { ok: true, value: { from, lines, truncated: false } }
+      },
+    })
+
+    await click(must(container, `[data-op-group="gap"] button`))
+    const failed = must<HTMLElement>(container, `[data-op-group="gap"]`)
+    assert.equal(failed.getAttribute('data-gap-state'), 'failed')
+    assert.match(failed.textContent ?? '', /too large to read/)
+    // Nothing half-drawn: the lines below the run are numbered by position, so part of
+    // it would put every following line at the wrong number.
+    assert.deepEqual(gapTexts(container), [])
+
+    cut = false
+    await click(must(failed, 'button'))
+    assert.deepEqual(fileLinesCalls, ['4:6', '4:6'])
+    assert.deepEqual(gapTexts(container), hiddenLines())
+  })
+
+  it('says why a run could not be read, instead of blaming its size', async () => {
+    // The first report of this feature was a 12-line run described as "too large to
+    // read": the client's read had failed — the host had no such route — and the band
+    // had one sentence for every way of not answering. A refusal now reads out the
+    // refusal, which is what makes a stale host say so in its own words.
+    let refuse = true
+    const container = await openDiff({
+      fileLines: (from, count) =>
+        refuse
+          ? { ok: false, error: { code: 'bad-request', message: 'unknown operation: fileLines' } }
+          : { ok: true, value: snippetFixture(from, count) },
+    })
+
+    await click(must(container, `[data-op-group="gap"] button`))
+    const failed = must<HTMLElement>(container, `[data-op-group="gap"]`)
+    assert.equal(failed.getAttribute('data-gap-state'), 'failed')
+    assert.match(failed.textContent ?? '', /unknown operation: fileLines/)
+    assert.equal(
+      /too large/.test(failed.textContent ?? ''),
+      false,
+      'the reason is the reason, not a guess at it',
+    )
+
+    // The retry is still offered, and a host that can answer lands the run.
+    refuse = false
+    await click(must(failed, 'button'))
+    assert.deepEqual(gapTexts(container), hiddenLines())
+  })
+
+  it('closes every run when the pane is pointed at another file', async () => {
+    // The acceptance rule: a fresh file opens collapsed. The pane is re-pointed rather
+    // than remounted, which is exactly the case the reset has to catch.
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    rendered.push(root)
+    const show = async (path: string): Promise<void> => {
+      await act(async () => {
+        root.render(
+          h(DiffPane, {
+            sessionId: 's1',
+            path,
+            target: { area: 'worktree' },
+            git: stubGit({}),
+            t,
+            onClose: () => undefined,
+          }),
+        )
+      })
+      await flush()
+    }
+
+    await show('src/changed.ts')
+    await click(must(container, `[data-op-group="gap"] button`))
+    assert.deepEqual(gapTexts(container), hiddenLines())
+
+    await show('src/elsewhere.ts')
+    // Another file's diff is drawn, and ITS run starts closed: the state that belonged to
+    // the file before it did not come along. Asserted on the attribute rather than on the
+    // element, because a failing comparison of two DOM nodes is expensive to report.
+    assert.equal(
+      must<HTMLElement>(container, `[data-op-group="gap"]`).getAttribute('data-gap-state'),
+      'closed',
+      'another file’s diff opens with every run closed',
+    )
+    assert.deepEqual(gapTexts(container), [])
+
+    await show('src/changed.ts')
+    assert.equal(
+      must<HTMLElement>(container, `[data-op-group="gap"]`).getAttribute('data-gap-state'),
+      'closed',
+      'coming back opens on a collapsed diff rather than on the old run',
+    )
+    assert.deepEqual(gapTexts(container), [])
   })
 })
 

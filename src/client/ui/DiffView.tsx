@@ -28,9 +28,17 @@
  * operations** live on the row between two hunks, whose class `styles.ts` names;
  * **line operations** live in the tail slot every row reserves there. Each anchor
  * carries `data-op-group` (`view` / `gap` / `line`), so which kind a control
- * belongs to is readable from the DOM. Only the first has controls today, so the
- * other two reserve their space in CSS rather than drawing an empty box: a
- * clickable area with no action behind it is worse than none at all.
+ * belongs to is readable from the DOM.
+ *
+ * The gap row is the one that has a control today: a diff prints three lines of
+ * context around each change, so the unchanged run between two hunks is simply
+ * absent, and the row that stands where it is (A-12) is what reads it back and draws
+ * it. Its position comes from the hunks alone ({@link diffSegments}), its text from
+ * one read of the file's old side, and both layouts walk the same segment list — a
+ * side-by-side diff draws the run in BOTH halves, because a row present in one half
+ * and not the other is exactly what makes a paired reading drift. The third anchor,
+ * the per-line tail, still reserves its space in CSS rather than drawing an empty
+ * box: a clickable area with no action behind it is worse than none at all.
  *
  * @module dsh-git-panel/client/ui/DiffView
  */
@@ -40,6 +48,13 @@ import type { ReactNode, Ref } from 'react'
 
 import { pathParts } from '../../core/format.ts'
 import { diffTargetKey } from '../../core/diff-target.ts'
+import {
+  diffSegments,
+  gapKey,
+  gapLines,
+  snippetCoversGap,
+  type DiffGap,
+} from '../../core/diff-gap.ts'
 import type { GitPanelError, GitRemoteClient } from '../../core/ports.ts'
 import type { DiffHunk, DiffLine, DiffTarget, FileDiff } from '../../core/types.ts'
 import { cls } from './styles.ts'
@@ -96,6 +111,208 @@ export function writeDiffLayout(layout: DiffLayout): void {
   } catch {
     // Storage unavailable or full: the choice still holds for this session.
   }
+}
+
+/**
+ * Why a between-hunk read could not be drawn (A-12).
+ *
+ * Two different things, kept apart because they read differently: the answer was
+ * about the run but did not cover it — too large to read, or the file moved — versus
+ * the read itself failing, where the panel's own words for that failure are the
+ * honest thing to show. Collapsing them into one "could not read" sentence is how a
+ * missing host route came to look like an oversized run.
+ */
+export type GapFailure =
+  /** The run came back cut short, or short of the width the gap describes. */
+  | { readonly kind: 'unreadable' }
+  /** The read failed; `error` is the host's own failure, absent when the transport threw. */
+  | { readonly kind: 'error'; readonly error: GitPanelError | null }
+
+/**
+ * What one between-hunk row's read currently holds (A-12).
+ */
+export type GapReading =
+  | { readonly status: 'loading' }
+  | { readonly status: 'ready'; readonly lines: readonly string[] }
+  | { readonly status: 'failed'; readonly failure: GapFailure }
+
+/**
+ * One gap's key inside the pane's state: the reading it belongs to, then the gap.
+ *
+ * The reading is part of the key because a pane outlives a switch of file. A read
+ * that was in flight when the reader moved on lands under ITS key and is never
+ * drawn, instead of appearing under a gap of the next file that happens to begin at
+ * the same line.
+ * @param readingKey - The identity of the reading the gap belongs to.
+ * @param gap - The gap.
+ * @returns The key this gap's open/read state lives under.
+ */
+export function gapStoreKey(readingKey: string, gap: DiffGap): string {
+  return `${readingKey}\u0000${gapKey(gap)}`
+}
+
+/** Everything the two layouts need to draw and drive the between-hunk rows. */
+interface GapControls {
+  /** The reading the hunks on screen belong to; part of every gap's state key. */
+  readonly readingKey: string
+  /** Which gaps are open, by {@link gapStoreKey}. */
+  readonly open: ReadonlySet<string>
+  /** What each gap's read holds, by {@link gapStoreKey}. */
+  readonly readings: ReadonlyMap<string, GapReading>
+  /** Open or close one gap. */
+  readonly onToggle: (gap: DiffGap) => void
+  /** Read one gap whose read failed again. */
+  readonly onRetry: (gap: DiffGap) => void
+  /** The panel's copy. */
+  readonly t: Translate
+}
+
+/** The state one gap's key resolves to inside one set of controls. */
+function gapState(controls: GapControls, gap: DiffGap): {
+  readonly open: boolean
+  readonly reading: GapReading | undefined
+} {
+  const key = gapStoreKey(controls.readingKey, gap)
+  return { open: controls.open.has(key), reading: controls.readings.get(key) }
+}
+
+/**
+ * The sentence one failed run reads out (A-12).
+ *
+ * An oversized or mismatched run is the panel's own words about the run; a read that
+ * failed is the failure's own words — `errorCopy` writes them, so the row says what
+ * the host refused rather than guessing at a reason of its own.
+ * @param t - The panel's translator.
+ * @param gap - The gap that could not be drawn.
+ * @param reading - What its read holds.
+ * @returns The sentence to show on the band.
+ */
+function failureText(t: Translate, gap: DiffGap, reading: GapReading | undefined): string {
+  if (reading?.status !== 'failed') return t('diff.gapUnreadable', { count: gap.count })
+  const { failure } = reading
+  if (failure.kind === 'unreadable') return t('diff.gapUnreadable', { count: gap.count })
+  if (failure.error === null) return t('diff.gapFailed', { count: gap.count })
+  return errorCopy(t, failure.error, 'read').title
+}
+
+/**
+ * The row between two hunks: the anchor a between-line operation lives on (A-12).
+ *
+ * One control, whose words say what the next click does — open the run, close it
+ * again, or read it once more after a read that could not answer it. A read in
+ * flight says so rather than showing an enabled control that would start a second
+ * one, and a run that could not be read is STATED rather than drawn in part: the
+ * lines around it are numbered by position, so half a run would mis-number every
+ * line below it.
+ */
+function GapBand({
+  gap,
+  controls,
+}: {
+  readonly gap: DiffGap
+  readonly controls: GapControls
+}): ReactNode {
+  const { open, reading } = gapState(controls, gap)
+  /** What the band says: a read that failed or is still running outranks the toggle. */
+  const state = open ? (reading?.status ?? 'loading') : 'closed'
+  /** The failure's multi-line detail, when there is one, as the note's tooltip. */
+  const failureDetail =
+    reading?.status === 'failed' && reading.failure.kind === 'error'
+      ? reading.failure.error?.detail
+      : undefined
+
+  return (
+    <div
+      className={cls.diffGap}
+      data-op-group="gap"
+      data-gap={gapKey(gap)}
+      data-gap-state={state}
+      role="group"
+      aria-label={controls.t('diff.groupGap')}
+    >
+      {state === 'loading' ? (
+        <span className={cls.diffGapNote} aria-busy="true">
+          <SpinnerGlyph className={cls.spinnerGlyph} size={12} /> {controls.t('diff.gapReading')}
+        </span>
+      ) : state === 'failed' ? (
+        <>
+          {/* The failed state says WHICH failure it is: an oversized run is the panel's
+              own sentence, while a read that failed is explained by the failure itself —
+              the host's refusal, or the panel's words for a transport that threw. */}
+          <span className={cls.diffGapNote} title={failureDetail}>
+            {failureText(controls.t, gap, reading)}
+          </span>
+          <button type="button" className={cls.ghost} onClick={() => controls.onRetry(gap)}>
+            {controls.t('action.retry')}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className={cls.diffGapButton}
+          aria-expanded={open}
+          onClick={() => controls.onToggle(gap)}
+        >
+          {open
+            ? controls.t('diff.gapCollapse', { count: gap.count })
+            : controls.t('diff.gapExpand', { count: gap.count })}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One gap in full: its band, and — once it is open and read — the run's own lines.
+ *
+ * The rows are drawn by the caller because the two layouts draw a line differently
+ * (an inline row, or one half's cell), and the run has to be drawn in BOTH halves of
+ * a side-by-side diff or the halves drift apart below it.
+ */
+function GapBlock({
+  gap,
+  controls,
+  renderRow,
+}: {
+  readonly gap: DiffGap
+  readonly controls: GapControls
+  /** How one line of the run is drawn in this layout. */
+  readonly renderRow: (line: DiffLine, index: number) => ReactNode
+}): ReactNode {
+  const { open, reading } = gapState(controls, gap)
+  // The length is checked as well as the state: the diff on screen may have been
+  // re-read since this run was fetched, and a run that is no longer this gap's width
+  // would be numbered wrong from its second line on.
+  const ready = reading?.status === 'ready' && reading.lines.length === gap.count ? reading : null
+  const lines = open && ready !== null ? gapLines(gap, ready.lines) : []
+
+  return (
+    <div className={cls.diffGapBlock} data-gap-block="true">
+      <GapBand gap={gap} controls={controls} />
+      {lines.map((line, index) => renderRow(line, index))}
+    </div>
+  )
+}
+
+/**
+ * One inline row: the line's number, its sign, and its text.
+ *
+ * Shared by a hunk's own lines and by the lines a gap opens, so an expanded run
+ * reads exactly like the context it stands for, and a change to the row's markup
+ * cannot reach only half of them.
+ */
+function InlineLine({ line }: { readonly line: DiffLine }): ReactNode {
+  return (
+    <div className={cls.diffLine} data-kind={line.kind} data-op-group="line">
+      <span className={cls.diffGutter}>{line.newLine ?? line.oldLine ?? ''}</span>
+      <span className={cls.diffSign} aria-hidden="true">
+        {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
+      </span>
+      <span className={cls.diffText}>
+        <LineBody line={line} highlight />
+      </span>
+    </div>
+  )
 }
 
 /**
@@ -237,14 +454,38 @@ function LineCell({
   )
 }
 
-/** The `@@ -a,b +c,d @@` row that introduces a hunk, heading included. */
+/**
+ * git's own address for a hunk: `-oldStart,oldCount +newStart,newCount`.
+ *
+ * Kept as an invisible anchor on the band rather than printed (see {@link HunkHead}):
+ * it is the one thing about a hunk the DOM can still be asked for — a test asserting
+ * that opening a run did not move the diff's own numbers, for instance — while the
+ * reader sees only what a gutter cannot say.
+ */
+function hunkAddress(hunk: DiffHunk): string {
+  return `-${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount}`
+}
+
+/**
+ * The `@@ -a,b +c,d @@` row that introduces a hunk — and, deliberately, only its
+ * heading.
+ *
+ * The `@@` numbers are git's own notation for where the block is, and the panel
+ * answers "where" better than they can: every row carries its own line number in the
+ * gutter beside it, on the side that number belongs to, so a reader locates a line by
+ * looking left rather than by reading an offset and adding it up. What a gutter cannot
+ * say is which function or section the block sits inside, so that is what the band
+ * carries — and a hunk git could infer no heading for gets no band at all, rather than
+ * an empty separator standing for nothing. Where lines are MISSING, the row between
+ * two hunks says so and offers to open them (A-12).
+ */
 function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
+  if (hunk.heading === '') return null
   return (
-    <div className={cls.diffHunkHead}>
-      <span className={cls.diffHunkRange}>
-        {`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@`}
+    <div className={cls.diffHunkHead} data-hunk-range={hunkAddress(hunk)}>
+      <span className={cls.diffHunkHeading} title={hunk.heading}>
+        {hunk.heading}
       </span>
-      {hunk.heading !== '' && <span className={cls.diffHunkHeading}>{hunk.heading}</span>}
     </div>
   )
 }
@@ -265,15 +506,20 @@ function HunkHead({ hunk }: { readonly hunk: DiffHunk }): ReactNode {
  * the same column offset on each side. Since two independent scrollers cannot
  * share a native bar, the halves hide theirs and {@link DiffScrollbar} draws one
  * per axis for both — see `styles.ts` for why the grid looks the way it does.
- * @param props - The hunks to split, and the panel's copy.
+ *
+ * Both halves walk the SAME segments (A-12), because the halves are separate
+ * scrollers with nothing per-row between them: a between-hunk row drawn in one half
+ * and not the other is exactly what would push a paired line out of step.
+ * @param props - The hunks to split, the gap controls, and the panel's copy.
  */
 function SplitHunks({
   hunks,
-  t,
+  gaps,
 }: {
   readonly hunks: readonly DiffHunk[]
-  readonly t: Translate
+  readonly gaps: GapControls
 }): ReactNode {
+  const t = gaps.t
   const leftRef = useRef<HTMLDivElement | null>(null)
   const rightRef = useRef<HTMLDivElement | null>(null)
   const splitRef = useRef<HTMLDivElement | null>(null)
@@ -413,9 +659,9 @@ function SplitHunks({
   /**
    * One half: the same hunk structure as the other, one cell per row.
    *
-   * Each side renders its own copy of the hunk header, so a half always says
-   * where in the file it is — that is what the header is for, and the two copies
-   * are the same height, which is what keeps the rows aligned.
+   * Each side renders its own copy of a hunk's band, so the two halves stay the same
+   * height and a paired row keeps its pairing. The between-hunk rows are copied the
+   * same way, for the same reason.
    */
   const half = (
     which: 'left' | 'right',
@@ -428,19 +674,32 @@ function SplitHunks({
       ref={ref}
       onScroll={() => sync(which === 'left' ? 'left' : 'right')}
     >
-      {hunks.map((hunk, hunkIndex) => (
-        <div className={cls.diffHunk} key={`${hunk.oldStart}-${hunk.newStart}-${hunkIndex}`}>
-          <HunkHead hunk={hunk} />
-          {splitRows(hunk).map((row, rowIndex) => (
-            <LineCell
-              key={`${which}${rowIndex}`}
-              line={which === 'left' ? row.left : row.right}
-              edge={edge}
-              highlight={false}
-            />
-          ))}
-        </div>
-      ))}
+      {diffSegments(hunks).map((segment, segmentIndex) =>
+        segment.kind === 'hunk' ? (
+          <div className={cls.diffHunk} key={`${which}-h${segmentIndex}`}>
+            <HunkHead hunk={segment.hunk} />
+            {splitRows(segment.hunk).map((row, rowIndex) => (
+              <LineCell
+                key={`${which}${rowIndex}`}
+                line={which === 'left' ? row.left : row.right}
+                edge={edge}
+                highlight={false}
+              />
+            ))}
+          </div>
+        ) : (
+          <GapBlock
+            key={`${which}-g${segmentIndex}`}
+            gap={segment.gap}
+            controls={gaps}
+            // A gap's lines are context on both sides, so the same line feeds both
+            // halves — the cell takes the number its own edge reads.
+            renderRow={(line, rowIndex) => (
+              <LineCell key={`${which}g${rowIndex}`} line={line} edge={edge} highlight={false} />
+            )}
+          />
+        ),
+      )}
     </div>
   )
 
@@ -471,48 +730,50 @@ function SplitHunks({
 /**
  * Every hunk of a diff, laid out the chosen way.
  *
- * The hunk header is emitted for both layouts: it is where the two sides' line
- * numbers come from, and an inline diff without it loses the only anchor a reader
- * has for "where in the file is this".
- * @param props - Hunks, layout, and the panel's copy.
+ * A hunk's band (git's function context, see {@link HunkHead}) is emitted for both
+ * layouts, so switching between them changes how the file is read and not what the
+ * reader can see.
+ *
+ * What is walked is the SEGMENT list rather than the hunks (A-12), so the row
+ * between two hunks — where the lines git left out belong — has one place to come
+ * from in this layout too. A diff whose hunks touch has no such row at all.
+ * @param props - Hunks, layout, the gap controls, and the panel's copy.
  */
 function DiffHunks({
   hunks,
   layout,
-  t,
+  gaps,
 }: {
   readonly hunks: readonly DiffHunk[]
   readonly layout: DiffLayout
-  readonly t: Translate
+  readonly gaps: GapControls
 }): ReactNode {
   // Side by side is two scrollers of its own under one pair of bars (see
   // {@link SplitHunks}); inline is one scroller, because there the full width IS
   // the reading width.
-  if (layout === 'side-by-side') return <SplitHunks hunks={hunks} t={t} />
+  if (layout === 'side-by-side') return <SplitHunks hunks={hunks} gaps={gaps} />
 
   return (
     <div className={cls.diffHunks}>
-      {hunks.map((hunk, hunkIndex) => (
-        <div className={cls.diffHunk} key={`${hunk.oldStart}-${hunk.newStart}-${hunkIndex}`}>
-          <HunkHead hunk={hunk} />
-          {hunk.lines.map((line, lineIndex) => (
-            <div
-              className={cls.diffLine}
-              data-kind={line.kind}
-              data-op-group="line"
-              key={`l${line.oldLine ?? 0}-${line.newLine ?? 0}-${lineIndex}`}
-            >
-              <span className={cls.diffGutter}>{line.newLine ?? line.oldLine ?? ''}</span>
-              <span className={cls.diffSign} aria-hidden="true">
-                {line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
-              </span>
-              <span className={cls.diffText}>
-                <LineBody line={line} highlight />
-              </span>
-            </div>
-          ))}
-        </div>
-      ))}
+      {diffSegments(hunks).map((segment, segmentIndex) =>
+        segment.kind === 'hunk' ? (
+          <div className={cls.diffHunk} key={`h${segmentIndex}`}>
+            <HunkHead hunk={segment.hunk} />
+            {segment.hunk.lines.map((line, lineIndex) => (
+              <InlineLine key={`l${line.oldLine ?? 0}-${line.newLine ?? 0}-${lineIndex}`} line={line} />
+            ))}
+          </div>
+        ) : (
+          <GapBlock
+            key={`g${segmentIndex}`}
+            gap={segment.gap}
+            controls={gaps}
+            renderRow={(line, rowIndex) => (
+              <InlineLine key={`gl${line.oldLine ?? 0}-${line.newLine ?? 0}-${rowIndex}`} line={line} />
+            )}
+          />
+        ),
+      )}
     </div>
   )
 }
@@ -593,13 +854,31 @@ export interface DiffViewProps {
    * dock passes it, which is the one place a diff can still be moved out of.
    */
   readonly onOpenInTab?: () => void
+  /**
+   * Which gaps between hunks are open, by {@link gapStoreKey}.
+   *
+   * The state lives in the pane rather than here because it outlives one render and
+   * costs a read to build; the renderer stays pure by being handed it.
+   */
+  readonly openGaps: ReadonlySet<string>
+  /** What each gap's read holds, keyed the same way. */
+  readonly gapReadings: ReadonlyMap<string, GapReading>
+  /** The identity of the reading these hunks belong to: the key prefix gaps use. */
+  readonly readingKey: string
+  /** Open or close one gap between two hunks (A-12's between-line operation). */
+  readonly onToggleGap: (gap: DiffGap) => void
+  /** Read a gap whose read failed again. */
+  readonly onRetryGap: (gap: DiffGap) => void
 }
 
 /**
  * One file's diff, in the chosen layout.
  *
  * Pure: it renders exactly what it is handed, so the same component can draw a
- * commit's file later (FR-7.2) without a fetch of its own.
+ * commit's file later (FR-7.2) without a fetch of its own. The between-hunk rows are
+ * the one place that shows: their text is fetched by the pane, and this component is
+ * handed the answer — open or closed, read or failed — rather than reading anything
+ * itself.
  *
  * Its header carries the diff's OWN operations and nothing else — the layout
  * pair, the reload, and, in the dock, the move into a right-side tab of its own.
@@ -618,7 +897,21 @@ export function DiffView({
   onReload,
   busy,
   onOpenInTab,
+  openGaps,
+  gapReadings,
+  readingKey,
+  onToggleGap,
+  onRetryGap,
 }: DiffViewProps): ReactNode {
+  /** The between-hunk rows' whole contract, gathered once for both layouts. */
+  const gaps: GapControls = {
+    readingKey,
+    open: openGaps,
+    readings: gapReadings,
+    onToggle: onToggleGap,
+    onRetry: onRetryGap,
+    t,
+  }
   const { directory, name } = pathParts(diff.path)
   // No hunks is two different facts: a conflict whose sides could not be paired
   // (one of them is missing) says so, where an ordinary file simply has nothing
@@ -724,7 +1017,7 @@ export function DiffView({
         </div>
       ) : (
         <>
-          <DiffHunks hunks={diff.hunks} layout={layout} t={t} />
+          <DiffHunks hunks={diff.hunks} layout={layout} gaps={gaps} />
           {diff.large && onCollapse !== undefined && (
             <p className={cls.diffNote}>
               <button type="button" className={cls.ghost} onClick={onCollapse}>
@@ -740,6 +1033,24 @@ export function DiffView({
       {diff.truncated && <p className={cls.diffNote}>{t('diff.truncated')}</p>}
     </div>
   )
+}
+
+/**
+ * Which file and comparison the hunks on screen belong to.
+ *
+ * The pane keeps the previous reading while a newer one is in flight, so what is
+ * rendered can be one file behind the props. A between-hunk read must be made against
+ * the file those hunks belong to — asking the props would ask the NEXT file for the
+ * old gap's lines — so the reading carries its own identity, and every gap read uses
+ * that.
+ */
+interface DiffReading {
+  /** `path\0target`, the same string {@link gapStoreKey} namespaces keys with. */
+  readonly key: string
+  /** Repo-relative path the hunks were read from. */
+  readonly path: string
+  /** The comparison they were read against, revision included. */
+  readonly target: DiffTarget
 }
 
 /** Everything {@link DiffPane} renders from. */
@@ -804,12 +1115,15 @@ function useEscapeToClose(onClose: (() => void) | null): void {
 /**
  * The diff pane: read one file, then hand it to {@link DiffView}.
  *
- * The pane owns three things a pure renderer cannot: the read itself, the layout
- * choice (initialised from `localStorage` and written back on every change,
- * FR-2.4), and whether a folded large diff has been unfolded (FR-2.6). The
+ * The pane owns what a pure renderer cannot: the read itself, the layout choice
+ * (initialised from `localStorage` and written back on every change, FR-2.4),
+ * whether a folded large diff has been unfolded (FR-2.6), and the between-hunk rows
+ * (A-12) — which of them are open, and what each one's own read returned. The
  * `expanded` flag is reset during render when the target changes — the React-
  * documented way to drop state that belongs to the previous file, and the reason
- * folding is per-file rather than per-pane.
+ * folding is per-file rather than per-pane — and the gaps are reset the same way,
+ * keyed on the READING rather than on the props: until a newer file's hunks land, the
+ * rows on screen still belong to the old one, and its own gaps may stay open.
  * @param props - The target, the client, and the panel's callbacks.
  */
 export function DiffPane({
@@ -829,6 +1143,29 @@ export function DiffPane({
   const [layout, setLayout] = useState<DiffLayout>(readDiffLayout)
   const [expanded, setExpanded] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
+  /** Which file and comparison the hunks on screen came from (see {@link DiffReading}). */
+  const [reading, setReading] = useState<DiffReading | null>(null)
+  /** Which between-hunk rows are open, by {@link gapStoreKey}. */
+  const [openGaps, setOpenGaps] = useState<ReadonlySet<string>>(new Set())
+  /** What each of those rows' reads holds, by the same key. */
+  const [gapReadings, setGapReadings] = useState<ReadonlyMap<string, GapReading>>(new Map())
+  /**
+   * The reading of the last render, for the guard in {@link readGap}.
+   *
+   * A ref rather than a dependency because the settle handler is created once per
+   * read and must ask the question at the moment it answers, not at the moment it was
+   * started.
+   */
+  const readingRef = useRef<DiffReading | null>(null)
+  readingRef.current = reading
+  /**
+   * The reads in flight, by gap state key.
+   *
+   * A ref rather than state because this is deduplication, not rendering: two clicks
+   * on one row — or a click racing the render that would have shown it open — must
+   * share ONE read.
+   */
+  const gapReads = useRef(new Map<string, Promise<void>>())
   /**
    * The panel's change notifications, subscribed rather than handed down: the
    * diff a user is reading refreshes itself under the agent's next write, and it
@@ -859,6 +1196,114 @@ export function DiffPane({
     setExpanded(false)
   }
 
+  // Every gap closes when a NEW reading lands: what is open belongs to the hunks on
+  // screen, so switching away and back starts on a collapsed diff — which is what a
+  // fresh file should look like. Keyed on the reading's key rather than on the props
+  // above, so the file still being read does not close the gaps of the one on screen.
+  const readingKey = reading?.key ?? ''
+  const [gapsFor, setGapsFor] = useState('')
+  if (gapsFor !== readingKey) {
+    setGapsFor(readingKey)
+    setOpenGaps(new Set())
+    setGapReadings(new Map())
+  }
+
+  /**
+   * Read one gap's lines, and record what came back against its own key.
+   *
+   * The answer is dropped when the pane has moved to another reading: it names a file
+   * that is no longer drawn, and recording it would only resurrect state the reset
+   * above has already thrown away. A read that failed — for any reason, including a
+   * range the host had to cut short — becomes `failed`, which the row states and
+   * offers to read again.
+   * @param forReading - The reading the gap belongs to; its key namespaces the state.
+   * @param gap - The gap to read.
+   */
+  const readGap = useCallback(
+    (forReading: DiffReading, gap: DiffGap): void => {
+      const storeKey = gapStoreKey(forReading.key, gap)
+      if (gapReads.current.has(storeKey)) return
+      setGapReadings((current) => {
+        const next = new Map(current)
+        next.set(storeKey, { status: 'loading' })
+        return next
+      })
+      const task = (async (): Promise<void> => {
+        let value: GapReading = { status: 'failed', failure: { kind: 'error', error: null } }
+        try {
+          const result = await git.fileLines(
+            sessionId,
+            forReading.path,
+            forReading.target,
+            gap.oldStart,
+            gap.count,
+            signal,
+          )
+          if (result.ok) {
+            // `snippetCoversGap` is what refuses half a run: the lines are numbered by
+            // position, so a short or cut answer would mis-number everything below it.
+            value = snippetCoversGap(gap, result.value)
+              ? { status: 'ready', lines: result.value.lines }
+              : { status: 'failed', failure: { kind: 'unreadable' } }
+          } else {
+            // The host's own refusal, kept whole: it is what the row reads out, and it is
+            // how a route this host does not have says so instead of looking like a run
+            // that was too big.
+            value = { status: 'failed', failure: { kind: 'error', error: result.error } }
+          }
+        } catch {
+          // A transport that threw rather than answering: the row says the read failed —
+          // there are no words of the host's to forward — and offers the retry.
+        }
+        if (readingRef.current?.key !== forReading.key) return
+        setGapReadings((current) => {
+          const next = new Map(current)
+          next.set(storeKey, value)
+          return next
+        })
+      })()
+      gapReads.current.set(storeKey, task)
+      const done = (): void => {
+        gapReads.current.delete(storeKey)
+      }
+      void task.then(done, done)
+    },
+    [git, sessionId, signal],
+  )
+
+  /** Open or close one between-hunk row, reading it the first time it opens. */
+  const onToggleGap = useCallback(
+    (gap: DiffGap): void => {
+      const forReading = reading
+      if (forReading === null) return
+      const storeKey = gapStoreKey(forReading.key, gap)
+      const opening = !openGaps.has(storeKey)
+      setOpenGaps((current) => {
+        const next = new Set(current)
+        if (opening) next.add(storeKey)
+        else next.delete(storeKey)
+        return next
+      })
+      // A row that has never been read starts its read here; one that already has its
+      // lines keeps them, so closing and opening it again costs nothing.
+      if (opening && gapReadings.get(storeKey) === undefined) readGap(forReading, gap)
+    },
+    [reading, openGaps, gapReadings, readGap],
+  )
+
+  /** Read one row whose read failed again, after dropping the spent attempt. */
+  const onRetryGap = useCallback(
+    (gap: DiffGap): void => {
+      const forReading = reading
+      if (forReading === null) return
+      const storeKey = gapStoreKey(forReading.key, gap)
+      gapReads.current.delete(storeKey)
+      setOpenGaps((current) => new Set(current).add(storeKey))
+      readGap(forReading, gap)
+    },
+    [reading, readGap],
+  )
+
   // The target object is rebuilt by a caller every render, so the effect below is
   // keyed on its two primitives (the comparison and the revision) rather than on
   // its identity: a new object with the same content must not re-read.
@@ -870,6 +1315,10 @@ export function DiffPane({
 
     let live = true
     setBusy(true)
+    // The identity of what this read returns, built here rather than read from the
+    // render's props later: a between-hunk row's own read is made against the file
+    // these hunks came from, whenever the reader gets round to clicking it.
+    const requestKey = `${path}\u0000${diffTargetKey(target)}`
     void (async () => {
       const result = await git.diff(sessionId, path, target, CONTEXT_LINES, controller.signal)
       if (!live) return
@@ -877,6 +1326,7 @@ export function DiffPane({
       if (result.ok) {
         const value = result.value
         setDiff(value)
+        setReading({ key: requestKey, path, target })
         setError(null)
       } else {
         setError(result.error)
@@ -963,6 +1413,11 @@ export function DiffPane({
       onReload={reload}
       busy={busy}
       onOpenInTab={onOpenInTab}
+      openGaps={openGaps}
+      gapReadings={gapReadings}
+      readingKey={readingKey}
+      onToggleGap={onToggleGap}
+      onRetryGap={onRetryGap}
     />
   )
 }

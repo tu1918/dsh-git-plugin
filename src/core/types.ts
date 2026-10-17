@@ -507,6 +507,31 @@ export interface DiffHunk {
 }
 
 /**
+ * A run of lines read from one side of a diff's file (A-12).
+ *
+ * It exists because a diff does not carry the lines it left out: the hunks hold
+ * their own context, and the runs BETWEEN two hunks are printed nowhere. Those runs
+ * are unchanged on both sides, so reading one side answers both columns of a
+ * side-by-side layout — and the lines are numbered by the caller from the gap's two
+ * starting points rather than sent numbered, since the same text belongs to two
+ * different line numbers at once.
+ */
+export interface FileSnippet {
+  /** 1-based number of {@link lines}' first entry in the file. */
+  readonly from: number
+  /** The lines, terminators stripped; empty when the range is past the file's end. */
+  readonly lines: readonly string[]
+  /**
+   * True when the range asked for was NOT returned in full.
+   *
+   * Two different causes share the flag because the panel's answer to both is the
+   * same — draw nothing rather than half a run: the host's own ceiling clamped the
+   * count, or the blob hit the runner's stdout cap.
+   */
+  readonly truncated: boolean
+}
+
+/**
  * One file's diff, as the renderer needs it.
  *
  * `large` and `truncated` are different facts and both are stated rather than

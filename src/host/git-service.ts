@@ -13,6 +13,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 
 import { buildCommitMessagePrompt, cleanCommitMessage, truncateDiff } from '../core/commit-message.ts'
+import { blobLines } from '../core/diff-gap.ts'
 import { parseUnifiedDiff } from '../core/diff-parse.ts'
 import { isSshRemote, originOf } from '../core/remote-origin.ts'
 import { buildAskpass } from './askpass.ts'
@@ -53,6 +54,7 @@ import type {
   DiffTarget,
   FileChange,
   FileDiff,
+  FileSnippet,
   GeneratedMessage,
   InProgressOperation,
   LogPage,
@@ -128,6 +130,19 @@ const DEFAULT_CONTEXT_LINES = 3
  * lines stop being the subject of the view.
  */
 const MAX_CONTEXT_LINES = 50
+
+/**
+ * Ceiling on the lines one `fileLines` read may return (A-12).
+ *
+ * The reader asks for a gap's WHOLE run, because a gap that opened half-way would
+ * mis-number every line after it. This bound is therefore the width of a gap the
+ * panel can open at all, and it exists for the same reason
+ * {@link MAX_CONTEXT_LINES} does: a hand-written request must not be able to pull a
+ * whole file in one go. Two thousand lines is far past the distance between two
+ * hunks anyone expands by hand, and a wider gap is answered honestly — the response
+ * says the range was cut — rather than in part.
+ */
+const MAX_SNIPPET_LINES = 2000
 
 /** Caps and deadlines one host may tune. */
 export interface GitServiceLimits {
@@ -1386,6 +1401,93 @@ export function createGitService(
   }
 
   /**
+   * Read a run of lines out of the old side of a diff's file (A-12).
+   *
+   * Called for the row between two hunks, where the diff itself has nothing to show:
+   * git prints each hunk's own context and not one line of the run between two of
+   * them. The run is unchanged on both sides, so ONE side answers both columns, and
+   * the side chosen is the one that is always a git object rather than a file on
+   * disk:
+   *
+   * | diff area | old side | command |
+   * |---|---|---|
+   * | `worktree` | the index | `git show :<path>` |
+   * | `index` | HEAD | `git show HEAD:<path>` |
+   * | `commit` | the first parent | `git show <hash>^:<path>` |
+   *
+   * An unmerged path has no stage 0, so a worktree read falls back to stage 2 — the
+   * side the conflict reading itself draws as its old one. A read that cannot return
+   * the whole range (this host's ceiling, or the runner's stdout cap) says so instead
+   * of answering in part: the lines are numbered by position, so half a run would put
+   * every following line at the wrong number.
+   *
+   * The blob is read whole and sliced here (the runner owns the byte cap), so the
+   * RESPONSE carries only the lines asked for however large the file is.
+   * @param sessionId - Session whose repository to read from.
+   * @param path - Repo-relative path from the browser.
+   * @param target - Which comparison the gap belongs to, and the revision it is against.
+   * @param from - 1-based first line wanted.
+   * @param count - How many lines were asked for; clamped to {@link MAX_SNIPPET_LINES}.
+   * @returns The lines, whether the range was cut, or the failure that kept them out.
+   */
+  async function fileLines(
+    sessionId: string,
+    path: string,
+    target: DiffTarget,
+    from: number,
+    count: number,
+  ): Promise<Result<FileSnippet>> {
+    const accepted = validatePaths([path])
+    if (!accepted.ok) return accepted
+    const file = accepted.value[0]
+    if (file === undefined) return fail('bad-request', 'a path is required')
+    const area = target.area
+    if (area !== 'worktree' && area !== 'index' && area !== 'commit') {
+      return fail('bad-request', `unknown diff area: ${String(area)}`)
+    }
+    const revision = area === 'commit' ? validateHash(target.hash) : null
+    if (revision !== null && !revision.ok) return revision
+    // Refused rather than clamped: a caller that does not know which line it starts
+    // at has asked a question this route cannot answer, and a default would hand it
+    // lines that belong to a different part of the file.
+    if (!Number.isSafeInteger(from) || from < 1) {
+      return fail('bad-request', 'from must be a positive line number')
+    }
+    if (!Number.isSafeInteger(count) || count < 1) {
+      return fail('bad-request', 'count must be a positive number of lines')
+    }
+    const root = await repoRoot(sessionId)
+    if (!root.ok) return root
+
+    const take = Math.min(count, MAX_SNIPPET_LINES)
+    // The old side of whichever comparison the gap belongs to, named as a revision
+    // git can resolve. A commit diff has no old side before its first parent, which
+    // is exactly the case `hash^` refuses — and then there is no gap either, since
+    // a root commit's file is entirely new.
+    let source: string
+    if (revision !== null && revision.ok) source = `${revision.value}^:${file}`
+    else if (area === 'index') source = `HEAD:${file}`
+    else source = `:${file}`
+    let shown = await run(['show', source], root.value)
+    if (!shown.ok && area === 'worktree') {
+      // Stage 0 is what `:<path>` asks for and an unmerged path does not have. The
+      // conflict reading compares stage 2 against stage 3, so stage 2 is the side
+      // whose lines those hunks' gaps are made of.
+      const mine = await run(['show', `:2:${file}`], root.value)
+      if (mine.ok) shown = mine
+    }
+    if (!shown.ok) return shown
+
+    const lines = blobLines(shown.value.stdout).slice(from - 1, from - 1 + take)
+    const value: FileSnippet = {
+      from,
+      lines,
+      truncated: shown.value.truncated || take < count,
+    }
+    return { ok: true, value }
+  }
+
+  /**
    * Which operation git is part-way through, if any.
    *
    * Each is a marker file (or directory) in the git directory, and none of them
@@ -2243,6 +2345,7 @@ export function createGitService(
   return {
     status: readStatus,
     diff: diffPath,
+    fileLines,
     stage,
     unstage,
     discard,

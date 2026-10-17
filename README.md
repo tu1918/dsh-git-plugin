@@ -15,7 +15,9 @@ multi-repository workspaces, the history row's rewriting operations (revert,
 cherry-pick, reset, squash, drop), and the release pass itself, which closed the
 one defect left open (a git operation could leave the panel spinning for good).
 Every item of the original M5 list — discard, stash, the commit graph, undo,
-multi-repository — has shipped.
+multi-repository — has shipped. Since then the diff view has gained the one
+operation its three anchors were waiting for: the lines git left out between two
+hunks can be opened, one run at a time (A-12).
 
 ## Docs
 
@@ -55,7 +57,15 @@ multi-repository — has shipped.
 | A group with no rows offers no bulk action — except the staged drawer, which keeps its button on screen, disabled, with the empty note as the explanation | ✅ |
 | One bottom pane, one strip of tabs — recent commits, plus one tab per open diff — opening on the history tab by default and folded/opened by the tabs themselves (clicking the tab that is showing puts the pane away), sized by a drag handle, keeping every open tab's content loaded; the fold and the height are remembered. Any number of diffs may be open at once, a tab is marked by the same rule as the history tab, and hovering (or focusing) a diff tab reveals that tab's own × — closing one file is not closing the pane | ✅ |
 | Diff view: click a change row → the diff opens as a tab of the bottom pane (beside the commit history, never a modal), half the screen tall and drag-resizable, inline or side-by-side, remembered; the diff's own header carries its operations only (layout, reload, and — in the dock — **open in a new tab of the right sidebar**, which moves the reading out of the dock and into a tab of its own so it gets the column's full height), and a long file name is ellipsized in the tab and in the diff header, with the directory giving way first (FR-1.2) | ✅ |
-| Diff operations have three anchors rather than one toolbar, because the three kinds cannot share a place: the header's labelled group carries the VIEW operations (layout, open-in-tab, reload — `data-op-group="view"`), the row between two hunks is where BETWEEN-LINE operations go (registered but not built), and every line's tail reserves a slot in CSS for an operation on that line (`data-op-group="line"`). Nothing is drawn for the two ends that have no control yet: a clickable box with no action behind it is worse than none | ✅ |
+| Diff operations have three anchors rather than one toolbar, because the three kinds cannot share a place: the header's labelled group carries the VIEW operations (layout, open-in-tab, reload — `data-op-group="view"`), the row between two hunks is where BETWEEN-LINE operations live (the expand control below — `data-op-group="gap"`), and every line's tail reserves a slot in CSS for an operation on that line (`data-op-group="line"`). The tail is the one end still without a control, and nothing is drawn there: a clickable box with no action behind it is worse than none | ✅ |
+| A hunk's band carries git's **function context** (`describe('stashing (FR-6.2)', () => {`) and deliberately NOT its `@@ -a,b +c,d @@` address: that address is an offset the reader would have to add up, while every row already prints its own number in the gutter beside it — so "where in the file is this" is answered by looking left, and the band is left to answer the one thing a gutter cannot, which function or section the block sits inside. A hunk git could infer no heading for gets no band at all rather than an empty separator. The address stays on the band as `data-hunk-range` (invisible), which is what a test pins when it asserts that opening a run did not move the diff's own numbers | ✅ |
+| The lines git left out between two hunks (A-12) are reachable. A diff prints three lines of context around each change, so two changes far apart arrive as two hunks with an unprinted run between them; the row that stands where those lines are is a band reading *Expand the N hidden lines*, and one click reads THAT run — and no other — and draws it in place as ordinary context. The run's **size** is arithmetic on the two hunks (`core/diff-gap.ts`), so nothing is fetched until the click, and its **text** comes from the diff's own OLD side over `GET /git-panel/fileLines` — the index for a worktree diff, HEAD for an index diff, the first parent for a commit diff, and stage 2 for an unmerged path, which has no stage 0 — which is always a git object and so never reads the file system. A run opens, closes and re-opens on its own and costs one read; a run past the host's
+ceiling, or one the file moved out from under, is stated ("too large to read") with a
+retry rather than drawn half-way, because the lines below a run are numbered by position
+and part of one would mis-number every following line — and a read that FAILED says what
+the failure was (the host's own refusal, verbatim) rather than blaming the run's size. A
+side-by-side diff draws the run in BOTH halves, opening one closes none of the others, and
+`+N −M` never moves: opening a run adds context, not changes | ✅ |
 | Side-by-side diff is a fixed split: each half is half of the pane whatever the lines are, and each half is its own scroller — a line too long for its half is reached with the split's shared horizontal bar, and the two halves are kept in step on both axes so a paired line stays paired. Two independent scrollers cannot share a native scrollbar, so the halves hide theirs and the split draws **one bar per axis** at its own edges: the vertical one down the right edge, the horizontal one across the bottom. The halves are separated by a 16px lane (outside both scrollers, so nothing a half scrolls can push it around), with a hairline down the divider. A per-line action does **not** live in that lane — the halves have nothing per-row between them — but in the tail of the line's own row. The inline layout is the single-scroller one, where the full width is the reading width | ✅ |
 | Word-level highlighting inside a changed line, from VS Code's own diff engine | ✅ |
 | Diff of the index vs HEAD (`--cached`) or the worktree vs the index, untracked as all-new | ✅ |
@@ -100,8 +110,9 @@ them.
 
 ```
 src/core/      pure TypeScript: types, ports, git parsers, argument validation,
-               the commit-scope decision, the unified-diff parser, the change
-               list as a file tree, credential addressing (an origin → a record
+               the commit-scope decision, the unified-diff parser, the runs git
+               left out between two hunks, the change list as a file tree,
+               credential addressing (an origin → a record
                id), and the AI commit message's prompt/truncation/cleaning
   diff-engine/ word-level marks, from VS Code's diff engine (`vscode-diff`)
 src/host/      git runner, git service, git state probe (filesystem events with a
@@ -137,7 +148,7 @@ and the features that need them explain themselves instead of failing silently.
 
 ```sh
 npm install
-npm run check      # tsc --noEmit && 639 tests && build
+npm run check      # tsc --noEmit && 669 tests && build
 ```
 
 ## Install
@@ -234,6 +245,12 @@ npm test
   line numbers, word-level marks asserted by the text they cover, a whole-line
   replacement earning none, binary and combined (`diff --cc`) output, truncation,
   and the 5000-line fold gate
+- `test/diff-gap.test.ts` — the runs between two hunks (A-12): the arithmetic
+  (adjacent hunks produce nothing, a six-line run, the offset the changes above it
+  introduced, a diff whose two sides disagree about the run), the segment walk a
+  renderer uses, the blob-to-lines reading with its trailing-newline rule, the
+  numbering of both sides, and the rule that refuses a run that came back short or
+  cut
 - `test/change-tree.test.ts` — the change list as a tree (FR-1.3): nesting,
   directories before files in git's own byte order, the compaction of a
   single-child chain and where it must stop, and the per-directory count
@@ -251,7 +268,9 @@ npm test
   missing model, a failed stream, and an empty answer each become a stated failure
 - `test/host-service.test.ts` — the git service and the `/git-panel` routes over a
   real socket: envelopes, 400/404/405/413, the same-origin refusal, the diff read
-  (worktree vs index, untracked, unborn, binary, clean), and the SSE
+  (worktree vs index, untracked, unborn, binary, clean), the between-hunk read from
+  each of the three old sides (the index, HEAD, a commit's first parent) and from an
+  unmerged path's stage 2, the range and path refusals, and the SSE
   `ready` / `changed` / `unavailable` frames
 - `test/git-probe.test.ts` — the git state probe over real repositories and real
   filesystem events: a file an agent writes (which moves nothing inside `.git`), an
@@ -291,8 +310,14 @@ npm test
   but the history only for `refs` and nothing at all when the reading came back the
   same), the diff pane (opening, folding, layout
   memory, the operation anchors — the header's view group, and every row carrying
-  the per-line one — binary placeholder, the list→box→diff DOM order, and the dock's
-  height default and drag clamp), the branch picker (listing, switching, creating from
+  the per-line one — a hunk's band carrying git's function context rather than its
+  `@@` address, binary placeholder, the list→box→diff DOM order, and the dock's
+  height default and drag clamp), the between-hunk rows (the band and its count,
+  one read per run and no second one for a run already read, each run opened on its
+  own, the run drawn in both halves of a split, a cut run stated rather than
+  half-drawn and read again on request, a refused read reported as the refusal rather
+  than as an oversized run, and every run closed when the pane is
+  pointed at another file), the branch picker (listing, switching, creating from
   HEAD or a base, the two-click delete, the forced second ask for an unmerged
   branch, Escape), the branch dropdown's floating layer (absolute, measured from
   the rail, dismissed by a press outside but not by one inside it or on the
@@ -319,6 +344,14 @@ npm test
   rather than waited on. Exit codes come from the `exit` event, where a
   signal-killed process reports `code: null`; a `git diff --no-index` that finds
   differences is an ordinary exit 1 and must stay distinguishable from that.
+- The lines between two hunks are read from the diff's **old** side, over
+  `GET /git-panel/fileLines` (`git show :<path>`, `HEAD:<path>`, `<hash>^:<path>`).
+  One side is all that is needed — a run between two hunks is unchanged by
+  definition — and the old side is the one that is always a git object, so that
+  route never reads the file system, a property the plugin has held since the
+  untracked case went through `git diff --no-index`. An unmerged path has no stage
+  0, so a worktree read falls back to stage 2, which is the side the conflict view
+  itself draws as the old one.
 - `GitRunner.run` takes `optionalLocks` as a third argument, defaulting to
   **false**, which stops `git status` from rewriting `.git/index`. That is
   load-bearing: the git state probe watches that file, so a read that wrote it would
